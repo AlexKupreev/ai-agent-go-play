@@ -41,8 +41,23 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to get working directory: %w", err)
 		}
 
-		a := agent.New(cfg.OpenAIKey, workDir, modelFlag, verboseFlag, log)
-		return a.Run(context.Background(), task)
+		planner := agent.NewPlanner(cfg.OpenAIKey, modelFlag, verboseFlag, log)
+		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
+		refinedTask, err := planner.Run(context.Background(), task)
+		if err != nil {
+			return fmt.Errorf("planner error: %w", err)
+		}
+		if verboseFlag {
+			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n\n", refinedTask)
+		}
+
+		executor := agent.NewExecutor(cfg.OpenAIKey, workDir, modelFlag, verboseFlag, log)
+		result, err := executor.Run(context.Background(), refinedTask)
+		if err != nil {
+			return err
+		}
+		fmt.Println(result)
+		return nil
 	},
 }
 

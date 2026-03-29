@@ -17,7 +17,7 @@ import (
 const maxIterations = 20
 const defaultModel = "gpt-4o-mini"
 
-const systemPrompt = `You are a helpful AI agent with access to a shell and the web.
+const executorPrompt = `You are a helpful AI agent with access to a shell and the web.
 
 When given a task:
 1. Think through what steps are needed
@@ -27,32 +27,67 @@ When given a task:
 
 Always explain briefly what you're about to do before each tool call.`
 
+const plannerPrompt = `You are a planning agent. Your job is to clarify and refine a task before any execution happens. You do NOT execute the task yourself.
+
+When given a task:
+1. Check for typos, ambiguous names, or unclear references — if something looks misspelled or could refer to multiple things, use ask_user to confirm before proceeding
+2. Identify anything that cannot be resolved without human input (e.g. preferences, credentials, target environment)
+3. Use web_search or web_fetch only to resolve technical ambiguity (e.g. confirming an API name, a package name) — never to answer the task itself
+4. Once everything is clear, output a single refined task description that an execution agent can act on without further questions
+
+Rules:
+- Never answer or partially complete the task — your only output is a refined task description
+- When in doubt about a name or term, ask the user rather than assuming
+- Your final response must be the refined task description only, with no preamble or explanation`
+
 type Agent struct {
-	client  openai.Client // value type, not pointer — that's how this SDK works
-	model   string
-	verbose bool
-	tools   []tools.Tool
-	log     *logger.Logger
+	client       openai.Client // value type, not pointer — that's how this SDK works
+	model        string
+	verbose      bool
+	systemPrompt string
+	tools        []tools.Tool
+	log          *logger.Logger
 }
 
-func New(apiKey string, workDir string, model string, verbose bool, log *logger.Logger) *Agent {
+func newAgent(apiKey, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
 	if model == "" {
 		model = defaultModel
 	}
 	return &Agent{
-		client:  openai.NewClient(option.WithAPIKey(apiKey)),
-		model:   model,
-		verbose: verbose,
-		tools:   []tools.Tool{tools.NewShell(workDir), tools.WebSearchDDG, tools.WebFetch},
-		log:     log,
+		client:       openai.NewClient(option.WithAPIKey(apiKey)),
+		model:        model,
+		verbose:      verbose,
+		systemPrompt: systemPrompt,
+		tools:        agentTools,
+		log:          log,
 	}
 }
 
-func (a *Agent) Run(ctx context.Context, userInput string) error {
+// NewExecutor creates an agent that executes tasks using shell and web tools.
+func NewExecutor(apiKey, workDir, model string, verbose bool, log *logger.Logger) *Agent {
+	return newAgent(apiKey, model, executorPrompt, verbose, []tools.Tool{
+		tools.NewShell(workDir),
+		tools.WebSearchDDG,
+		tools.WebFetch,
+	}, log)
+}
+
+// NewPlanner creates an agent that clarifies and refines a task before execution.
+// It has no shell access — only web research and the ability to ask the user questions.
+func NewPlanner(apiKey, model string, verbose bool, log *logger.Logger) *Agent {
+	return newAgent(apiKey, model, plannerPrompt, verbose, []tools.Tool{
+		tools.WebSearchDDG,
+		tools.WebFetch,
+		tools.AskUser,
+	}, log)
+}
+
+// Run executes the ReAct loop and returns the final text answer.
+func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.log.LogStart(userInput)
 
 	messages := []openai.ChatCompletionMessageParamUnion{
-		openai.SystemMessage(systemPrompt),
+		openai.SystemMessage(a.systemPrompt),
 		openai.UserMessage(userInput),
 	}
 
@@ -63,25 +98,25 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 
 		start := time.Now()
 		resp, err := a.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:              openai.ChatModel(a.model),
-			Messages:           messages,
-			Tools:              toolDefs,
-			ParallelToolCalls:  openai.Bool(false),
+			Model:             openai.ChatModel(a.model),
+			Messages:          messages,
+			Tools:             toolDefs,
+			ParallelToolCalls: openai.Bool(false),
 		})
 		if err != nil {
-			return fmt.Errorf("OpenAI error: %w", err)
+			return "", fmt.Errorf("OpenAI error: %w", err)
 		}
 		durationMs := time.Since(start).Milliseconds()
 
 		choice := resp.Choices[0]
 		a.log.LogResponse(i, choice.Message.Content, choice.Message.ToolCalls, resp.Usage, durationMs)
 
-		if choice.Message.Content != "" {
-			fmt.Println(choice.Message.Content)
+		if len(choice.Message.ToolCalls) == 0 {
+			return choice.Message.Content, nil
 		}
 
-		if len(choice.Message.ToolCalls) == 0 {
-			return nil
+		if a.verbose && choice.Message.Content != "" {
+			fmt.Fprintln(os.Stderr, choice.Message.Content)
 		}
 
 		messages = append(messages, choice.Message.ToParam())
@@ -105,7 +140,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 		}
 	}
 
-	return fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
+	return "", fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
 }
 
 func (a *Agent) executeTool(ctx context.Context, call openai.ChatCompletionMessageToolCall) (string, error) {
