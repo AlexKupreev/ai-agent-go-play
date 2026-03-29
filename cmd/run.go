@@ -12,6 +12,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var modelFlag string
+var verboseFlag bool
+
 var runCmd = &cobra.Command{
 	Use:   "run <task>",
 	Short: "Run the agent with a task",
@@ -38,7 +41,12 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to get working directory: %w", err)
 		}
 
-		a := agent.New(cfg.OpenAIKey, workDir, log)
+		a := agent.New(cfg.OpenAIKey, workDir, modelFlag, verboseFlag, log)
 		return a.Run(context.Background(), task)
 	},
+}
+
+func init() {
+	runCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (default: gpt-4o-mini)")
+	runCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "print tool calls and results to stderr")
 }

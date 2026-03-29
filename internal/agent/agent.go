@@ -15,6 +15,7 @@ import (
 )
 
 const maxIterations = 20
+const defaultModel = "gpt-4o-mini"
 
 const systemPrompt = `You are a helpful AI agent with access to a shell and the web.
 
@@ -27,16 +28,23 @@ When given a task:
 Always explain briefly what you're about to do before each tool call.`
 
 type Agent struct {
-	client openai.Client // value type, not pointer — that's how this SDK works
-	tools  []tools.Tool
-	log    *logger.Logger
+	client  openai.Client // value type, not pointer — that's how this SDK works
+	model   string
+	verbose bool
+	tools   []tools.Tool
+	log     *logger.Logger
 }
 
-func New(apiKey string, workDir string, log *logger.Logger) *Agent {
+func New(apiKey string, workDir string, model string, verbose bool, log *logger.Logger) *Agent {
+	if model == "" {
+		model = defaultModel
+	}
 	return &Agent{
-		client: openai.NewClient(option.WithAPIKey(apiKey)),
-		tools:  []tools.Tool{tools.NewShell(workDir), tools.WebSearchDDG, tools.WebFetch},
-		log:    log,
+		client:  openai.NewClient(option.WithAPIKey(apiKey)),
+		model:   model,
+		verbose: verbose,
+		tools:   []tools.Tool{tools.NewShell(workDir), tools.WebSearchDDG, tools.WebFetch},
+		log:     log,
 	}
 }
 
@@ -55,9 +63,10 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 
 		start := time.Now()
 		resp, err := a.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:    openai.ChatModelGPT4oMini,
-			Messages: messages,
-			Tools:    toolDefs,
+			Model:              openai.ChatModel(a.model),
+			Messages:           messages,
+			Tools:              toolDefs,
+			ParallelToolCalls:  openai.Bool(false),
 		})
 		if err != nil {
 			return fmt.Errorf("OpenAI error: %w", err)
@@ -78,14 +87,18 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 		messages = append(messages, choice.Message.ToParam())
 
 		for _, call := range choice.Message.ToolCalls {
-			fmt.Fprintf(os.Stderr, "\n[tool: %s] %s\n", call.Function.Name, call.Function.Arguments)
+			if a.verbose {
+				fmt.Fprintf(os.Stderr, "\n[tool: %s] %s\n", call.Function.Name, call.Function.Arguments)
+			}
 
 			result, err := a.executeTool(ctx, call)
 			if err != nil {
 				result = fmt.Sprintf("tool error: %v", err)
 			}
 
-			fmt.Fprintf(os.Stderr, "[result] %s\n", result)
+			if a.verbose {
+				fmt.Fprintf(os.Stderr, "[result] %s\n", result)
+			}
 			a.log.LogToolResult(call.Function.Name, call.ID, call.Function.Arguments, result)
 
 			messages = append(messages, openai.ToolMessage(result, call.ID))
