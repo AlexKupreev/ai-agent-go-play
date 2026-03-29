@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -43,16 +44,29 @@ var runCmd = &cobra.Command{
 
 		planner := agent.NewPlanner(cfg.OpenAIKey, modelFlag, verboseFlag, log)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
-		refinedTask, err := planner.Run(context.Background(), task)
+		planJSON, err := planner.Run(context.Background(), task)
 		if err != nil {
 			return fmt.Errorf("planner error: %w", err)
 		}
+
+		var plan agent.Plan
+		if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+			return fmt.Errorf("failed to parse plan: %w", err)
+		}
+
 		if verboseFlag {
-			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n\n", refinedTask)
+			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n", plan.RefinedTask)
+			for _, a := range plan.Assumptions {
+				fmt.Fprintf(os.Stderr, "[planner] assumption: %s\n", a)
+			}
+			for _, c := range plan.Confirmed {
+				fmt.Fprintf(os.Stderr, "[planner] confirmed: %s\n", c)
+			}
+			fmt.Fprintln(os.Stderr)
 		}
 
 		executor := agent.NewExecutor(cfg.OpenAIKey, workDir, modelFlag, verboseFlag, log)
-		result, err := executor.Run(context.Background(), refinedTask)
+		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err
 		}

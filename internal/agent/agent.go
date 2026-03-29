@@ -41,12 +41,13 @@ Rules:
 - Your final response must be the refined task description only, with no preamble or explanation`
 
 type Agent struct {
-	client       openai.Client // value type, not pointer — that's how this SDK works
-	model        string
-	verbose      bool
-	systemPrompt string
-	tools        []tools.Tool
-	log          *logger.Logger
+	client         openai.Client // value type, not pointer — that's how this SDK works
+	model          string
+	verbose        bool
+	systemPrompt   string
+	responseFormat *openai.ChatCompletionNewParamsResponseFormatUnion
+	tools          []tools.Tool
+	log            *logger.Logger
 }
 
 func newAgent(apiKey, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
@@ -74,12 +75,15 @@ func NewExecutor(apiKey, workDir, model string, verbose bool, log *logger.Logger
 
 // NewPlanner creates an agent that clarifies and refines a task before execution.
 // It has no shell access — only web research and the ability to ask the user questions.
+// Its final response is a structured Plan enforced via JSON schema.
 func NewPlanner(apiKey, model string, verbose bool, log *logger.Logger) *Agent {
-	return newAgent(apiKey, model, plannerPrompt, verbose, []tools.Tool{
+	a := newAgent(apiKey, model, plannerPrompt, verbose, []tools.Tool{
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		tools.AskUser,
 	}, log)
+	a.responseFormat = &planResponseFormat
+	return a
 }
 
 // Run executes the ReAct loop and returns the final text answer.
@@ -97,12 +101,16 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		a.log.LogRequest(i, messages)
 
 		start := time.Now()
-		resp, err := a.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		params := openai.ChatCompletionNewParams{
 			Model:             openai.ChatModel(a.model),
 			Messages:          messages,
 			Tools:             toolDefs,
 			ParallelToolCalls: openai.Bool(false),
-		})
+		}
+		if a.responseFormat != nil {
+			params.ResponseFormat = *a.responseFormat
+		}
+		resp, err := a.client.Chat.Completions.New(ctx, params)
 		if err != nil {
 			return "", fmt.Errorf("OpenAI error: %w", err)
 		}
