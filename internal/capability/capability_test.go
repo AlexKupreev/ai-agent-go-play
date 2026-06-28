@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -34,6 +35,27 @@ func TestPathAllowed(t *testing.T) {
 	}
 	if pathAllowed("", "/anything") {
 		t.Error("empty prefix must deny")
+	}
+}
+
+func TestPathAllowed_SymlinkEscapeDenied(t *testing.T) {
+	allowed := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("s"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink inside the allowed dir pointing at the outside dir.
+	link := filepath.Join(allowed, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	// Textually under the prefix, but resolves outside it → must be denied.
+	if pathAllowed(allowed, filepath.Join(link, "secret.txt")) {
+		t.Error("path via a symlink escaping the prefix must be denied")
+	}
+	// A normal not-yet-existing file directly under the prefix stays allowed.
+	if !pathAllowed(allowed, filepath.Join(allowed, "new.txt")) {
+		t.Error("a new file directly under the prefix should be allowed")
 	}
 }
 

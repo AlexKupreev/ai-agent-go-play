@@ -81,9 +81,26 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 	if err != nil {
 		return "", err
 	}
-	client := b.HTTP
-	if client == nil {
-		client = http.DefaultClient
+	base := b.HTTP
+	if base == nil {
+		base = http.DefaultClient
+	}
+	// Follow redirects only to hosts the grant still allows. Without this a
+	// granted host could 30x to an internal/disallowed host (e.g. cloud metadata)
+	// and the broker would fetch it — the allowlist is the entire boundary here,
+	// so it must hold across every hop. Reuse the base Transport for pooling.
+	client := &http.Client{
+		Transport: base.Transport,
+		Timeout:   base.Timeout,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !hostAllowed(c.Hosts, r.URL.Hostname()) {
+				return denied(HTTPGet, "redirect to "+r.URL.Host)
+			}
+			return nil
+		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {

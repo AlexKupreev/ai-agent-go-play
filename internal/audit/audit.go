@@ -6,6 +6,7 @@ package audit
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -76,12 +77,16 @@ func (r *JSONLRecorder) Record(e Event) {
 	}
 	b, err := json.Marshal(e)
 	if err != nil {
+		// An audit record we cannot serialize is a bug, not something to drop
+		// silently — surface it. (The append-only log is the security record.)
+		fmt.Fprintf(os.Stderr, "audit: dropping unserializable %q event: %v\n", e.Type, err)
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.f.Write(b)
-	r.f.Write([]byte("\n"))
+	if _, err := r.f.Write(append(b, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "audit: failed to write %q event: %v\n", e.Type, err)
+	}
 }
 
 func (r *JSONLRecorder) Close() error {

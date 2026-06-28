@@ -60,6 +60,32 @@ func TestBrokerHTTPGet_AllowedAndDenied(t *testing.T) {
 	}
 }
 
+func TestBrokerHTTPGet_RedirectToDisallowedHostBlocked(t *testing.T) {
+	rec := &audit.MemoryRecorder{}
+	b := NewBroker(rec, nil)
+	// Allowed host 302s to a disallowed one; the broker must not follow it.
+	b.HTTP = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Hostname() == "example.com" {
+			h := make(http.Header)
+			h.Set("Location", "https://evil.com/pwn")
+			return &http.Response{StatusCode: 302, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("secret"))}, nil
+	})}
+
+	grant := &GrantContext{Run: "r1", Granted: []Capability{
+		{Kind: HTTPGet, Hosts: []string{"example.com"}},
+	}}
+
+	out, err := b.HTTPGet(context.Background(), grant, "https://example.com/x")
+	if err == nil {
+		t.Fatalf("redirect to disallowed host should fail, got out=%q", out)
+	}
+	if strings.Contains(out, "secret") {
+		t.Fatal("broker followed redirect to a disallowed host")
+	}
+}
+
 func TestBrokerHTTPGet_NotGranted(t *testing.T) {
 	rec := &audit.MemoryRecorder{}
 	b := NewBroker(rec, nil)

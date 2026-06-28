@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"ai-agent-go-play/internal/logger"
@@ -166,9 +167,16 @@ func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string
 func (a *Agent) buildToolDefs() []provider.ToolDef {
 	defs := make([]provider.ToolDef, len(a.tools))
 	for i, t := range a.tools {
-		required := make([]string, 0, len(t.Parameters))
-		for name := range t.Parameters {
-			required = append(required, name)
+		required := t.Required
+		if required == nil {
+			// Default: all parameters required. Sorted because map iteration
+			// order is random — an unstable schema would vary the tool defs
+			// between runs and defeat provider prompt caching.
+			required = make([]string, 0, len(t.Parameters))
+			for name := range t.Parameters {
+				required = append(required, name)
+			}
+			sort.Strings(required)
 		}
 
 		defs[i] = provider.ToolDef{

@@ -160,7 +160,10 @@ tools that persist and are discoverable.
 
 **Risks/notes:** the smoke-test gate is the quality wall — make `test` mandatory and run it
 under exactly the requested caps. Validate that authored Lua reliably round-trips (the open
-question in design §9).
+question in design §9). **`call_tool` escape (design §5):** when the `ToolCaller` is wired to
+the registry, do not let authored code reach trusted built-ins (esp. `shell`) by default —
+resolve only registered/authored tools plus an explicit built-in allowlist, treat `["*"]` tool
+grants as an escalation, and don't rely on an interactive confirm as the gate for a nested call.
 
 ---
 

@@ -85,21 +85,52 @@ func hostAllowed(patterns []string, host string) bool {
 	return false
 }
 
-// pathAllowed reports whether path resolves to within prefix.
+// pathAllowed reports whether path resolves to within prefix. Symlinks are
+// resolved on both sides so a link *inside* the prefix cannot point outside it
+// (e.g. /allowed/link -> /etc, then read /allowed/link/passwd) — checking only
+// the textual prefix would let that escape.
 func pathAllowed(prefix, path string) bool {
 	if prefix == "" {
 		return false
 	}
-	ap, err := filepath.Abs(path)
+	pp, err := resolvePath(prefix)
 	if err != nil {
 		return false
 	}
-	pp, err := filepath.Abs(prefix)
+	ap, err := resolvePath(path)
 	if err != nil {
 		return false
 	}
-	ap, pp = filepath.Clean(ap), filepath.Clean(pp)
 	return ap == pp || strings.HasPrefix(ap, pp+string(os.PathSeparator))
+}
+
+// resolvePath makes path absolute and resolves symlinks. The target of a write
+// may not exist yet, so it resolves the longest existing ancestor and re-appends
+// the remaining (not-yet-existing) components — enough to catch a symlinked
+// ancestor that redirects out of an allowed prefix.
+func resolvePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+
+	rest := ""
+	cur := abs
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if rest == "" {
+				return resolved, nil
+			}
+			return filepath.Join(resolved, rest), nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil // reached the root with nothing existing
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // toolAllowed reports whether name is in the allowlist ("*" matches any).

@@ -131,6 +131,19 @@ For the authored tier:
 - **Build-ordering rule (hard):** capability broker + sandbox **before** `author_tool`. A
   self-authoring agent without a broker is an RCE service with an LLM choosing the payloads —
   true even when the *user* is trusted, because the *content* steering it is not.
+- **`call_tool` must not be a sandbox-escape (design before Phase 3).** When the broker's
+  `ToolCaller` is wired to the registry, `call_tool` lets authored (sandboxed) code re-enter the
+  tool surface. If that surface includes the *trusted* built-ins (`shell`, `web_fetch`), an
+  authored tool with a single `call_tool: ["*"]` grant gets ambient authority transitively —
+  the boundary leaks. Rules: (a) `call_tool` resolves only registered/authored tools and an
+  explicit built-in allowlist, never `shell` by default; (b) a built-in re-entered from the
+  sandbox runs under the *caller's* grant/audit context, and its interactive confirm (e.g.
+  destructive `shell`) cannot be the only gate, since nested calls have no human at the prompt;
+  (c) `["*"]` tool grants are an escalation, not a default.
+- **The broker's allowlists must hold across indirection.** An allowlist that checks only the
+  first hop is not a boundary: HTTP redirects are re-validated per hop against the host
+  allowlist (done), and file paths are symlink-resolved before the prefix check so a link inside
+  an allowed prefix cannot point outside it (done).
 
 What we deliberately **skip** (non-goals): multi-tenant isolation, per-user auth, hostile-user
 defense, hard per-instance memory caps (gopher-lua op/time limits + abort are enough here).
