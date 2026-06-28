@@ -159,7 +159,10 @@ func (b *Broker) WriteFile(g *GrantContext, path, content string) error {
 	return nil
 }
 
-// CallTool invokes another tool if the grant allows its name.
+// CallTool invokes another tool if the grant allows its name. A trusted
+// (ambient-authority) built-in is additionally gated: it is callable only when
+// the host has Exposed it AND the grant names it directly — a "*" grant never
+// reaches one, so call_tool cannot become a transitive sandbox escape.
 func (b *Broker) CallTool(ctx context.Context, g *GrantContext, name string, input map[string]any) (string, error) {
 	c, ok := g.find(CallTool)
 	if !ok || !toolAllowed(c.Tools, name) {
