@@ -1,0 +1,208 @@
+# Implementation Plan
+
+The actionable, phased plan for evolving this repo from a ReAct CLI into the self-extending
+agent described in [`design.md`](design.md). Each phase is shippable on its own and leaves the
+agent working. Do them in order — the build-ordering rule in Phase 2 is hard.
+
+**How to read this:** each phase has a *Goal*, concrete *Tasks* (with the files they touch),
+*Acceptance* criteria, and *Risks/notes*. Boxes are unchecked work.
+
+**One hard rule (repeated from design §5):** the capability broker + sandbox (Phase 2) must
+land **before** `author_tool` (Phase 3). A self-authoring agent without a broker is an RCE
+service with an LLM picking the payloads — true even with trusted users, because the *content*
+steering the model is untrusted.
+
+---
+
+## Phase 0 — Decouple the provider (the unblocking refactor)
+
+**Goal:** the agent loop speaks neutral types; OpenAI lives behind an adapter. Nothing
+user-visible changes. This is the highest-leverage step — every later phase assumes it.
+
+**Why first:** today `internal/agent/agent.go` imports `openai-go` directly (client, messages,
+tool defs, usage), and `internal/logger` logs OpenAI types too. Provider-agnosticism and the
+headless engine both depend on cutting this coupling.
+
+**Tasks**
+
+- [ ] Create `internal/provider` with neutral types:
+  - `Role` (`System|User|Assistant|Tool`), `ContentBlock` (`Text` / `ToolCall{ID,Name,Input}` /
+    `ToolResult{CallID,Output,IsError}`), `Message{Role, Content}`.
+  - `ToolDef{Name, Description, InputSchema}`, `ToolChoice`, `Usage{Input,Output,Cached}`,
+    `StopReason` (`EndTurn|ToolCalls|MaxTokens|Refusal}`).
+  - `StepRequest{Model, System, Messages, Tools, ToolChoice, MaxTokens, ResponseFormat?}` and
+    `StepResponse{Content, Stop, Usage}`.
+  - `type Provider interface { Step(ctx, StepRequest) (StepResponse, error) }` (+ `Capabilities()`
+    for later; streaming deferred).
+- [ ] `internal/provider/openai`: adapter implementing `Provider`, holding the `openai-go`
+    client. It owns *all* mapping (messages, tool defs from `tools.Tool`, `ParallelToolCalls`,
+    structured-output `ResponseFormat`, usage, stop reasons). This is the only package that
+    imports `openai-go`.
+- [ ] Refactor `internal/agent/agent.go`: replace the embedded `openai.Client` + inline mapping
+    with a `provider.Provider`. The ReAct loop now appends neutral `Message`s and reads neutral
+    `ContentBlock`s. `buildToolDefs` moves into the adapter (or returns `[]provider.ToolDef`).
+- [ ] Neutralize `internal/logger`: its `LogResponse`/`LogRequest`/`LogToolResult` currently take
+    OpenAI types — change them to neutral types (or feed it from the adapter boundary).
+- [ ] Keep `Plan`/structured output working: model it as a neutral `ResponseFormat` on
+    `StepRequest`; the OpenAI adapter renders it to `ResponseFormatJSONSchema`.
+
+**Acceptance**
+
+- `internal/agent` and `internal/logger` no longer import `openai-go` (grep clean).
+- `agent run …` and the planner behave identically to today; structured planner output intact.
+- A second adapter could be added without touching `internal/agent`.
+
+**Risks/notes:** the planner's strict JSON-schema is OpenAI-flavored — keep the neutral
+`ResponseFormat` minimal (name + schema + strict) so other vendors can map it. Don't build the
+Anthropic adapter yet; just prove the seam holds with one provider.
+
+---
+
+## Phase 1 — Solidify the kernel + `run_code`, gate destructive actions
+
+**Goal:** a clean provider-neutral kernel with the current built-ins, plus lightweight
+self-extension via `run_code`, and a confirmation gate on destructive operations.
+
+**Tasks**
+
+- [ ] (Optional, tidy) rename `internal/agent` → `internal/engine` once the loop is
+    provider-neutral, to match design §6. Cosmetic; can defer.
+- [ ] Add a `run_code` built-in tool: the model writes a short Lua snippet that the engine runs
+    and returns the result. *In Phase 1 this can run with the same trust as built-ins* (no broker
+    yet) **only because there is no persistence of these tools** — it is ephemeral glue. Flag
+    clearly in code that it graduates to the sandbox in Phase 2.
+- [ ] Add a destructive-action approval hook for `shell` (and any effectful built-in): detect
+    irreversible commands (rm/mv/overwrite/network-push heuristics or an allowlist), and require
+    a confirmation via the existing `ask_user` path before executing. Keep shell as a trusted
+    built-in — this is a guardrail, not removal.
+- [ ] Make `maxIterations`, model, and timeouts configurable (some already are via flags/config).
+
+**Acceptance**
+
+- `run_code` works end-to-end on a simple task ("compute X and return it").
+- A destructive shell command triggers a confirmation prompt; a read-only one does not.
+
+**Risks/notes:** resist giving `run_code` any host functions yet — it should only compute over
+its inputs. The moment it needs I/O, that is Phase 2's broker.
+
+---
+
+## Phase 2 — Capability broker + gopher-lua sandbox + audit log  *(gate for Phase 3)*
+
+**Goal:** a deny-by-default execution environment for *machine-authored* code, and an
+append-only audit log. This is the boundary the whole project is built around.
+
+**Tasks**
+
+- [ ] `internal/capability`: `Capability` variants (`HttpGet{hostAllow}`, `HttpPost{…}`,
+    `ReadFile{prefix}`, `WriteFile{prefix}`, `CallTool{nameAllow}`, `Clock`, `Random`),
+    `GrantContext{Run, Granted, Tier}` with tiers `Safe|Balanced|Permissive`, and a
+    `Broker` whose every method = check grant + allowlist → execute → audit.
+- [ ] `internal/sandbox/luaglue` (gopher-lua): fresh `LState` per call; globals built **only**
+    from `GrantContext.Granted`; strip `os`/`io`/`debug`/`package`/`require`/`load`; install an
+    instruction-count hook for timeout/abort; enforce op/size limits. No hard memory cap needed
+    (design §5) — limits + abort suffice.
+- [ ] Wire `run_code` (Phase 1) to execute through `luaglue` with an empty/minimal grant.
+- [ ] `internal/store`: append-only run/event log. Events: `UserMessage`, `ModelStep`,
+    `ToolCall`, `ToolResult`, `ToolAuthored`, `CapabilityExercised`, `GrantRequested/Decided`.
+    Back it with SQLite (single-binary friendly). The projection of this log *is* both the
+    transcript and the audit trail.
+
+**Acceptance**
+
+- A Lua snippet cannot reach the network/filesystem unless its grant includes the capability;
+  ungranted host functions are simply absent (calling them errors).
+- Every hostcall and tool execution appears in the append-only log; the log replays into a
+  readable transcript.
+
+**Risks/notes:** memory-DoS is the weak axis with in-process Lua — set conservative op/time
+limits and verify abort actually fires. Keep the broker surface *narrow*; a single over-broad
+capability undoes the whole tier.
+
+---
+
+## Phase 3 — Tool registry + `author_tool` + tool-search  *(true self-extension)*
+
+**Goal:** the agent promotes ephemeral code into named, scoped, tested, capability-bounded
+tools that persist and are discoverable.
+
+**Tasks**
+
+- [ ] `tools.ToolSpec` (model face `ToolDef` + exec face `Impl`: `Native|Script{Lang,Source}|
+    VendorNative`, `RequiredCaps`, `Scope` `Ephemeral|User|Shared`, `Test`, `Version`) and a
+    `Registry` (`Register/Get/Search/Revoke/List`).
+- [ ] `author_tool` meta-tool with the host-side pipeline: validate (name/schema/code parse) →
+    run mandatory smoke `test` in the sandbox under a **dry-run grant** → resolve
+    `RequiredCaps` (anything beyond the run's tier → queue human approval, tool stays *pending*)
+    → register at scope → **append** its `ToolDef` to the live set (never rebuild — preserves
+    prompt cache) → write a `ToolAuthored` audit record (code hash, caps, scope).
+- [ ] Tool-search: BM25/regex over the catalog first (embeddings later), so a growing catalog
+    never floods the context window — only relevant tool schemas load per turn.
+
+**Acceptance**
+
+- The agent can hit a gap, author a tool, pass its smoke test, and call it within the same run.
+- A new shared tool requiring a new capability stays pending until approved; it is revocable;
+  the whole lifecycle is in the log.
+
+**Risks/notes:** the smoke-test gate is the quality wall — make `test` mandatory and run it
+under exactly the requested caps. Validate that authored Lua reliably round-trips (the open
+question in design §9).
+
+---
+
+## Phase 4 — Headless engine API + memory + management plane + frontends
+
+**Goal:** the engine becomes headless and addressable; web/Telegram join the CLI as peer
+clients; approvals and review/revoke get a UI.
+
+**Tasks**
+
+- [ ] `internal/api`: a headless transport (HTTP/SSE or JSON-RPC) exposing run/step/stream,
+    tool list/search, and the approval queue. CLI becomes one client of this.
+- [ ] Long-term memory the agent maintains (notes/store), surfaced as a built-in.
+- [ ] Management plane: approve/deny escalations, review/revoke tools, browse the audit log.
+- [ ] Web + Telegram frontends as thin clients; design the approval UX so escalation prompts
+    don't become nagging.
+
+**Acceptance**
+
+- The same run can be driven from CLI and from a second frontend against one engine.
+- Escalation approvals surface in the chosen frontend and are recorded.
+
+**Risks/notes:** keep frontends thin — all policy lives in the engine. Approval UX is an open
+question (design §9); start minimal.
+
+---
+
+## Phase 5 — Reserve tier (only if isolation needs grow)
+
+Not planned work; pull from here only when a concrete need appears.
+
+- [ ] `internal/sandbox/wasm` (wazero): hard memory-capped, capability-gated escalation tier —
+    if a tool ever needs stronger isolation than `luaglue` gives.
+- [ ] Own web-search + analytics primitives — if a second provider or stronger isolation forces
+    leaving vendor-native search behind.
+- [ ] Anthropic (or other) provider adapter — when actually swapping/AB-testing models.
+
+---
+
+## Cross-cutting (carry through every phase)
+
+- **Tests:** table tests for the provider adapter mapping (Phase 0), the broker allow/deny
+  matrix (Phase 2), and the `author_tool` pipeline (Phase 3).
+- **Config:** keep secrets in `~/.config/ai-agent/`; add provider selection when the second
+  adapter lands.
+- **Audit-first:** once Phase 2 exists, every effectful path writes to the log — treat a missing
+  audit record as a bug.
+- **Don't speculatively build** Phase 5 items, multi-tenant isolation, or hard memory caps —
+  they are non-goals for this deployment (design §1, §5).
+
+---
+
+## Immediate next step
+
+**Phase 0, task 1:** create `internal/provider` with the neutral types and the `Provider`
+interface, then move OpenAI behind `internal/provider/openai`. Everything else unblocks from
+there.
+</content>
