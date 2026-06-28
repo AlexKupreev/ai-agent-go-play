@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Project binaries (share the repo name, so the patterns above don't catch them)
+/ai-agent-go-play
+/agent
+
 # Test binary, built with `go test -c`
 *.test
 
