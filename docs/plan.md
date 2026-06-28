@@ -139,37 +139,100 @@ capability undoes the tier. `http_post` intentionally not added until a tool nee
 **Goal:** the agent promotes ephemeral code into named, scoped, tested, capability-bounded
 tools that persist and are discoverable.
 
-**Tasks**
+Split into shippable sub-phases 3a–3e. Each leaves the agent working.
 
-- [ ] `tools.ToolSpec` (model face `ToolDef` + exec face `Impl`: `Native|Script{Lang,Source}|
-    VendorNative`, `RequiredCaps`, `Scope` `Ephemeral|User|Shared`, `Test`, `Version`) and a
-    `Registry` (`Register/Get/Search/Revoke/List`).
-- [ ] `author_tool` meta-tool with the host-side pipeline: validate (name/schema/code parse) →
-    run mandatory smoke `test` in the sandbox under a **dry-run grant** → resolve
-    `RequiredCaps` (anything beyond the run's tier → queue human approval, tool stays *pending*)
-    → register at scope → **append** its `ToolDef` to the live set (never rebuild — preserves
-    prompt cache) → write a `ToolAuthored` audit record (code hash, caps, scope).
-- [ ] Tool-search: BM25/regex over the catalog first (embeddings later), so a growing catalog
-    never floods the context window — only relevant tool schemas load per turn.
-- [x] `call_tool` allowlist primitive (broker `Trusted`/`Exposed`): a trusted built-in is
-    reachable from the sandbox only when explicitly exposed *and* named directly in the grant — a
-    `*` grant never escalates into one. **Remaining wiring:** when the registry-backed `ToolCaller`
-    is connected, set `Trusted` for every built-in reachable through it (and `Exposed` for the
-    intended few), and run a re-entered built-in under the caller's grant rather than its
-    interactive confirm (design §5 rule b).
+### Integration model (the key architectural decision)
 
-**Acceptance**
+Keep the existing `tools.Tool` shape for built-ins — do **not** refactor them into `ToolSpec`.
+The executor gains a `Registry` alongside its built-in `[]Tool`:
 
-- The agent can hit a gap, author a tool, pass its smoke test, and call it within the same run.
-- A new shared tool requiring a new capability stays pending until approved; it is revocable;
-  the whole lifecycle is in the log.
+- `buildToolDefs` each iteration = built-ins (incl. `author_tool`) `++` registry tools, in
+  **registration order** (append-only, stable). Recomputing per iteration is cache-safe
+  *because* the order is stable and append-only: the serialized prefix is byte-identical until a
+  new tool is added, then it just grows. This achieves "append, never rebuild" with no shared
+  mutable state and no callback into the running loop.
+- `executeTool` matches a built-in first; else resolves in the registry → `Script` runs via
+  `sandbox.LuaGlue` with the tool's resolved grant; `Native` calls its handler.
 
-**Risks/notes:** the smoke-test gate is the quality wall — make `test` mandatory and run it
-under exactly the requested caps. Validate that authored Lua reliably round-trips (the open
-question in design §9). **`call_tool` escape (design §5):** when the `ToolCaller` is wired to
-the registry, do not let authored code reach trusted built-ins (esp. `shell`) by default —
-resolve only registered/authored tools plus an explicit built-in allowlist, treat `["*"]` tool
-grants as an escalation, and don't rely on an interactive confirm as the gate for a nested call.
+Only *authored* tools go through the sandbox/broker; built-ins are unchanged from Phase 0–2.
+
+### Decisions (settled — pi gives no precedent: its core has no sandbox, no test gate, and runs extensions with **ambient authority**, so our second, sandboxed tier is a deliberate divergence and these are our calls)
+
+- **Smoke test runs AFTER approval, not before.** The test executes real effects under the
+  requested caps; testing first would exercise a capability before the human approves it.
+  Approve-first guarantees no capability is exercised without a human "yes". *(Minor divergence
+  from vision-doc B.3's stated order — recorded deliberately.)*
+- **Sandbox-exposed built-ins (v1): `web_search` + `web_fetch` only.** Read-only, idempotent, no
+  interactive confirm — so design §5 rule (b) (running a re-entered built-in under the caller's
+  grant instead of its confirm) is moot for v1. `shell` stays **unexposed** → unreachable from
+  authored code. Revisit only if a real need appears.
+- **Persistence (v1): JSON catalog** at `~/.config/ai-agent/tools.json`, single-binary-friendly,
+  matching the existing config. **SQLite is the stated end goal** (design §6) once the catalog,
+  audit log, and run/event log want one transactional store — migrate `Registry` behind its
+  interface without touching callers.
+- **Approval (v1): synchronous** via the existing `ConfirmFunc` (`StdinConfirm`). A cap beyond
+  the run's tier prompts at authoring time; declined → rejected. The async *pending queue* /
+  management UI is **Phase 4**, not here.
+
+### 3a — `ToolSpec` + `Registry`
+
+- [ ] `tools.ToolSpec`: model face (`Name`, `Description`, `InputSchema`) + exec face
+    (`Impl: Native|Script{Lang,Source}`, `RequiredCaps []capability.Capability`, `Scope`
+    `Ephemeral|User|Shared`, `Test`, `Version`, `CreatedBy`, `CodeHash`).
+- [ ] `tools.Registry` interface + in-memory impl: `Register/Get/Search/Revoke/List(scope)`;
+    monotonic seq per registration for stable ordering. Ephemeral = in-memory (dies with the
+    run); Shared = JSON catalog loaded at startup; `User` collapses to `Shared` on single-user CLI.
+- *Acceptance:* register/list/revoke/search round-trip, unit-tested; not yet wired to the loop.
+
+### 3b — Live broker/sandbox wiring (activates Phase 2 in the run flow)
+
+- [ ] In `cmd/run.go`, per run, construct `JSONLRecorder` → `Broker(rec, toolCaller)` →
+    `LuaGlue(broker)` → `Registry`; inject into the executor.
+- [ ] Set `broker.Trusted` = the built-in names; `broker.Exposed` = `{web_search, web_fetch}`
+    only. `toolCaller` resolves a name → built-in `Run` or registry script-exec.
+- *Acceptance:* `run_code` (and soon authored tools) execute through the real broker with a real
+    audit trail; the `call_tool` allowlist primitive becomes load-bearing.
+
+### 3c — `author_tool` meta-tool (the pipeline)
+
+A built-in `tools.Tool` whose `Run` performs, host-side (not model-controllable):
+
+- [ ] 1. **Validate** — `name` regex, `input_schema` is an object, `code` parses (LuaGlue
+    parse-only). Syntax errors return to the model to retry.
+- [ ] 2. **Approve** — caps beyond the run's tier → `ConfirmFunc`; declined → reject.
+- [ ] 3. **Smoke-test** — run the mandatory `test` in the sandbox under a grant of **exactly the
+    approved caps**; the assertion must hold, else reject.
+- [ ] 4. **Register** at scope (assigns version/seq); appears in the next iteration's tool defs
+    automatically (3a's append-only list).
+- [ ] 5. **Audit** `ToolAuthored{code_hash, caps, scope}` (event type already defined).
+- *Acceptance:* the agent hits a gap, authors a tool, passes its test, and calls it in the same
+    run; parse-fail and test-fail both reject; cap-beyond-tier prompts; the lifecycle is in the log.
+
+### 3d — Tool-search
+
+- [ ] `Registry.Search(query, k)` — BM25-lite over name+description (regex/token overlap first;
+    embeddings deferred). Executor includes built-ins always; for registered tools, include all
+    while the catalog is small (≤ ~12), else top-k by search against the refined task.
+- *Acceptance:* a large catalog does not flood the context window; relevant tools still surface.
+
+### 3e — Lifecycle polish
+
+- [ ] `revoke` surfaced (CLI subcommand or authored path); revoked tools drop from the live set.
+- [ ] Dedup by code hash; ephemeral scope already dies with the run.
+
+### Cross-phase test (no live API)
+
+- [ ] A fake provider that emits an `author_tool` call then a call to the new tool drives the
+    whole pipeline end-to-end in a unit test.
+
+**Done in advance:** `call_tool` allowlist primitive (broker `Trusted`/`Exposed`) — a trusted
+built-in is reachable from the sandbox only when explicitly exposed *and* named directly in the
+grant; a `*` grant never escalates into one. 3b wires it; design §5 rule (b) is sidestepped in v1
+by exposing only confirm-free built-ins.
+
+**Risks/notes:** the smoke-test gate is the quality wall — `test` is mandatory and runs under
+exactly the approved caps. Validate that authored Lua reliably round-trips (open question,
+design §9).
 
 ---
 

@@ -145,8 +145,10 @@ For the authored tier:
   grant — a `*` never reaches one. **Phase-3 wiring requirement:** when the registry-backed
   `ToolCaller` is connected, the host MUST set `Trusted` for every built-in reachable through it
   (and `Exposed` only for the few intended), or the classification defaults to "all sandboxed" and
-  the protection is moot. Rule (b) — running the re-entered built-in under the caller's grant
-  rather than its interactive confirm — is the remaining Phase-3 wiring task.
+  the protection is moot. **v1 decision:** expose only confirm-free, read-only built-ins
+  (`web_search`, `web_fetch`); `shell` stays unexposed. This sidesteps rule (b) (running a
+  re-entered built-in under the caller's grant instead of its interactive confirm) — there is no
+  interactive-confirm built-in in the exposed set, so it cannot arise until one is exposed.
 - **The broker's allowlists must hold across indirection.** An allowlist that checks only the
   first hop is not a boundary: HTTP redirects are re-validated per hop against the host
   allowlist (done), and file paths are symlink-resolved before the prefix check so a link inside
