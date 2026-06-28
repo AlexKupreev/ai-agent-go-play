@@ -9,6 +9,7 @@ package capability
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -141,4 +142,10 @@ func toolAllowed(list []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// toolNamed reports whether name is listed explicitly, ignoring a "*" wildcard.
+// Used to require a direct grant before a trusted built-in is callable.
+func toolNamed(list []string, name string) bool {
+	return slices.Contains(list, name)
 }

@@ -146,6 +146,43 @@ func TestBrokerCallTool(t *testing.T) {
 	}
 }
 
+func TestBrokerCallTool_TrustedBuiltinNotReachable(t *testing.T) {
+	rec := &audit.MemoryRecorder{}
+	ran := ""
+	b := NewBroker(rec, func(_ context.Context, name string, _ map[string]any) (string, error) {
+		ran = name
+		return "ran:" + name, nil
+	})
+	b.Trusted = func(name string) bool { return name == "shell" } // shell has ambient authority
+
+	star := &GrantContext{Run: "r", Granted: []Capability{{Kind: CallTool, Tools: []string{"*"}}}}
+
+	// A "*" grant reaches normal (sandboxed) tools...
+	if out, err := b.CallTool(context.Background(), star, "summarize", nil); err != nil || out != "ran:summarize" {
+		t.Fatalf("wildcard should reach a sandboxed tool: out=%q err=%v", out, err)
+	}
+	// ...but never a trusted built-in, even when it is exposed.
+	b.Exposed = func(name string) bool { return name == "shell" }
+	if _, err := b.CallTool(context.Background(), star, "shell", nil); err == nil {
+		t.Error("wildcard grant must not reach a trusted built-in")
+	}
+
+	named := &GrantContext{Run: "r", Granted: []Capability{{Kind: CallTool, Tools: []string{"shell"}}}}
+
+	// Named explicitly but NOT exposed → denied.
+	b.Exposed = nil
+	if _, err := b.CallTool(context.Background(), named, "shell", nil); err == nil {
+		t.Error("explicit grant to an unexposed built-in must be denied")
+	}
+
+	// Named explicitly AND exposed → allowed.
+	ran = ""
+	b.Exposed = func(name string) bool { return name == "shell" }
+	if out, err := b.CallTool(context.Background(), named, "shell", nil); err != nil || ran != "shell" || out != "ran:shell" {
+		t.Fatalf("explicit + exposed built-in should be callable: out=%q ran=%q err=%v", out, ran, err)
+	}
+}
+
 func TestBrokerClockAndRandomGated(t *testing.T) {
 	rec := &audit.MemoryRecorder{}
 	b := NewBroker(rec, nil)

@@ -28,7 +28,22 @@ type Broker struct {
 	Tools   ToolCaller
 	Clock   func() time.Time
 	RandSrc io.Reader
+
+	// Trusted reports whether a tool name runs with ambient authority — a
+	// built-in like shell that is itself NOT sandboxed. call_tool from authored
+	// code must not reach such a tool transitively, or the sandbox leaks: an
+	// authored tool with a "*" grant would get shell. So a Trusted tool is
+	// callable from the sandbox only when also Exposed AND named explicitly in
+	// the grant (never via "*"). Nil ⇒ no tool is treated as trusted; the host
+	// MUST populate this for any ambient-authority tool reachable via Tools.
+	Trusted func(name string) bool
+	// Exposed reports whether a trusted built-in has been deliberately opened to
+	// the sandbox. Consulted only for Trusted names. Nil ⇒ none exposed.
+	Exposed func(name string) bool
 }
+
+func (b *Broker) trusted(name string) bool { return b.Trusted != nil && b.Trusted(name) }
+func (b *Broker) exposed(name string) bool { return b.Exposed != nil && b.Exposed(name) }
 
 // NewBroker builds a broker with sensible defaults; fields may be overridden.
 func NewBroker(rec audit.Recorder, tools ToolCaller) *Broker {
@@ -150,6 +165,14 @@ func (b *Broker) CallTool(ctx context.Context, g *GrantContext, name string, inp
 	if !ok || !toolAllowed(c.Tools, name) {
 		b.record(g, CallTool, name, false)
 		return "", denied(CallTool, name)
+	}
+	// A trusted (ambient-authority) built-in is reachable from sandboxed code
+	// only if the host explicitly exposed it AND the grant names it directly. A
+	// "*" grant never escalates into one — that would make call_tool a
+	// transitive sandbox escape into e.g. shell.
+	if b.trusted(name) && (!b.exposed(name) || !toolNamed(c.Tools, name)) {
+		b.record(g, CallTool, name, false)
+		return "", denied(CallTool, name+": trusted built-in not callable from sandbox")
 	}
 	if b.Tools == nil {
 		return "", fmt.Errorf("call_tool: no tool caller configured")

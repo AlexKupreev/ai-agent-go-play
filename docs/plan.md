@@ -151,6 +151,12 @@ tools that persist and are discoverable.
     prompt cache) → write a `ToolAuthored` audit record (code hash, caps, scope).
 - [ ] Tool-search: BM25/regex over the catalog first (embeddings later), so a growing catalog
     never floods the context window — only relevant tool schemas load per turn.
+- [x] `call_tool` allowlist primitive (broker `Trusted`/`Exposed`): a trusted built-in is
+    reachable from the sandbox only when explicitly exposed *and* named directly in the grant — a
+    `*` grant never escalates into one. **Remaining wiring:** when the registry-backed `ToolCaller`
+    is connected, set `Trusted` for every built-in reachable through it (and `Exposed` for the
+    intended few), and run a re-entered built-in under the caller's grant rather than its
+    interactive confirm (design §5 rule b).
 
 **Acceptance**
 
