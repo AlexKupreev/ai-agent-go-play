@@ -99,32 +99,38 @@ no host functions yet.
 **Goal:** a deny-by-default execution environment for *machine-authored* code, and an
 append-only audit log. This is the boundary the whole project is built around.
 
+**Status: CORE DONE** (commit pending). The boundary exists and is unit-tested; live wiring of
+the broker into the run flow lands with Phase 3 (when authored tools actually request caps).
+
 **Tasks**
 
-- [ ] `internal/capability`: `Capability` variants (`HttpGet{hostAllow}`, `HttpPost{…}`,
-    `ReadFile{prefix}`, `WriteFile{prefix}`, `CallTool{nameAllow}`, `Clock`, `Random`),
-    `GrantContext{Run, Granted, Tier}` with tiers `Safe|Balanced|Permissive`, and a
-    `Broker` whose every method = check grant + allowlist → execute → audit.
-- [ ] `internal/sandbox/luaglue` (gopher-lua): fresh `LState` per call; globals built **only**
-    from `GrantContext.Granted`; strip `os`/`io`/`debug`/`package`/`require`/`load`; install an
-    instruction-count hook for timeout/abort; enforce op/size limits. No hard memory cap needed
-    (design §5) — limits + abort suffice.
-- [ ] Wire `run_code` (Phase 1) to execute through `luaglue` with an empty/minimal grant.
-- [ ] `internal/store`: append-only run/event log. Events: `UserMessage`, `ModelStep`,
-    `ToolCall`, `ToolResult`, `ToolAuthored`, `CapabilityExercised`, `GrantRequested/Decided`.
-    Back it with SQLite (single-binary friendly). The projection of this log *is* both the
-    transcript and the audit trail.
+- [x] `internal/capability`: `Capability{Kind, Hosts, PathPrefix, Tools}` for
+    `http_get`/`read_file`/`write_file`/`call_tool`/`clock`/`random`; `GrantContext{Run, Granted,
+    Tier}` with `Safe|Balanced|Permissive`; allowlist matching (host glob, path-prefix containment,
+    tool name/`*`); `Broker` whose every method = check grant + allowlist → execute → audit
+    (denials audited too). HTTP capped at 1 MiB; `ToolCaller` injected to avoid an import cycle.
+- [x] `internal/audit`: append-only `Recorder` (`MemoryRecorder` for tests, `JSONLRecorder` for
+    disk). *(Deviation from plan: JSONL now; the richer multi-variant store / SQLite is deferred —
+    see open question. The broker records `capability_exercised` / `capability_denied`.)*
+- [x] `internal/sandbox` (`luaglue.go`): fresh `LState` per call; globals built **only** from the
+    grant (host funcs installed per granted capability, else absent); `os`/`io`/`debug`/`package`/
+    code-loaders stripped; context-timeout abort. `input` passed in, result returned.
+    *(Hard op-count hook not added — context-timeout covers runaway loops for now.)*
+- [x] Wire `run_code` to execute through `luaglue` with an empty grant (no host funcs).
+- [ ] Live wiring: per-run `JSONLRecorder` + a `Broker` (with a registry-backed `ToolCaller`)
+    threaded into the run. **Deferred to Phase 3**, where authored tools first need real grants.
 
-**Acceptance**
+**Acceptance** — core met (unit-tested):
 
-- A Lua snippet cannot reach the network/filesystem unless its grant includes the capability;
-  ungranted host functions are simply absent (calling them errors).
-- Every hostcall and tool execution appears in the append-only log; the log replays into a
-  readable transcript.
+- [x] A script cannot reach network/filesystem/tools unless its grant includes the capability;
+    ungranted host functions are simply **absent** (`type(http_get) == "nil"`); granted-but-out-of-
+    allowlist calls are **denied** by the broker and raise in the script.
+- [x] Every brokered call (and denial) is recorded to the audit log.
+- [ ] Full run/event log replay into a transcript — comes with the richer store (Phase 4-ish).
 
-**Risks/notes:** memory-DoS is the weak axis with in-process Lua — set conservative op/time
-limits and verify abort actually fires. Keep the broker surface *narrow*; a single over-broad
-capability undoes the whole tier.
+**Risks/notes:** memory-DoS is the weak axis with in-process Lua — context-timeout fires today;
+add an op-count hook if abuse appears. Keep the broker surface *narrow*; a single over-broad
+capability undoes the tier. `http_post` intentionally not added until a tool needs it.
 
 ---
 
