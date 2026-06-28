@@ -19,7 +19,7 @@ const executorPrompt = `You are a helpful AI agent with access to a shell and th
 
 When given a task:
 1. Think through what steps are needed
-2. Use tools to execute each step — shell for local operations, web_search to find information, web_fetch to read a specific page
+2. Use tools to execute each step — shell for local operations, run_code for calculations and data shaping (sandboxed Lua), web_search to find information, web_fetch to read a specific page
 3. Observe the output and adjust if something fails
 4. Once done, provide a concise summary of what you did and the result
 
@@ -62,10 +62,11 @@ func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, age
 	}
 }
 
-// NewExecutor creates an agent that executes tasks using shell and web tools.
+// NewExecutor creates an agent that executes tasks using shell, code, and web tools.
 func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *logger.Logger) *Agent {
 	return newAgent(p, model, executorPrompt, verbose, []tools.Tool{
-		tools.NewShell(workDir),
+		tools.NewShell(workDir, tools.StdinConfirm),
+		tools.NewRunCode(5 * time.Second),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 	}, log)

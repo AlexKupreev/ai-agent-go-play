@@ -23,8 +23,8 @@ user-visible changes. This is the highest-leverage step — every later phase as
 tool defs, usage), and `internal/logger` logs OpenAI types too. Provider-agnosticism and the
 headless engine both depend on cutting this coupling.
 
-**Status: DONE** (commit pending). Build + vet clean; only `internal/provider/openai` imports
-the SDK.
+**Status: DONE** (commit `dc72492`). Build + vet clean; only `internal/provider/openai` imports
+the SDK. Adapter + provider mapping covered by unit tests.
 
 **Tasks**
 
@@ -62,27 +62,35 @@ strict) so other vendors can map it. Anthropic adapter intentionally not built y
 **Goal:** a clean provider-neutral kernel with the current built-ins, plus lightweight
 self-extension via `run_code`, and a confirmation gate on destructive operations.
 
+**Status: MOSTLY DONE** (commit pending). `run_code` + destructive-shell gate built and
+unit-tested; only the optional rename and full config knobs remain.
+
 **Tasks**
 
 - [ ] (Optional, tidy) rename `internal/agent` → `internal/engine` once the loop is
-    provider-neutral, to match design §6. Cosmetic; can defer.
-- [ ] Add a `run_code` built-in tool: the model writes a short Lua snippet that the engine runs
-    and returns the result. *In Phase 1 this can run with the same trust as built-ins* (no broker
-    yet) **only because there is no persistence of these tools** — it is ephemeral glue. Flag
-    clearly in code that it graduates to the sandbox in Phase 2.
-- [ ] Add a destructive-action approval hook for `shell` (and any effectful built-in): detect
-    irreversible commands (rm/mv/overwrite/network-push heuristics or an allowlist), and require
-    a confirmation via the existing `ask_user` path before executing. Keep shell as a trusted
-    built-in — this is a guardrail, not removal.
-- [ ] Make `maxIterations`, model, and timeouts configurable (some already are via flags/config).
+    provider-neutral, to match design §6. Cosmetic; deferred.
+- [x] Add a `run_code` built-in tool (`internal/tools/runcode.go`): the model writes a short Lua
+    snippet (gopher-lua) the engine runs and returns. Compute-only sandbox — base/table/string/
+    math libs, `os`/`io`/`debug`/`package` and code-loading stripped, context-timeout abort, no
+    host functions. Flagged in code that it graduates to the broker/sandbox in Phase 2.
+- [x] Add a destructive-action approval hook for `shell` (`internal/tools/destructive.go`,
+    `shell.go`): heuristic detection (rm/mv/dd/overwrite/sudo/kill/destructive-git/pkg-removal/
+    pipe-to-shell) → `ConfirmFunc` gate (`StdinConfirm` in CLI) before running. Shell stays a
+    trusted built-in; this is a guardrail, not removal. Injectable confirm for tests.
+- [~] Config knobs: `model`/`verbose` already flags; `run_code` timeout is a constructor param.
+    `maxIterations` is still a const — make configurable when needed.
 
 **Acceptance**
 
-- `run_code` works end-to-end on a simple task ("compute X and return it").
-- A destructive shell command triggers a confirmation prompt; a read-only one does not.
+- [x] `run_code` computes and returns values (arithmetic, strings, arrays, maps, `result`
+    fallback); `os`/`io` access errors; runaway loops time out. Covered by `runcode_test.go`.
+- [x] A destructive shell command triggers confirmation; read-only does not; decline blocks the
+    run. Covered by `shell_test.go` + `destructive` table test.
+- [ ] Live end-to-end (model actually invokes `run_code`) — needs an API key; not yet exercised.
 
-**Risks/notes:** resist giving `run_code` any host functions yet — it should only compute over
-its inputs. The moment it needs I/O, that is Phase 2's broker.
+**Risks/notes:** the destructive heuristic is best-effort (false positives only cost a prompt),
+*not* a security boundary — the real boundary is Phase 2's broker. `run_code` deliberately has
+no host functions yet.
 
 ---
 
