@@ -8,10 +8,8 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/logger"
+	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/tools"
-
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
 )
 
 const maxIterations = 20
@@ -41,21 +39,21 @@ Rules:
 - Your final response must be the refined task description only, with no preamble or explanation`
 
 type Agent struct {
-	client         openai.Client // value type, not pointer — that's how this SDK works
+	provider       provider.Provider
 	model          string
 	verbose        bool
 	systemPrompt   string
-	responseFormat *openai.ChatCompletionNewParamsResponseFormatUnion
+	responseFormat *provider.ResponseFormat
 	tools          []tools.Tool
 	log            *logger.Logger
 }
 
-func newAgent(apiKey, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
+func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
 	if model == "" {
 		model = defaultModel
 	}
 	return &Agent{
-		client:       openai.NewClient(option.WithAPIKey(apiKey)),
+		provider:     p,
 		model:        model,
 		verbose:      verbose,
 		systemPrompt: systemPrompt,
@@ -65,8 +63,8 @@ func newAgent(apiKey, model, systemPrompt string, verbose bool, agentTools []too
 }
 
 // NewExecutor creates an agent that executes tasks using shell and web tools.
-func NewExecutor(apiKey, workDir, model string, verbose bool, log *logger.Logger) *Agent {
-	return newAgent(apiKey, model, executorPrompt, verbose, []tools.Tool{
+func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *logger.Logger) *Agent {
+	return newAgent(p, model, executorPrompt, verbose, []tools.Tool{
 		tools.NewShell(workDir),
 		tools.WebSearchDDG,
 		tools.WebFetch,
@@ -76,8 +74,8 @@ func NewExecutor(apiKey, workDir, model string, verbose bool, log *logger.Logger
 // NewPlanner creates an agent that clarifies and refines a task before execution.
 // It has no shell access — only web research and the ability to ask the user questions.
 // Its final response is a structured Plan enforced via JSON schema.
-func NewPlanner(apiKey, model string, verbose bool, log *logger.Logger) *Agent {
-	a := newAgent(apiKey, model, plannerPrompt, verbose, []tools.Tool{
+func NewPlanner(p provider.Provider, model string, verbose bool, log *logger.Logger) *Agent {
+	a := newAgent(p, model, plannerPrompt, verbose, []tools.Tool{
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		tools.AskUser,
@@ -90,9 +88,9 @@ func NewPlanner(apiKey, model string, verbose bool, log *logger.Logger) *Agent {
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.log.LogStart(userInput)
 
-	messages := []openai.ChatCompletionMessageParamUnion{
-		openai.SystemMessage(a.systemPrompt),
-		openai.UserMessage(userInput),
+	messages := []provider.Message{
+		provider.SystemText(a.systemPrompt),
+		provider.UserText(userInput),
 	}
 
 	toolDefs := a.buildToolDefs()
@@ -101,37 +99,35 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		a.log.LogRequest(i, messages)
 
 		start := time.Now()
-		params := openai.ChatCompletionNewParams{
-			Model:             openai.ChatModel(a.model),
-			Messages:          messages,
-			Tools:             toolDefs,
-			ParallelToolCalls: openai.Bool(false),
-		}
-		if a.responseFormat != nil {
-			params.ResponseFormat = *a.responseFormat
-		}
-		resp, err := a.client.Chat.Completions.New(ctx, params)
+		resp, err := a.provider.Step(ctx, provider.StepRequest{
+			Model:          a.model,
+			Messages:       messages,
+			Tools:          toolDefs,
+			ResponseFormat: a.responseFormat,
+		})
 		if err != nil {
-			return "", fmt.Errorf("OpenAI error: %w", err)
+			return "", fmt.Errorf("provider error: %w", err)
 		}
 		durationMs := time.Since(start).Milliseconds()
 
-		choice := resp.Choices[0]
-		a.log.LogResponse(i, choice.Message.Content, choice.Message.ToolCalls, resp.Usage, durationMs)
+		text := resp.Text()
+		toolCalls := resp.ToolCalls()
+		a.log.LogResponse(i, text, toolCalls, resp.Usage, durationMs)
 
-		if len(choice.Message.ToolCalls) == 0 {
-			return choice.Message.Content, nil
+		if len(toolCalls) == 0 {
+			return text, nil
 		}
 
-		if a.verbose && choice.Message.Content != "" {
-			fmt.Fprintln(os.Stderr, choice.Message.Content)
+		if a.verbose && text != "" {
+			fmt.Fprintln(os.Stderr, text)
 		}
 
-		messages = append(messages, choice.Message.ToParam())
+		// Append the assistant turn (text + tool calls) before its results.
+		messages = append(messages, provider.Message{Role: provider.RoleAssistant, Content: resp.Content})
 
-		for _, call := range choice.Message.ToolCalls {
+		for _, call := range toolCalls {
 			if a.verbose {
-				fmt.Fprintf(os.Stderr, "\n[tool: %s] %s\n", call.Function.Name, call.Function.Arguments)
+				fmt.Fprintf(os.Stderr, "\n[tool: %s] %s\n", call.Name, string(call.Input))
 			}
 
 			result, err := a.executeTool(ctx, call)
@@ -142,45 +138,45 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 			if a.verbose {
 				fmt.Fprintf(os.Stderr, "[result] %s\n", result)
 			}
-			a.log.LogToolResult(call.Function.Name, call.ID, call.Function.Arguments, result)
+			a.log.LogToolResult(call.Name, call.ID, string(call.Input), result)
 
-			messages = append(messages, openai.ToolMessage(result, call.ID))
+			messages = append(messages, provider.ToolResultMessage(call.ID, result, err != nil))
 		}
 	}
 
 	return "", fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
 }
 
-func (a *Agent) executeTool(ctx context.Context, call openai.ChatCompletionMessageToolCall) (string, error) {
+func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string, error) {
 	for _, t := range a.tools {
-		if t.Name == call.Function.Name {
-			var args map[string]any
-			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-				return "", fmt.Errorf("invalid tool args: %w", err)
+		if t.Name == call.Name {
+			args := map[string]any{}
+			if len(call.Input) > 0 {
+				if err := json.Unmarshal(call.Input, &args); err != nil {
+					return "", fmt.Errorf("invalid tool args: %w", err)
+				}
 			}
 			return t.Run(ctx, args)
 		}
 	}
-	return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
+	return "", fmt.Errorf("unknown tool: %s", call.Name)
 }
 
-func (a *Agent) buildToolDefs() []openai.ChatCompletionToolParam {
-	defs := make([]openai.ChatCompletionToolParam, len(a.tools))
+func (a *Agent) buildToolDefs() []provider.ToolDef {
+	defs := make([]provider.ToolDef, len(a.tools))
 	for i, t := range a.tools {
 		required := make([]string, 0, len(t.Parameters))
 		for name := range t.Parameters {
 			required = append(required, name)
 		}
 
-		defs[i] = openai.ChatCompletionToolParam{
-			Function: openai.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: openai.String(t.Description),
-				Parameters: openai.FunctionParameters{
-					"type":       "object",
-					"properties": t.Parameters,
-					"required":   required,
-				},
+		defs[i] = provider.ToolDef{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": t.Parameters,
+				"required":   required,
 			},
 		}
 	}

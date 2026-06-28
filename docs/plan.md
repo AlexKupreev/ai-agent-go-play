@@ -23,38 +23,37 @@ user-visible changes. This is the highest-leverage step — every later phase as
 tool defs, usage), and `internal/logger` logs OpenAI types too. Provider-agnosticism and the
 headless engine both depend on cutting this coupling.
 
+**Status: DONE** (commit pending). Build + vet clean; only `internal/provider/openai` imports
+the SDK.
+
 **Tasks**
 
-- [ ] Create `internal/provider` with neutral types:
-  - `Role` (`System|User|Assistant|Tool`), `ContentBlock` (`Text` / `ToolCall{ID,Name,Input}` /
-    `ToolResult{CallID,Output,IsError}`), `Message{Role, Content}`.
-  - `ToolDef{Name, Description, InputSchema}`, `ToolChoice`, `Usage{Input,Output,Cached}`,
-    `StopReason` (`EndTurn|ToolCalls|MaxTokens|Refusal}`).
-  - `StepRequest{Model, System, Messages, Tools, ToolChoice, MaxTokens, ResponseFormat?}` and
-    `StepResponse{Content, Stop, Usage}`.
-  - `type Provider interface { Step(ctx, StepRequest) (StepResponse, error) }` (+ `Capabilities()`
-    for later; streaming deferred).
-- [ ] `internal/provider/openai`: adapter implementing `Provider`, holding the `openai-go`
-    client. It owns *all* mapping (messages, tool defs from `tools.Tool`, `ParallelToolCalls`,
-    structured-output `ResponseFormat`, usage, stop reasons). This is the only package that
-    imports `openai-go`.
-- [ ] Refactor `internal/agent/agent.go`: replace the embedded `openai.Client` + inline mapping
-    with a `provider.Provider`. The ReAct loop now appends neutral `Message`s and reads neutral
-    `ContentBlock`s. `buildToolDefs` moves into the adapter (or returns `[]provider.ToolDef`).
-- [ ] Neutralize `internal/logger`: its `LogResponse`/`LogRequest`/`LogToolResult` currently take
-    OpenAI types — change them to neutral types (or feed it from the adapter boundary).
-- [ ] Keep `Plan`/structured output working: model it as a neutral `ResponseFormat` on
-    `StepRequest`; the OpenAI adapter renders it to `ResponseFormatJSONSchema`.
+- [x] Create `internal/provider` with neutral types (`provider/types.go`, `provider/provider.go`):
+  `Role`, `ContentBlock` (`Text` / `ToolCall{ID,Name,Input}` / `ToolResult{CallID,Output,IsError}`),
+  `Message`, `ToolDef`, `Usage`, `StopReason`, `ResponseFormat`, `StepRequest`, `StepResponse`
+  (+ `Text()`/`ToolCalls()` accessors), and `type Provider interface { Step(...) }`.
+  (`ToolChoice`/`Capabilities()`/streaming deferred — not needed yet.)
+- [x] `internal/provider/openai`: adapter implementing `Provider`, holding the `openai-go`
+  client. Owns all mapping (messages, tool defs, `ParallelToolCalls`, structured-output
+  `ResponseFormat`, usage, stop reasons). The only package that imports `openai-go`.
+- [x] Refactor `internal/agent/agent.go`: embedded `openai.Client` → `provider.Provider`; the
+  ReAct loop appends/reads neutral types; `buildToolDefs` returns `[]provider.ToolDef`.
+  `cmd/run.go` constructs the provider once and injects it into planner + executor.
+- [x] `internal/logger` was already neutral (its methods take `any`); fed neutral types now,
+  no SDK import. No change needed.
+- [x] `Plan`/structured output preserved as a neutral `provider.ResponseFormat`; the OpenAI
+  adapter renders it to `ResponseFormatJSONSchema`.
 
-**Acceptance**
+**Acceptance** — met:
 
-- `internal/agent` and `internal/logger` no longer import `openai-go` (grep clean).
-- `agent run …` and the planner behave identically to today; structured planner output intact.
-- A second adapter could be added without touching `internal/agent`.
+- `internal/agent`, `internal/logger`, `internal/tools` no longer import `openai-go` (grep clean).
+- ReAct loop + planner logic unchanged; structured planner output path intact. *(Live API
+  round-trip not exercised — no key in this environment; verify with `agent run` before relying
+  on it.)*
+- A second adapter (e.g. Anthropic) can be added without touching `internal/agent`.
 
-**Risks/notes:** the planner's strict JSON-schema is OpenAI-flavored — keep the neutral
-`ResponseFormat` minimal (name + schema + strict) so other vendors can map it. Don't build the
-Anthropic adapter yet; just prove the seam holds with one provider.
+**Risks/notes:** the neutral `ResponseFormat` is kept minimal (name + description + schema +
+strict) so other vendors can map it. Anthropic adapter intentionally not built yet.
 
 ---
 

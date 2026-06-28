@@ -9,6 +9,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/logger"
+	openaiprovider "ai-agent-go-play/internal/provider/openai"
 
 	"github.com/spf13/cobra"
 )
@@ -42,7 +43,9 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to get working directory: %w", err)
 		}
 
-		planner := agent.NewPlanner(cfg.OpenAIKey, modelFlag, verboseFlag, log)
+		prov := openaiprovider.New(cfg.OpenAIKey)
+
+		planner := agent.NewPlanner(prov, modelFlag, verboseFlag, log)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(context.Background(), task)
 		if err != nil {
@@ -65,7 +68,7 @@ var runCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr)
 		}
 
-		executor := agent.NewExecutor(cfg.OpenAIKey, workDir, modelFlag, verboseFlag, log)
+		executor := agent.NewExecutor(prov, workDir, modelFlag, verboseFlag, log)
 		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err
