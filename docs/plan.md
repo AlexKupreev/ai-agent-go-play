@@ -281,13 +281,16 @@ before the transport/frontend choices (real forks, settled when reached).
 - [x] *Acceptance:* shell decline/approve/error and author_tool decline/no-channel paths covered;
     CLI behaviour unchanged.
 
-### 4b — Headless engine event sink
+### 4b — Headless engine event sink  *(DONE — `internal/agent/observer.go`)*
 
-- [ ] Replace the executor's direct `os.Stderr` prints + concrete `*logger.Logger` with an emitted
-    event stream (an `Observer`/sink interface): text deltas, tool-call start/result, approval-needed,
-    final answer. A CLI sink reproduces today's verbose output; the API streams the same events.
-- *Acceptance:* `agent run` output is unchanged, but driven through the sink; the loop has no direct
-    stdout/stderr writes.
+- [x] Replaced the executor's direct `os.Stderr` prints + concrete `*logger.Logger` with an emitted
+    event stream: `Observer.Emit(Event)` with a single `Event` union (`start`/`request`/`response`/
+    `tool_start`/`tool_result`). `Observers` fans out; `LoggerObserver` wraps the disk log,
+    `CLIObserver` reproduces the verbose trace. `NewExecutor`/`NewPlanner` now take an `Observer` +
+    `runID`; `cmd/run.go` composes `LoggerObserver` (always) + `CLIObserver` (when `--verbose`).
+- [x] *Acceptance:* `agent run` output is unchanged but driven through the sink; the loop has **no**
+    direct stdout/stderr writes (grep-clean). `TestRun_EmitsEventSequence` asserts the event order;
+    the API (4c) will attach its own observer to stream the same events.
 
 ### 4c — `internal/api` transport
 

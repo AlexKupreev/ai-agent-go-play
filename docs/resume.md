@@ -115,10 +115,15 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    (bool, error)`, `StdinApprover` (CLI) / `ApproverFunc` (tests); shell + author_tool + NewExecutor
    refactored; approval error blocks the action. This is the (b) item from the old shell-hardening
    decision. All green.
-9. **NEXT — Phase 4b:** headless engine event sink — replace the executor's `os.Stderr` prints +
-   concrete `*logger.Logger` with an emitted event stream (Observer/sink), so the API (4c) can
-   stream the same events. CLI sink reproduces today's verbose output.
-10. **Forks to settle when reached** (recorded in plan.md): transport HTTP+SSE vs JSON-RPC (4c,
-    leaning SSE); first frontend Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
-11. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits
+9. **4b DONE:** headless engine event sink (`internal/agent/observer.go`). `Observer.Emit(Event)`
+   replaces the loop's stderr prints + concrete logger; `LoggerObserver` + `CLIObserver`, fanned via
+   `Observers`; `NewExecutor`/`NewPlanner` take `Observer` + `runID`; `cmd/run.go` composes them.
+   Loop is grep-clean of stdout/stderr. `TestRun_EmitsEventSequence`. All green.
+10. **NEXT — Phase 4c:** `internal/api` transport + approval queue. **Settle the transport fork
+    first** (HTTP+SSE vs JSON-RPC — leaning SSE). The API attaches its own `Observer` to stream
+    events, and provides a queue-backed `Approver` that parks an `ApprovalRequest` and resolves it
+    from an inbound call.
+11. **Forks to settle when reached** (in plan.md): transport (4c, leaning HTTP+SSE); first frontend
+    Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
+12. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits
     later); push; optional markdownlint fix (`design.md` fenced block needs a language tag).
