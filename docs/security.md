@@ -135,16 +135,17 @@ guardrail catches irreversible/high-impact commands before they run:
   `truncate`, single-`>` overwrite, recursive `chmod`/`chown`, `sudo`, `kill`/`pkill`,
   `shutdown`/`reboot`, `git push`/`reset --hard`/`clean`/`branch -D`, package removal, and
   `curl|wget … | sh`.
-- A match calls `ConfirmFunc` (CLI: `StdinConfirm`, a y/N prompt); decline blocks the run. The
-  confirm func is injectable for tests; `nil` disables the gate.
+- A match calls the `Approver` (`Approve(ctx, ApprovalRequest) (bool, error)`; CLI:
+  `StdinApprover`, a y/N prompt). Decline **or an approval error** blocks the run; the approver is
+  injectable for tests, and `nil` disables the gate.
 
 **Defends against:** the agent — possibly steered by injected content — running something
 destructive without a human nod.
 
 **Explicitly NOT a security boundary.** It is best-effort (false positives only cost a prompt). The
-real boundary for authored code is the broker; `shell` itself is trusted. This is the control
-flagged for upgrade to async/tiered approval (so it works unattended) when Phase 3 forces the
-approval refactor.
+real boundary for authored code is the broker; `shell` itself is trusted. The `Approver` seam
+(Phase 4a) makes this routable: a queue-backed approver (Phase 4c) can satisfy the prompt from a
+remote frontend so the gate works unattended.
 
 ---
 
@@ -188,8 +189,8 @@ supplies the spec as arguments, never the control flow):
 
 1. **Validate** — name regex, `input_schema` is an object, and both the tool body and its test
    **parse** (`sandbox.Parse` on the wrapped forms). Bad input returns to the model to retry.
-2. **Approve** — any requested capability the tier does not auto-approve routes to `ConfirmFunc`;
-   declined, or no approval channel available (unattended), → reject.
+2. **Approve** — any requested capability the tier does not auto-approve routes to the `Approver`;
+   declined, errored, or no approval channel available (unattended), → reject.
 3. **Smoke-test** — the mandatory test runs in the sandbox under a grant of **exactly the requested
    caps** and must `return true`. Approve-*then*-test guarantees no capability is exercised before a
    human approves it.

@@ -110,9 +110,15 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    list`/`revoke`) + code-hash dedup in `Registry.Register` (author_tool points the model at the
    existing tool). Tests: `executor_search_test.go`, `TestRegister_DedupsByCodeHash`,
    `TestAuthorTool_DedupsIdenticalCode`. **Phase 3 is complete.**
-8. **NEXT — Phase 4** (`design.md` §6 / plan Phase 4): headless engine API, long-term memory,
-   management plane (approve/deny, review/revoke, browse audit), web/Telegram thin clients. Also
-   the deferred **async/tiered approval refactor** (make `ConfirmFunc` frontend-routable) belongs
-   here — it's the (b) item from the old shell-hardening decision.
-9. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
-   language tag).
+8. **Phase 4 started — staged 4a–4e in `plan.md`.** **4a DONE:** `Approver` seam
+   (`internal/tools/approval.go`) replaces `ConfirmFunc` — `Approve(ctx, ApprovalRequest)
+   (bool, error)`, `StdinApprover` (CLI) / `ApproverFunc` (tests); shell + author_tool + NewExecutor
+   refactored; approval error blocks the action. This is the (b) item from the old shell-hardening
+   decision. All green.
+9. **NEXT — Phase 4b:** headless engine event sink — replace the executor's `os.Stderr` prints +
+   concrete `*logger.Logger` with an emitted event stream (Observer/sink), so the API (4c) can
+   stream the same events. CLI sink reproduces today's verbose output.
+10. **Forks to settle when reached** (recorded in plan.md): transport HTTP+SSE vs JSON-RPC (4c,
+    leaning SSE); first frontend Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
+11. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits
+    later); push; optional markdownlint fix (`design.md` fenced block needs a language tag).

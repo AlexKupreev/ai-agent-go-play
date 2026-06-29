@@ -259,22 +259,60 @@ design §9).
 **Goal:** the engine becomes headless and addressable; web/Telegram join the CLI as peer
 clients; approvals and review/revoke get a UI.
 
-**Tasks**
+Split into sub-phases, ordered so each is shippable and the internal seams (no external fork) come
+before the transport/frontend choices (real forks, settled when reached).
 
-- [ ] `internal/api`: a headless transport (HTTP/SSE or JSON-RPC) exposing run/step/stream,
-    tool list/search, and the approval queue. CLI becomes one client of this.
-- [ ] Long-term memory the agent maintains (notes/store), surfaced as a built-in.
-- [ ] Management plane: approve/deny escalations, review/revoke tools, browse the audit log.
-- [ ] Web + Telegram frontends as thin clients; design the approval UX so escalation prompts
-    don't become nagging.
+### Decisions to settle when reached (not blocking 4a–4b)
 
-**Acceptance**
+- **Transport (4c):** HTTP+SSE vs JSON-RPC/WebSocket. Leaning HTTP+SSE (simplest, curl-able,
+    streaming-friendly, single-binary).
+- **First frontend (4e):** Telegram vs web. Leaning Telegram (thin, good for the unattended/mobile
+    approval case; web is more work for the same payoff first).
+- **Store (cross-cutting):** SQLite vs keep JSONL+JSON. Migrate when catalog+audit+memory want one
+    transactional store (design §9).
 
-- The same run can be driven from CLI and from a second frontend against one engine.
-- Escalation approvals surface in the chosen frontend and are recorded.
+### 4a — Approver seam (async-ready approval)  *(DONE — `internal/tools/approval.go`)*
+
+- [x] Replaced `ConfirmFunc`/`StdinConfirm` with an `Approver` interface
+    (`Approve(ctx, ApprovalRequest) (bool, error)`): structured request (kind/title/detail/run) so a
+    frontend can render it and an async approver can queue by run; `ctx` so Approve can block on a
+    remote decision. `StdinApprover` (CLI), `ApproverFunc` (tests). Refactored `shell`, `author_tool`,
+    `NewExecutor`. An approval **error blocks** the action (treated as not-approved).
+- [x] *Acceptance:* shell decline/approve/error and author_tool decline/no-channel paths covered;
+    CLI behaviour unchanged.
+
+### 4b — Headless engine event sink
+
+- [ ] Replace the executor's direct `os.Stderr` prints + concrete `*logger.Logger` with an emitted
+    event stream (an `Observer`/sink interface): text deltas, tool-call start/result, approval-needed,
+    final answer. A CLI sink reproduces today's verbose output; the API streams the same events.
+- *Acceptance:* `agent run` output is unchanged, but driven through the sink; the loop has no direct
+    stdout/stderr writes.
+
+### 4c — `internal/api` transport
+
+- [ ] A headless transport (see fork above) exposing run/stream, tool list/search, and the
+    **approval queue** (a queue-backed `Approver` that parks a request and resolves it from an
+    inbound call). CLI becomes one client of this.
+- *Acceptance:* a run can be started and streamed over the API; an escalation parks in the queue and
+    is resolved by an API call.
+
+### 4d — Long-term memory
+
+- [ ] A memory store the agent maintains (notes/key-value), surfaced as a built-in tool, persisted
+    in the store. Scoped + audited like any effect.
+- *Acceptance:* the agent writes a note in one run and reads it back in a later run.
+
+### 4e — Management plane + frontends
+
+- [ ] Approve/deny escalations, review/revoke tools, browse the audit log — over the API. Then a
+    thin frontend (see fork) as a peer client; design the approval UX so prompts don't nag.
+- *Acceptance (Phase 4):* the same run can be driven from the CLI and a second frontend against one
+    engine; escalation approvals surface in the chosen frontend and are recorded.
 
 **Risks/notes:** keep frontends thin — all policy lives in the engine. Approval UX is an open
-question (design §9); start minimal.
+question (design §9); start minimal. The async `Approver` (4a) is the contract the approval queue
+(4c) and management plane (4e) build on.
 
 ---
 
