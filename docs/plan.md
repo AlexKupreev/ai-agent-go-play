@@ -325,13 +325,21 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c is complete.** Next: 4d (long-term memory), 4e (management plane + a thin frontend).
+**4c and 4d are complete.** Next: 4e (management plane + a thin frontend).
 
-### 4d — Long-term memory
+### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
-- [ ] A memory store the agent maintains (notes/key-value), surfaced as a built-in tool, persisted
-    in the store. Scoped + audited like any effect.
-- *Acceptance:* the agent writes a note in one run and reads it back in a later run.
+- [x] `internal/memory`: `Store` interface (`Put/Get/Search/List/Delete`) + `MemoryStore`
+    (in-memory, optional JSON-file persistence — atomic temp+rename, token-overlap `Search`),
+    mirroring the tool `Registry`. Persists to `~/.config/ai-agent/memory.json`.
+- [x] Built-ins `remember` / `recall` (`internal/tools/memory.go`): trusted, **not** exposed to the
+    sandbox (so `call_tool` can't reach them, like `shell`). `NewExecutor` takes a `memory.Store`
+    (nil ⇒ tools omitted); `serve` shares ONE store across runs so a fact from one run is recallable
+    in later runs. `remember` emits a `memory_write` audit event (key+tags, not the value); reads
+    aren't audited (mirrors the broker). Executor prompt nudges recall-first / save durable facts.
+- [x] *Acceptance:* `internal/memory/memory_test.go` (round-trip, upsert, search, reload across
+    instances) + `internal/agent/memory_e2e_test.go` (fake provider remembers in run 1, a second
+    executor over the same store recalls it in run 2; write is audited).
 
 ### 4e — Management plane + frontends
 
@@ -372,8 +380,11 @@ Not planned work; pull from here only when a concrete need appears.
 
 - **Tests:** table tests for the provider adapter mapping (Phase 0), the broker allow/deny
   matrix (Phase 2), and the `author_tool` pipeline (Phase 3).
-- **Config:** keep secrets in `~/.config/ai-agent/`; add provider selection when the second
-  adapter lands.
+- **Config:** keep secrets in `~/.config/ai-agent/`. `config.json` now holds `model` and `tier`
+  too (`agent config set-model` / `set-tier`); precedence for each is `--model`/`--tier` flag >
+  config > built-in default (`resolveModel`/`resolveTier` in `cmd/config.go`; tier default =
+  `balanced`, validated by `capability.ParseTier`). The setters merge into the existing file. Add
+  provider selection the same way when the second adapter lands.
 - **Audit-first:** once Phase 2 exists, every effectful path writes to the log — treat a missing
   audit record as a bug.
 - **Don't speculatively build** Phase 5 items, multi-tenant isolation, or hard memory caps —

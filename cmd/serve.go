@@ -12,6 +12,7 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
+	"ai-agent-go-play/internal/memory"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/tools"
 
@@ -48,7 +49,22 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		runner, err := newServeRunner(cfg, modelFlag, approvals, registry)
+		// One memory store, shared across runs: a fact remembered in one run is
+		// recallable by later runs (the cross-run guarantee 4d is about).
+		memPath, err := memoryPath()
+		if err != nil {
+			return err
+		}
+		mem, err := memory.NewPersistentStore(memPath)
+		if err != nil {
+			return fmt.Errorf("failed to load memory store: %w", err)
+		}
+
+		tier, err := resolveTier(tierFlag, cfg)
+		if err != nil {
+			return err
+		}
+		runner, err := newServeRunner(cfg, resolveModel(modelFlag, cfg), tier, approvals, registry, mem)
 		if err != nil {
 			return err
 		}
@@ -64,7 +80,7 @@ var serveCmd = &cobra.Command{
 // newServeRunner builds the Runner the engine drives: each run gets its own disk
 // log and audit recorder, but shares the process-wide tool catalog and approver, so
 // authored tools and parked approvals are consistent across runs and with the API.
-func newServeRunner(cfg Config, model string, approver tools.Approver, registry tools.Registry) (api.Runner, error) {
+func newServeRunner(cfg Config, model string, tier capability.Tier, approver tools.Approver, registry tools.Registry, mem memory.Store) (api.Runner, error) {
 	prov := openaiprovider.New(cfg.OpenAIKey)
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -86,12 +102,13 @@ func newServeRunner(cfg Config, model string, approver tools.Approver, registry 
 
 		// Engine event stream + disk log see the same events.
 		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obsAll, registry, rec, capability.TierBalanced, approver)
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obsAll, registry, mem, rec, tier, approver)
 		return executor.Run(ctx, task)
 	}), nil
 }
 
 func init() {
 	serveCmd.Flags().StringVar(&addrFlag, "addr", "127.0.0.1:8080", "address to listen on")
-	serveCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (default: gpt-4o-mini)")
+	serveCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
+	serveCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 }

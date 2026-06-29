@@ -6,12 +6,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"ai-agent-go-play/internal/capability"
+
 	"github.com/spf13/cobra"
 )
 
 // Config holds persistent settings stored on disk.
 type Config struct {
 	OpenAIKey string `json:"openai_key"`
+	Model     string `json:"model,omitempty"` // default model; overridden by --model
+	Tier      string `json:"tier,omitempty"`  // default trust tier; overridden by --tier
 }
 
 var configCmd = &cobra.Command{
@@ -24,12 +28,41 @@ var setKeyCmd = &cobra.Command{
 	Short: "Save your OpenAI API key",
 	Args:  cobra.ExactArgs(1), // enforces exactly one argument
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return saveConfig(Config{OpenAIKey: args[0]})
+		cfg := loadConfigOrEmpty()
+		cfg.OpenAIKey = args[0]
+		return saveConfig(cfg)
+	},
+}
+
+var setModelCmd = &cobra.Command{
+	Use:   "set-model <model>",
+	Short: "Save the default model (e.g. gpt-4o); --model overrides it per run",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		cfg.Model = args[0]
+		return saveConfig(cfg)
+	},
+}
+
+var setTierCmd = &cobra.Command{
+	Use:   "set-tier <safe|balanced|permissive>",
+	Short: "Save the default trust tier (autonomy dial); --tier overrides it per run",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := capability.ParseTier(args[0]); err != nil {
+			return err
+		}
+		cfg := loadConfigOrEmpty()
+		cfg.Tier = args[0]
+		return saveConfig(cfg)
 	},
 }
 
 func init() {
 	configCmd.AddCommand(setKeyCmd)
+	configCmd.AddCommand(setModelCmd)
+	configCmd.AddCommand(setTierCmd)
 }
 
 // configPath returns the path to the config file, e.g. ~/.config/ai-agent/config.json
@@ -51,6 +84,16 @@ func catalogPath() (string, error) {
 	return filepath.Join(home, ".config", "ai-agent", "tools.json"), nil
 }
 
+// memoryPath returns the path to the long-term memory store, e.g.
+// ~/.config/ai-agent/memory.json (created on first remembered fact).
+func memoryPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "ai-agent", "memory.json"), nil
+}
+
 func saveConfig(cfg Config) error {
 	path, err := configPath()
 	if err != nil {
@@ -68,7 +111,7 @@ func saveConfig(cfg Config) error {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return err
 	}
-	fmt.Println("API key saved to", path)
+	fmt.Println("config saved to", path)
 	return nil
 }
 
@@ -83,4 +126,36 @@ func loadConfig() (Config, error) {
 	}
 	var cfg Config
 	return cfg, json.Unmarshal(data, &cfg)
+}
+
+// loadConfigOrEmpty loads the config, returning a zero Config if none exists yet.
+// Used by the setters so updating one field preserves the others.
+func loadConfigOrEmpty() Config {
+	cfg, err := loadConfig()
+	if err != nil {
+		return Config{}
+	}
+	return cfg
+}
+
+// resolveModel applies model precedence: the --model flag wins, then the saved
+// config default, then "" (the agent falls back to its built-in default).
+func resolveModel(flag string, cfg Config) string {
+	if flag != "" {
+		return flag
+	}
+	return cfg.Model
+}
+
+// resolveTier applies tier precedence: the --tier flag wins, then the saved config
+// default, then TierBalanced. An invalid value (from either source) is an error.
+func resolveTier(flag string, cfg Config) (capability.Tier, error) {
+	raw := flag
+	if raw == "" {
+		raw = cfg.Tier
+	}
+	if raw == "" {
+		return capability.TierBalanced, nil
+	}
+	return capability.ParseTier(raw)
 }

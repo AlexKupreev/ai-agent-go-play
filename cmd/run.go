@@ -10,8 +10,8 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/audit"
-	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
+	"ai-agent-go-play/internal/memory"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/tools"
 
@@ -19,6 +19,7 @@ import (
 )
 
 var modelFlag string
+var tierFlag string
 var verboseFlag bool
 
 var runCmd = &cobra.Command{
@@ -48,6 +49,11 @@ var runCmd = &cobra.Command{
 		}
 
 		prov := openaiprovider.New(cfg.OpenAIKey)
+		model := resolveModel(modelFlag, cfg)
+		tier, err := resolveTier(tierFlag, cfg)
+		if err != nil {
+			return err
+		}
 
 		// Run events fan out to the disk log always, and to the CLI when verbose.
 		obs := agent.Observers{agent.NewLoggerObserver(log)}
@@ -55,7 +61,7 @@ var runCmd = &cobra.Command{
 			obs = append(obs, agent.NewCLIObserver(os.Stderr))
 		}
 
-		planner := agent.NewPlanner(prov, modelFlag, obs)
+		planner := agent.NewPlanner(prov, model, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(context.Background(), task)
 		if err != nil {
@@ -95,7 +101,16 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, modelFlag, log.RunID, obs, registry, rec, capability.TierBalanced, tools.StdinApprover{})
+		memPath, err := memoryPath()
+		if err != nil {
+			return err
+		}
+		mem, err := memory.NewPersistentStore(memPath)
+		if err != nil {
+			return fmt.Errorf("failed to load memory store: %w", err)
+		}
+
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, rec, tier, tools.StdinApprover{})
 		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err
@@ -106,6 +121,7 @@ var runCmd = &cobra.Command{
 }
 
 func init() {
-	runCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (default: gpt-4o-mini)")
+	runCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
+	runCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	runCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "print tool calls and results to stderr")
 }

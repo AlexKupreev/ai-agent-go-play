@@ -2,7 +2,25 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-06-28._
+_Last session: 2026-06-29._
+
+---
+
+## Latest session (2026-06-29): Phase 4d + model config
+
+- **Phase 4d (long-term memory) — DONE.** `internal/memory` (`Store` + `MemoryStore`, JSON-file
+  persistence mirroring the tool `Registry`); `remember`/`recall` built-ins
+  (`internal/tools/memory.go`), trusted + **not** sandbox-exposed; `NewExecutor` gained a
+  `memory.Store` param (nil ⇒ tools omitted); `serve` shares one store across runs. `remember`
+  emits a `memory_write` audit event. Tests: `internal/memory/memory_test.go` +
+  `internal/agent/memory_e2e_test.go`. Design + trade-offs in [`memory.md`](memory.md).
+- **Model + tier config — DONE.** `Config.Model`/`Config.Tier` + `agent config set-model` /
+  `set-tier`; precedence `--model`/`--tier` flag > config > built-in default
+  (`resolveModel`/`resolveTier` in `cmd/config.go`; tier default `balanced`, validated by
+  `capability.ParseTier`, tested). Fixed a latent bug: the setters now merge into the existing
+  config instead of overwriting (old `set-key` would clobber). `saveConfig` message made generic.
+- Build/vet/test all green. **Next: Phase 4e** (management plane + a thin frontend; fork Telegram
+  vs web).
 
 ---
 

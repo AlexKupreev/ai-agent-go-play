@@ -7,6 +7,7 @@
 package capability
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -43,6 +44,17 @@ const (
 	TierBalanced   Tier = "balanced"
 	TierPermissive Tier = "permissive"
 )
+
+// ParseTier validates s and returns the matching Tier. The empty string is not
+// valid here — callers decide the default before parsing.
+func ParseTier(s string) (Tier, error) {
+	switch Tier(s) {
+	case TierSafe, TierBalanced, TierPermissive:
+		return Tier(s), nil
+	default:
+		return "", fmt.Errorf("invalid tier %q (want safe, balanced, or permissive)", s)
+	}
+}
 
 // AutoApproves reports whether a capability of this kind may be granted to an
 // agent-authored tool WITHOUT a human prompt at this tier. It is the policy that

@@ -17,6 +17,7 @@ const (
 	EventCapabilityExercised = "capability_exercised"
 	EventCapabilityDenied    = "capability_denied"
 	EventToolAuthored        = "tool_authored"
+	EventMemoryWrite         = "memory_write"
 )
 
 // Event is one append-only record.

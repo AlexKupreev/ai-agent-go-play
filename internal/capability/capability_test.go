@@ -84,3 +84,26 @@ func TestGrantHas(t *testing.T) {
 		t.Error("nil grant must not have capabilities")
 	}
 }
+
+func TestParseTier(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Tier
+		ok   bool
+	}{
+		{"safe", TierSafe, true},
+		{"balanced", TierBalanced, true},
+		{"permissive", TierPermissive, true},
+		{"", "", false},
+		{"bogus", "", false},
+		{"Safe", "", false}, // case-sensitive
+	} {
+		got, err := ParseTier(tc.in)
+		if tc.ok && (err != nil || got != tc.want) {
+			t.Errorf("ParseTier(%q) = %q, %v; want %q, nil", tc.in, got, err, tc.want)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("ParseTier(%q) = %q, nil; want error", tc.in, got)
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/sandbox"
 	"ai-agent-go-play/internal/tools"
@@ -39,6 +40,11 @@ When given a task:
 3. If you find yourself repeating the same multi-step work, use author_tool to create a reusable, tested tool for it (request only the capabilities it needs); you can call the new tool immediately
 4. Observe the output and adjust if something fails
 5. Once done, provide a concise summary of what you did and the result
+
+You have a long-term memory that persists across runs: use recall at the start of a
+task to check whether a past run saved anything useful, and remember to save durable
+facts worth keeping (user preferences, project details, decisions, results). Do not
+store secrets.
 
 Always explain briefly what you're about to do before each tool call.
 
@@ -108,7 +114,10 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 // approver gates risky actions (destructive shell, capability escalation); it is
 // the seam frontends drive — pass a queue-backed approver to route approvals over
 // the API. A nil approver defaults to StdinApprover (CLI behavior).
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
+//
+// mem is the long-term memory store backing the remember/recall built-ins; when
+// nil those tools are omitted (e.g. tests that don't exercise memory).
+func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
 	if approver == nil {
 		approver = tools.StdinApprover{}
 	}
@@ -127,13 +136,23 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 		Approver: approver,
 	})
 
-	a := newAgent(p, model, executorPrompt, []tools.Tool{
+	builtins := []tools.Tool{
 		tools.NewShell(workDir, approver),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		authorTool,
-	}, obs)
+	}
+	// Long-term memory is a trusted built-in (not exposed to the sandbox). Omit it
+	// when no store is wired so memory-free runs/tests offer no dangling tools.
+	if mem != nil {
+		builtins = append(builtins,
+			tools.NewRememberTool(mem, rec, runID),
+			tools.NewRecallTool(mem),
+		)
+	}
+
+	a := newAgent(p, model, executorPrompt, builtins, obs)
 	a.registry = registry
 	a.glue = glue
 	a.tier = tier
