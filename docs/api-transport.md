@@ -1,0 +1,102 @@
+# API transport (Phase 4c)
+
+How the headless engine is exposed to frontends (CLI, web, Telegram as peer clients).
+Decision record for the transport fork flagged in [`plan.md`](plan.md) §4c.
+
+_Decided: 2026-06-29._
+
+## Context
+
+Phase 4 makes the engine headless and addressable: web/Telegram join the CLI as peer
+clients, and approvals/review get a UI. The internal seams are already in place —
+`agent.Observer` (event stream out) and `tools.Approver` (`ctx`-blocking, `RunID`-keyed
+approval). 4c picks the wire protocol that carries those over the network.
+
+pi (our blueprint, [`design.md` §3](design.md)) ships headless **JSON-RPC/SDK** modes. We
+adopt pi's *shape* — "headless engine, frontends are peer clients" — not its exact wire
+format, the same selective divergence we applied to the sandbox tier.
+
+## Options
+
+### A. HTTP + SSE  *(chosen)*
+
+Plain `net/http` JSON endpoints for requests; run events streamed over **Server-Sent
+Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
+
+- `POST /runs` → `{run_id}`
+- `GET /runs/{id}/events` → SSE stream of run events
+- `GET /approvals`, `POST /approvals/{id}` → list / resolve a parked approval
+- `GET /tools`, `GET /tools/search?q=` (later in 4c)
+
+**Pros:** stdlib only (no deps); `curl`-able; trivial to debug; single binary; browser-native
+via `EventSource`; maps directly onto `Observer.Emit` → one SSE frame per event, and the
+approval queue onto plain REST. **Cons:** two one-directional channels — no true
+server-initiated push; a client learns of a pending approval by watching the event stream or
+polling `GET /approvals`.
+
+### B. JSON-RPC over WebSocket  *(rejected for now)*
+
+One bidirectional socket carrying framed method calls both ways: client calls `run.start`;
+server pushes `event.*` and `approval.request`; client replies `approval.resolve`.
+
+**Pros:** true duplex — the engine can actively push "I need approval" to a connected client,
+which fits the unattended/remote-approval case. This is also pi's native mode. **Cons:** needs
+a WebSocket dependency; not `curl`-able; more client machinery (reconnect, framing,
+correlation IDs) for the same first milestone.
+
+## Decision
+
+**Build A (HTTP+SSE) first.** It clears the Phase 4c acceptance bar (start + stream a run;
+park + resolve an escalation) with the least code and zero dependencies, and it is the most
+debuggable surface for a single-binary, unattended/mobile-approval engine. The duplex
+advantage of B only pays off at 4e (a frontend *notified* of approvals rather than watching
+the stream), and even then SSE-over-the-run-stream covers the case.
+
+## Keeping JSON-RPC addable later
+
+The wire protocol is isolated to a thin **transport adapter**. The `internal/api` package is
+split so B can be added without touching the core:
+
+- **Transport-neutral core** — `Engine` (start a run, subscribe to its events) and a per-run
+  `Hub` (implements `agent.Observer`; fans events to subscribers with history replay). Knows
+  nothing about HTTP/SSE.
+- **Transport adapters** — `http.go` is the SSE adapter: `net/http` handlers that call
+  `Engine.StartRun` and stream `Engine`/`Hub` events as SSE frames. A future `jsonrpc.go`
+  (or `ws.go`) is a *second* adapter over the **same** `Engine`/`Hub` — it subscribes to the
+  same per-run event stream and calls the same `StartRun`/approval-queue methods.
+
+So adding JSON-RPC later is a new file implementing one interface against the existing core,
+not a rewrite. The event/approval **semantics** live in the core; only framing differs.
+
+## Approval queue (the async `Approver`)
+
+Risky actions (destructive shell, capability escalation beyond the tier) route through the
+`tools.Approver` seam (Phase 4a). `StdinApprover` serves the CLI; the API supplies a
+**queue-backed approver** so a remote frontend can decide — the case the seam was built for.
+
+`internal/api/approval.go` — `ApprovalQueue` _implements `tools.Approver`_:
+
+- **Park & block.** `Approve(ctx, req)` registers the request under a generated id and blocks
+  until a decision arrives or `ctx` is done. A cancelled context returns _not-approved_ (per
+  the `Approver` contract), so a run that is abandoned never executes the gated action.
+- **Resolve from an inbound call.** `POST /approvals/{id}` with `{"approved": bool}` delivers
+  the decision; `GET /approvals` lists what is parked (id/kind/title/detail/run) for a frontend
+  to render. Resolving an unknown or already-resolved id is a `404` — delivery is single-shot
+  (buffered channel; the entry is removed when `Approve` returns).
+- **One queue, two consumers.** `agent serve` constructs a single `ApprovalQueue` and passes it
+  both to the executor (via `NewExecutor`'s injectable `Approver` parameter) and to `NewServer`
+  (for the endpoints), so what the engine parks is exactly what the API exposes.
+
+This replaces the slice's stdin limitation: with the queue wired, headless runs no longer block
+on a terminal — a risky action parks in the queue and waits for an API decision. Because SSE is
+not server-push, a client learns of a pending approval by polling `GET /approvals` (or by
+watching for the gap in the run's event stream); a future JSON-RPC adapter could push it.
+
+## Consequences
+
+- CLI becomes one client of this engine (peer to web/Telegram), per the Phase 4 goal.
+- Events are serialized to a wire-neutral `Event` type (not `agent.Event` directly) so both
+  adapters share one schema and the on-the-wire format is stable independent of internal
+  fields.
+- The planner step is interactive (`ask_user` over stdin) and does not fit a headless request;
+  the API runs the executor on the task directly for now. Headless planning is a later 4c/4e item.

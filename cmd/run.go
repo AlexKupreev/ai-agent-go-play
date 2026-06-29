@@ -95,7 +95,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, modelFlag, log.RunID, obs, registry, rec, capability.TierBalanced)
+		executor := agent.NewExecutor(prov, workDir, modelFlag, log.RunID, obs, registry, rec, capability.TierBalanced, tools.StdinApprover{})
 		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err

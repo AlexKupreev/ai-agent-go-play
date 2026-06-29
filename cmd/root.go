@@ -24,5 +24,6 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(toolCmd)
 }

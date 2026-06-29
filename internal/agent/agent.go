@@ -104,7 +104,14 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 // capability broker + sandbox: authored Script tools run under their grant and
 // every brokered effect is audited via rec. Run events go to obs; runID
 // identifies the run for grants/audit.
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, rec audit.Recorder, tier capability.Tier) *Agent {
+//
+// approver gates risky actions (destructive shell, capability escalation); it is
+// the seam frontends drive — pass a queue-backed approver to route approvals over
+// the API. A nil approver defaults to StdinApprover (CLI behavior).
+func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
+	if approver == nil {
+		approver = tools.StdinApprover{}
+	}
 	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
 	// caller is assigned after the agent exists, breaking the broker⇄dispatch
 	// cycle; the broker only invokes it at run time.
@@ -117,11 +124,11 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 		Audit:    rec,
 		Tier:     tier,
 		RunID:    runID,
-		Approver: tools.StdinApprover{},
+		Approver: approver,
 	})
 
 	a := newAgent(p, model, executorPrompt, []tools.Tool{
-		tools.NewShell(workDir, tools.StdinApprover{}),
+		tools.NewShell(workDir, approver),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,

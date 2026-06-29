@@ -247,4 +247,3 @@ Each phase is useful on its own; do them in order. The build-ordering rule (§5)
   nagging.
 - **Tool-catalog lifecycle**: dedup, TTL, review cadence for shared self-authored tools.
 - **Store choice**: SQLite vs append-only file log for the run/event log + catalog + grants.
-</content>

@@ -264,8 +264,8 @@ before the transport/frontend choices (real forks, settled when reached).
 
 ### Decisions to settle when reached (not blocking 4a–4b)
 
-- **Transport (4c):** HTTP+SSE vs JSON-RPC/WebSocket. Leaning HTTP+SSE (simplest, curl-able,
-    streaming-friendly, single-binary).
+- **Transport (4c):** ~~HTTP+SSE vs JSON-RPC/WebSocket.~~ **DECIDED: HTTP+SSE** (simplest, curl-able,
+    streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](api-transport.md).
 - **First frontend (4e):** Telegram vs web. Leaning Telegram (thin, good for the unattended/mobile
     approval case; web is more work for the same payoff first).
 - **Store (cross-cutting):** SQLite vs keep JSONL+JSON. Migrate when catalog+audit+memory want one
@@ -292,13 +292,27 @@ before the transport/frontend choices (real forks, settled when reached).
     direct stdout/stderr writes (grep-clean). `TestRun_EmitsEventSequence` asserts the event order;
     the API (4c) will attach its own observer to stream the same events.
 
-### 4c — `internal/api` transport
+### 4c — `internal/api` transport  *(IN PROGRESS — HTTP+SSE, see [`api-transport.md`](api-transport.md))*
 
-- [ ] A headless transport (see fork above) exposing run/stream, tool list/search, and the
-    **approval queue** (a queue-backed `Approver` that parks a request and resolves it from an
-    inbound call). CLI becomes one client of this.
-- *Acceptance:* a run can be started and streamed over the API; an escalation parks in the queue and
-    is resolved by an API call.
+Built as increments. Package is split so a JSON-RPC adapter can attach to the same core later.
+
+- [x] **Vertical slice — run/stream.** Transport-neutral core (`internal/api/engine.go`:
+    `Engine.StartRun`/`Subscribe` over a `Runner`; `hub.go`: per-run `Hub` implements
+    `agent.Observer`, fans events with history replay; `event.go`: wire `Event`). SSE adapter
+    (`http.go`): `POST /runs`, `GET /runs/{id}/events`. `cmd/serve.go` (`agent serve`) wires a real
+    executor-backed `Runner`. Tests: `http_test.go` (start + stream event sequence; unknown run = 404).
+- [x] **Approval queue.** `NewExecutor` now takes an injectable `tools.Approver` (nil ⇒
+    `StdinApprover`, so CLI/tests unchanged). `internal/api/approval.go`: `ApprovalQueue` implements
+    `tools.Approver` — `Approve` parks a request and blocks until resolved or ctx-cancelled (cancel ⇒
+    not-approved); `Pending()` snapshots; `Resolve` is single-shot. SSE adapter adds the
+    `GET /approvals` and `POST /approvals/{id}` endpoints; `serve` shares one queue between executor
+    and endpoints. Tests:
+    `approval_test.go` (park→list→resolve for approve/deny; unknown id = 404). Design in
+    [`api-transport.md`](api-transport.md).
+- [ ] **Tools over the API:** `GET /tools`, `GET /tools/search?q=`.
+- [ ] **CLI as a client** of the engine (peer to future frontends).
+- *Acceptance:* a run can be started and streamed over the API ✅; an escalation parks in the queue and
+    is resolved by an API call ✅.
 
 ### 4d — Long-term memory
 
@@ -349,4 +363,3 @@ Not planned work; pull from here only when a concrete need appears.
 **Phase 0, task 1:** create `internal/provider` with the neutral types and the `Provider`
 interface, then move OpenAI behind `internal/provider/openai`. Everything else unblocks from
 there.
-</content>

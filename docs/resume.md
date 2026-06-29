@@ -119,10 +119,18 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    replaces the loop's stderr prints + concrete logger; `LoggerObserver` + `CLIObserver`, fanned via
    `Observers`; `NewExecutor`/`NewPlanner` take `Observer` + `runID`; `cmd/run.go` composes them.
    Loop is grep-clean of stdout/stderr. `TestRun_EmitsEventSequence`. All green.
-10. **NEXT — Phase 4c:** `internal/api` transport + approval queue. **Settle the transport fork
-    first** (HTTP+SSE vs JSON-RPC — leaning SSE). The API attaches its own `Observer` to stream
-    events, and provides a queue-backed `Approver` that parks an `ApprovalRequest` and resolves it
-    from an inbound call.
+10. **Phase 4c IN PROGRESS — `internal/api` transport.** Fork **settled: HTTP+SSE** (rationale +
+    JSON-RPC-addable design in [`api-transport.md`](api-transport.md)). **Vertical slice DONE:**
+    transport-neutral core (`engine.go` `Engine.StartRun`/`Subscribe` over a `Runner`; `hub.go`
+    per-run `Hub` = `agent.Observer` with history replay; `event.go` wire `Event`) + SSE adapter
+    (`http.go`: `POST /runs`, `GET /runs/{id}/events`) + `cmd/serve.go` (`agent serve`). Tests in
+    `internal/api/http_test.go`. **Approval queue DONE:** `NewExecutor` takes an injectable
+    `tools.Approver` (nil ⇒ `StdinApprover`); `internal/api/approval.go` `ApprovalQueue` implements it
+    (park/block in `Approve`, `Resolve` single-shot, `Pending` snapshot); SSE adds `GET /approvals` +
+    `POST /approvals/{id}`; `serve` shares one queue between executor and endpoints; `engine.StartRun`
+    now owns the run's context (was bound to the request ctx → aborted runs mid-approval). Tests in
+    `internal/api/approval_test.go`. All green. **NEXT 4c increments:** (a) `GET /tools` +
+    `/tools/search`; (b) CLI-as-client of the engine. Then 4d (memory) / 4e (frontends).
 11. **Forks to settle when reached** (in plan.md): transport (4c, leaning HTTP+SSE); first frontend
     Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
 12. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits
