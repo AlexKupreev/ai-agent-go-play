@@ -6,11 +6,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ai-agent-go-play/internal/sandbox"
 )
 
 func run(t *testing.T, code string) string {
 	t.Helper()
-	tool := NewRunCode(2 * time.Second)
+	tool := NewRunCode(sandbox.NewLuaGlue(nil), 2*time.Second)
 	out, err := tool.Run(context.Background(), map[string]any{"code": code})
 	if err != nil {
 		t.Fatalf("Run returned hard error: %v", err)
@@ -87,7 +89,7 @@ func TestRunCode_ParseError(t *testing.T) {
 }
 
 func TestRunCode_Timeout(t *testing.T) {
-	tool := NewRunCode(150 * time.Millisecond)
+	tool := NewRunCode(sandbox.NewLuaGlue(nil), 150*time.Millisecond)
 	start := time.Now()
 	out, err := tool.Run(context.Background(), map[string]any{"code": "while true do end"})
 	if err != nil {

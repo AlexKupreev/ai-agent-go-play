@@ -8,13 +8,25 @@ import (
 	"sort"
 	"time"
 
+	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/provider"
+	"ai-agent-go-play/internal/sandbox"
 	"ai-agent-go-play/internal/tools"
 )
 
 const maxIterations = 20
 const defaultModel = "gpt-4o-mini"
+
+// scriptTimeout bounds any single sandboxed script execution (run_code and
+// authored Script tools).
+const scriptTimeout = 5 * time.Second
+
+// exposedBuiltins are the only trusted built-ins reachable from sandboxed code
+// via call_tool. Both are read-only and confirm-free, so design §5 rule (b) is
+// moot for v1; shell stays unexposed and thus unreachable from authored tools.
+var exposedBuiltins = map[string]bool{"web_search": true, "web_fetch": true}
 
 const executorPrompt = `You are a helpful AI agent with access to a shell and the web.
 
@@ -54,12 +66,24 @@ type Agent struct {
 	systemPrompt   string
 	responseFormat *provider.ResponseFormat
 	tools          []tools.Tool
+	byName         map[string]tools.Tool // built-in tools indexed by name
 	log            *logger.Logger
+
+	// Registry/sandbox wiring (executor only; nil on the planner). Authored tools
+	// resolve here and run sandboxed under their grant; built-ins resolve first.
+	registry tools.Registry
+	glue     *sandbox.LuaGlue
+	tier     capability.Tier
+	runID    string
 }
 
 func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
 	if model == "" {
 		model = defaultModel
+	}
+	byName := make(map[string]tools.Tool, len(agentTools))
+	for _, t := range agentTools {
+		byName[t.Name] = t
 	}
 	return &Agent{
 		provider:     p,
@@ -67,18 +91,42 @@ func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, age
 		verbose:      verbose,
 		systemPrompt: systemPrompt,
 		tools:        agentTools,
+		byName:       byName,
 		log:          log,
 	}
 }
 
-// NewExecutor creates an agent that executes tasks using shell, code, and web tools.
-func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *logger.Logger) *Agent {
-	return newAgent(p, model, executorPrompt, verbose, []tools.Tool{
+// NewExecutor creates an agent that executes tasks using shell, code, and web
+// tools, plus any agent-authored tools in the registry. It wires the live
+// capability broker + sandbox: authored Script tools run under their grant and
+// every brokered effect is audited via rec.
+func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *logger.Logger, registry tools.Registry, rec audit.Recorder, tier capability.Tier) *Agent {
+	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
+	// caller is assigned after the agent exists, breaking the broker⇄dispatch
+	// cycle; the broker only invokes it at run time.
+	broker := capability.NewBroker(rec, nil)
+	glue := sandbox.NewLuaGlue(broker)
+
+	a := newAgent(p, model, executorPrompt, verbose, []tools.Tool{
 		tools.NewShell(workDir, tools.StdinConfirm),
-		tools.NewRunCode(5 * time.Second),
+		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 	}, log)
+	a.registry = registry
+	a.glue = glue
+	a.tier = tier
+	if log != nil {
+		a.runID = log.RunID
+	}
+
+	// Trust boundary: every built-in runs with ambient authority (Trusted), but
+	// only web_search/web_fetch are Exposed to sandboxed code. So call_tool can
+	// reach those two (if the grant names them) and never shell.
+	broker.Tools = a.dispatch
+	broker.Trusted = func(name string) bool { _, ok := a.byName[name]; return ok }
+	broker.Exposed = func(name string) bool { return exposedBuiltins[name] }
+	return a
 }
 
 // NewPlanner creates an agent that clarifies and refines a task before execution.
@@ -158,18 +206,49 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 }
 
 func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string, error) {
-	for _, t := range a.tools {
-		if t.Name == call.Name {
-			args := map[string]any{}
-			if len(call.Input) > 0 {
-				if err := json.Unmarshal(call.Input, &args); err != nil {
-					return "", fmt.Errorf("invalid tool args: %w", err)
-				}
-			}
-			return t.Run(ctx, args)
+	args := map[string]any{}
+	if len(call.Input) > 0 {
+		if err := json.Unmarshal(call.Input, &args); err != nil {
+			return "", fmt.Errorf("invalid tool args: %w", err)
 		}
 	}
-	return "", fmt.Errorf("unknown tool: %s", call.Name)
+	return a.dispatch(ctx, call.Name, args)
+}
+
+// dispatch resolves a tool by name and runs it: built-ins first (ambient
+// authority), then the registry (authored tools, sandboxed under their grant).
+// It is also the broker's ToolCaller, so call_tool from sandboxed code routes
+// through the same resolution — gated by the broker's Trusted/Exposed checks.
+func (a *Agent) dispatch(ctx context.Context, name string, args map[string]any) (string, error) {
+	if t, ok := a.byName[name]; ok {
+		return t.Run(ctx, args)
+	}
+	if a.registry != nil {
+		if spec, ok := a.registry.Get(name); ok {
+			return a.runRegistered(ctx, spec, args)
+		}
+	}
+	return "", fmt.Errorf("unknown tool: %s", name)
+}
+
+// runRegistered executes a registry tool: a Native handler directly, or a Script
+// in the sandbox under a grant of exactly its required capabilities.
+func (a *Agent) runRegistered(ctx context.Context, spec tools.ToolSpec, args map[string]any) (string, error) {
+	switch spec.Impl.Kind {
+	case tools.ImplNative:
+		if spec.Impl.Native == nil {
+			return "", fmt.Errorf("tool %q: native handler missing", spec.Name)
+		}
+		return spec.Impl.Native(ctx, args)
+	case tools.ImplScript:
+		if a.glue == nil {
+			return "", fmt.Errorf("tool %q: no sandbox available", spec.Name)
+		}
+		grant := &capability.GrantContext{Run: a.runID, Granted: spec.RequiredCaps, Tier: a.tier}
+		return a.glue.Run(ctx, spec.Impl.Source, args, grant, scriptTimeout)
+	default:
+		return "", fmt.Errorf("tool %q: unknown impl kind %q", spec.Name, spec.Impl.Kind)
+	}
 }
 
 func (a *Agent) buildToolDefs() []provider.ToolDef {
@@ -195,6 +274,23 @@ func (a *Agent) buildToolDefs() []provider.ToolDef {
 				"properties": t.Parameters,
 				"required":   required,
 			},
+		}
+	}
+
+	// Append registry tools after the built-ins, in registration order. The list
+	// is append-only and stable, so the serialized prefix stays cache-friendly. A
+	// registry tool shadowed by a built-in name is skipped (built-ins win in
+	// dispatch); author_tool rejects such collisions at authoring time (3c).
+	if a.registry != nil {
+		for _, spec := range a.registry.List(tools.ScopeAny) {
+			if _, isBuiltin := a.byName[spec.Name]; isBuiltin {
+				continue
+			}
+			defs = append(defs, provider.ToolDef{
+				Name:        spec.Name,
+				Description: spec.Description,
+				InputSchema: spec.InputSchema,
+			})
 		}
 	}
 	return defs

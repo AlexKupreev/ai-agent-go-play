@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
+	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
 )
@@ -68,7 +72,24 @@ var runCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, modelFlag, verboseFlag, log)
+		// Live audit log (per run) + persistent tool catalog, threaded into the
+		// executor so authored tools run brokered and audited.
+		rec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
+		if err != nil {
+			return fmt.Errorf("failed to open audit log: %w", err)
+		}
+		defer rec.Close()
+
+		catPath, err := catalogPath()
+		if err != nil {
+			return err
+		}
+		registry, err := tools.NewPersistentRegistry(catPath)
+		if err != nil {
+			return fmt.Errorf("failed to load tool catalog: %w", err)
+		}
+
+		executor := agent.NewExecutor(prov, workDir, modelFlag, verboseFlag, log, registry, rec, capability.TierBalanced)
 		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err

@@ -41,6 +41,16 @@ func configPath() (string, error) {
 	return filepath.Join(home, ".config", "ai-agent", "config.json"), nil
 }
 
+// catalogPath returns the path to the persistent tool catalog, e.g.
+// ~/.config/ai-agent/tools.json (created on first authored tool).
+func catalogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "ai-agent", "tools.json"), nil
+}
+
 func saveConfig(cfg Config) error {
 	path, err := configPath()
 	if err != nil {

@@ -13,11 +13,10 @@ import (
 // data shaping, and returns its result.
 //
 // It runs through the shared sandbox (sandbox.LuaGlue) with an EMPTY grant, so it
-// has no host functions and no brokered effects — pure computation only. When the
-// agent authors capability-bearing tools (Phase 3), those run through the same
-// sandbox with a non-empty grant.
-func NewRunCode(timeout time.Duration) Tool {
-	glue := sandbox.NewLuaGlue(nil) // no broker needed: empty grant installs no host funcs
+// has no host functions and no brokered effects — pure computation only. The glue
+// is the live, broker-backed sandbox shared with agent-authored tools (Phase 3);
+// run_code simply requests no capabilities.
+func NewRunCode(glue *sandbox.LuaGlue, timeout time.Duration) Tool {
 	return Tool{
 		Name: "run_code",
 		Description: "Execute a short Lua script for computation and data shaping, returning its result. " +
