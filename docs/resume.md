@@ -94,8 +94,14 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
 4. ~~start **Phase 3a** (`ToolSpec` + `Registry`).~~ **DONE:** `internal/tools/spec.go`,
    `registry.go`, `registry_test.go`; all green, not wired to the loop. Tool-system design +
    benefits/drawbacks in [`tools.md`](tools.md). `plan.md` 3a checked off.
-5. **NEXT:** **Phase 3b** — wire `JSONLRecorder` → `Broker` → `LuaGlue` → `Registry` into
-   `cmd/run.go` per run; set `broker.Trusted` = built-in names, `broker.Exposed` =
-   `{web_search, web_fetch}`; `toolCaller` resolves name → built-in `Run` or registry script-exec.
-6. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
+5. ~~**Phase 3b** — wire broker/sandbox/registry into the run flow.~~ **DONE:** `cmd/run.go`
+   builds per-run `audit.jsonl` + persistent catalog; `NewExecutor` wires `Broker → LuaGlue →
+   Registry`, shares the glue with `run_code`, resolves via `Agent.dispatch`, sets Trusted/Exposed.
+   Tests in `internal/agent/executor_dispatch_test.go`. `run_code` signature now takes the shared
+   glue. All green.
+6. **NEXT:** **Phase 3c** — the `author_tool` meta-tool: validate (name regex, schema, parse) →
+   approve (caps beyond tier → `ConfirmFunc`) → smoke-test under exactly the approved caps →
+   register at scope → audit `ToolAuthored`. Built-in `tools.Tool`; host-side, not model-controlled.
+   Then the cross-phase fake-provider end-to-end test.
+7. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
    language tag).

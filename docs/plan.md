@@ -188,14 +188,19 @@ Only *authored* tools go through the sandbox/broker; built-ins are unchanged fro
 - [x] *Acceptance:* register/list/revoke/search round-trip + persistence reload, unit-tested; not
     wired to the loop. Design + trade-offs documented in [`tools.md`](tools.md).
 
-### 3b — Live broker/sandbox wiring (activates Phase 2 in the run flow)
+### 3b — Live broker/sandbox wiring (activates Phase 2 in the run flow)  *(DONE)*
 
-- [ ] In `cmd/run.go`, per run, construct `JSONLRecorder` → `Broker(rec, toolCaller)` →
-    `LuaGlue(broker)` → `Registry`; inject into the executor.
-- [ ] Set `broker.Trusted` = the built-in names; `broker.Exposed` = `{web_search, web_fetch}`
-    only. `toolCaller` resolves a name → built-in `Run` or registry script-exec.
-- *Acceptance:* `run_code` (and soon authored tools) execute through the real broker with a real
-    audit trail; the `call_tool` allowlist primitive becomes load-bearing.
+- [x] In `cmd/run.go`, per run, construct `JSONLRecorder` (`<session>/audit.jsonl`) +
+    `NewPersistentRegistry` (`~/.config/ai-agent/tools.json`); `NewExecutor` builds
+    `Broker(rec) → LuaGlue(broker)` and shares the glue with `run_code`. `toolCaller` =
+    `Agent.dispatch` (built-ins first, then registry Script via glue / Native via handler).
+- [x] `broker.Trusted` = built-in names; `broker.Exposed` = `{web_search, web_fetch}`. The
+    broker⇄dispatch cycle is broken by assigning `broker.Tools` after the agent is built.
+    `buildToolDefs` now appends registry tools after built-ins (collisions skipped).
+- [x] *Acceptance:* registry Script tools run through the real broker with a real audit trail;
+    `call_tool`→`shell` (unexposed) is denied and audited; ungranted host funcs are absent.
+    Covered by `internal/agent/executor_dispatch_test.go`. *(Live model loop needs an API key;
+    not exercised here.)*
 
 ### 3c — `author_tool` meta-tool (the pipeline)
 

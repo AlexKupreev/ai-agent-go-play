@@ -5,8 +5,11 @@ design choice. Complements [`plan.md`](plan.md) Phase 3 (the staged build) and
 [`security.md`](security.md) (the boundary authored tools run behind). Update this as the design
 moves through stages 3a–3e.
 
-**Status:** stage **3a** is implemented — `ToolSpec` + `Registry` (`internal/tools/spec.go`,
-`internal/tools/registry.go`), unit-tested, **not yet wired into the run loop** (that is 3b).
+**Status:** stages **3a + 3b** are implemented. 3a = `ToolSpec` + `Registry`
+(`internal/tools/spec.go`, `internal/tools/registry.go`). 3b = live wiring: the executor
+(`internal/agent/agent.go`) builds `Broker → LuaGlue → Registry` per run, resolves tool calls via
+`Agent.dispatch` (built-ins first, then registry), and audits every brokered effect. Next is **3c**
+(`author_tool`).
 
 ---
 
@@ -148,7 +151,7 @@ input schema, and impl completeness. It does **not** enforce the smoke-test or a
 
 | Item | Stage | Why not now |
 | --- | --- | --- |
-| Live wiring into the run loop | 3b | needs the broker/sandbox threaded into `cmd/run.go` first |
+| ~~Live wiring into the run loop~~ | 3b | **done** — broker/sandbox/registry threaded into `cmd/run.go` + executor |
 | `author_tool` pipeline (validate→approve→test→register→audit) | 3c | the policy gate; depends on 3b |
 | BM25-lite / embedding search | 3d | token overlap suffices for a small catalog |
 | Revoke surfaced (CLI/authored) + dedup by `CodeHash` | 3e | lifecycle polish |
