@@ -47,7 +47,7 @@ const (
 // AutoApproves reports whether a capability of this kind may be granted to an
 // agent-authored tool WITHOUT a human prompt at this tier. It is the policy that
 // decides which escalations the approval gate (author_tool) waves through versus
-// routes to ConfirmFunc — the user-tunable autonomy dial.
+// routes to the Approver — the user-tunable autonomy dial.
 //
 //   - Permissive: auto-approve everything (full autonomy; use only when watched).
 //   - Balanced:   auto-approve side-effect-free reads (clock, random, read_file);

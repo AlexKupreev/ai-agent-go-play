@@ -124,11 +124,11 @@ func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *
 		Audit:    rec,
 		Tier:     tier,
 		RunID:    runID,
-		Confirm:  tools.StdinConfirm,
+		Approver: tools.StdinApprover{},
 	})
 
 	a := newAgent(p, model, executorPrompt, verbose, []tools.Tool{
-		tools.NewShell(workDir, tools.StdinConfirm),
+		tools.NewShell(workDir, tools.StdinApprover{}),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,

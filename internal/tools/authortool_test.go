@@ -24,7 +24,10 @@ type fakeConfirm struct {
 	calls  int
 }
 
-func (f *fakeConfirm) fn(string) bool { f.calls++; return f.answer }
+func (f *fakeConfirm) Approve(context.Context, ApprovalRequest) (bool, error) {
+	f.calls++
+	return f.answer, nil
+}
 
 func newAuthorFixture(t *testing.T, tier capability.Tier, approve bool) authorFixture {
 	t.Helper()
@@ -33,7 +36,7 @@ func newAuthorFixture(t *testing.T, tier capability.Tier, approve bool) authorFi
 	glue := sandbox.NewLuaGlue(capability.NewBroker(rec, nil))
 	cf := &fakeConfirm{answer: approve}
 	tool := NewAuthorTool(AuthorToolDeps{
-		Registry: reg, Glue: glue, Audit: rec, Tier: tier, RunID: "test-run", Confirm: cf.fn,
+		Registry: reg, Glue: glue, Audit: rec, Tier: tier, RunID: "test-run", Approver: cf,
 	})
 	return authorFixture{tool: tool, reg: reg, rec: rec, confirm: cf}
 }
@@ -159,7 +162,7 @@ func TestAuthorTool_CapBeyondTier_NoConfirmRejects(t *testing.T) {
 	reg := NewMemoryRegistry()
 	rec := &audit.MemoryRecorder{}
 	glue := sandbox.NewLuaGlue(capability.NewBroker(rec, nil))
-	tool := NewAuthorTool(AuthorToolDeps{Registry: reg, Glue: glue, Audit: rec, Tier: capability.TierBalanced, RunID: "r", Confirm: nil})
+	tool := NewAuthorTool(AuthorToolDeps{Registry: reg, Glue: glue, Audit: rec, Tier: capability.TierBalanced, RunID: "r", Approver: nil})
 
 	args := authorArgs("writer", `write_file("/tmp/x","y"); return true`, "return true")
 	args["required_caps"] = []any{map[string]any{"kind": "write_file", "path_prefix": "/tmp"}}

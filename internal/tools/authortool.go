@@ -23,7 +23,7 @@ type AuthorToolDeps struct {
 	Audit    audit.Recorder
 	Tier     capability.Tier
 	RunID    string
-	Confirm  ConfirmFunc // approval gate for caps beyond the tier; nil = cannot escalate
+	Approver Approver // approval gate for caps beyond the tier; nil = cannot escalate
 }
 
 // NewAuthorTool returns the author_tool meta-tool: the agent's path to promote an
@@ -71,7 +71,7 @@ func (d AuthorToolDeps) run(ctx context.Context, args map[string]any) (string, e
 	}
 
 	// 2. Approve -----------------------------------------------------------
-	if msg := d.approve(spec); msg != "" {
+	if msg := d.approve(ctx, spec); msg != "" {
 		return msg, nil
 	}
 
@@ -150,8 +150,8 @@ func (d AuthorToolDeps) validate(spec ToolSpec) string {
 }
 
 // approve prompts the user for any capability beyond the run's tier. Returns a
-// rejection message if approval is needed but unavailable or declined.
-func (d AuthorToolDeps) approve(spec ToolSpec) string {
+// rejection message if approval is needed but unavailable, errored, or declined.
+func (d AuthorToolDeps) approve(ctx context.Context, spec ToolSpec) string {
 	var beyond []string
 	for _, c := range spec.RequiredCaps {
 		if !d.Tier.AutoApproves(c.Kind) {
@@ -161,12 +161,19 @@ func (d AuthorToolDeps) approve(spec ToolSpec) string {
 	if len(beyond) == 0 {
 		return ""
 	}
-	if d.Confirm == nil {
+	if d.Approver == nil {
 		return "author_tool rejected: tool requests capabilities beyond the current tier and no approval channel is available: " + strings.Join(beyond, ", ")
 	}
-	prompt := fmt.Sprintf("Agent wants to author tool %q with elevated capabilities:\n  %s",
-		spec.Name, strings.Join(beyond, "\n  "))
-	if !d.Confirm(prompt) {
+	ok, err := d.Approver.Approve(ctx, ApprovalRequest{
+		Kind:   "tool.capability",
+		Title:  fmt.Sprintf("Authorize tool %q with elevated capabilities", spec.Name),
+		Detail: strings.Join(beyond, "\n"),
+		RunID:  d.RunID,
+	})
+	if err != nil {
+		return fmt.Sprintf("author_tool rejected: approval failed: %v", err)
+	}
+	if !ok {
 		return "author_tool rejected: capability approval declined by user"
 	}
 	return ""
