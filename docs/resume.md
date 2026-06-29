@@ -105,8 +105,14 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    `sandbox.Parse`. **Fixed:** `buildToolDefs` recomputed per iteration (was hoisted) so authored
    tools are callable same-run; logging made nil-safe. Tests: `authortool_test.go` (gates) +
    `authoring_e2e_test.go` (fake-provider end-to-end). All green.
-7. **NEXT:** **Phase 3d** (tool-search: `Registry.Search` already token-overlap; wire executor to
-   include top-k when the catalog is large, all when small ≤~12) then **3e** (revoke surfaced via
-   CLI/authored path; dedup by `CodeHash`).
-8. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
+7. ~~**Phase 3d/3e**.~~ **DONE.** 3d: `Agent.selectRegistryTools` offers all registry tools when
+   catalog ≤12, else top-k by `Search(task)` ∪ ephemeral. 3e: `cmd/tool.go` (`agent tool
+   list`/`revoke`) + code-hash dedup in `Registry.Register` (author_tool points the model at the
+   existing tool). Tests: `executor_search_test.go`, `TestRegister_DedupsByCodeHash`,
+   `TestAuthorTool_DedupsIdenticalCode`. **Phase 3 is complete.**
+8. **NEXT — Phase 4** (`design.md` §6 / plan Phase 4): headless engine API, long-term memory,
+   management plane (approve/deny, review/revoke, browse audit), web/Telegram thin clients. Also
+   the deferred **async/tiered approval refactor** (make `ConfirmFunc` frontend-routable) belongs
+   here — it's the (b) item from the old shell-hardening decision.
+9. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
    language tag).

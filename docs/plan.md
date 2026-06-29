@@ -221,17 +221,22 @@ A built-in `tools.Tool` whose `Run` performs, host-side (not model-controllable)
     (fake provider authors `triple`, then calls it same run; test-fail rejects; not offered before
     authoring, offered after). Logging made nil-safe so the loop runs without a disk logger.
 
-### 3d — Tool-search
+### 3d — Tool-search  *(DONE)*
 
-- [ ] `Registry.Search(query, k)` — BM25-lite over name+description (regex/token overlap first;
-    embeddings deferred). Executor includes built-ins always; for registered tools, include all
-    while the catalog is small (≤ ~12), else top-k by search against the refined task.
-- *Acceptance:* a large catalog does not flood the context window; relevant tools still surface.
+- [x] `Registry.Search(query, k)` = token-overlap over name+description (BM25-lite/embeddings still
+    deferred). `Agent.selectRegistryTools`: built-ins always; registered tools — all while catalog
+    ≤ `maxInlineTools` (12), else top-k by `Search(task)` **unioned with run-local ephemeral tools**
+    (so same-run authoring still works in a big catalog), emitted in registration order.
+- [x] *Acceptance:* `TestSelectRegistryTools_LargeCatalogTopK` — 16-tool catalog offers ≤12, the
+    relevant tool surfaces, the ephemeral tool is kept, unrelated ones are dropped.
 
-### 3e — Lifecycle polish
+### 3e — Lifecycle polish  *(DONE)*
 
-- [ ] `revoke` surfaced (CLI subcommand or authored path); revoked tools drop from the live set.
-- [ ] Dedup by code hash; ephemeral scope already dies with the run.
+- [x] `revoke` surfaced via CLI (`agent tool list`, `agent tool revoke <name>` in `cmd/tool.go`),
+    operating on the persistent catalog; revoked tools drop from `List`/the live set.
+- [x] Dedup by code hash: `Registry.Register` returns the existing tool when another name has the
+    same hash; `author_tool` tells the model to call the existing tool. Ephemeral dies with the run.
+- [x] *Acceptance:* `TestRegister_DedupsByCodeHash`, `TestAuthorTool_DedupsIdenticalCode`.
 
 ### Cross-phase test (no live API)
 

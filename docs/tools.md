@@ -5,12 +5,13 @@ design choice. Complements [`plan.md`](plan.md) Phase 3 (the staged build) and
 [`security.md`](security.md) (the boundary authored tools run behind). Update this as the design
 moves through stages 3a–3e.
 
-**Status:** stages **3a–3c** are implemented. 3a = `ToolSpec` + `Registry`
+**Status:** Phase 3 (**3a–3e**) is implemented. 3a = `ToolSpec` + `Registry`
 (`internal/tools/spec.go`, `internal/tools/registry.go`). 3b = live wiring: the executor
 (`internal/agent/agent.go`) builds `Broker → LuaGlue → Registry` per run, resolves tool calls via
-`Agent.dispatch` (built-ins first, then registry), and audits every brokered effect. 3c =
-`author_tool` (`internal/tools/authortool.go`): the agent authors, tests, and registers a tool
-mid-run. Next is **3d** (tool-search) / **3e** (lifecycle).
+`Agent.dispatch`, and audits every brokered effect. 3c = `author_tool`
+(`internal/tools/authortool.go`): the agent authors, tests, and registers a tool mid-run. 3d =
+search-gated tool defs for large catalogs. 3e = `revoke`/`list` CLI (`cmd/tool.go`) + code-hash
+dedup. Remaining: SQLite store and async approval are post-Phase-3 (see deferral table).
 
 ---
 
@@ -122,15 +123,41 @@ keeps its `seq` (preserves position) and bumps `Version`.
   size (tens of tools), not at thousands. That scale is exactly the SQLite trigger. No concurrent
   multi-process access (single-process assumption); the in-process mutex covers goroutines only.
 
-### Search
+### Search and catalog-size gating
 
-Token-overlap ranking over `name + description`, top-k, zero-overlap excluded (3d refines to
-BM25-lite; embeddings deferred).
+`Registry.Search` is token-overlap ranking over `name + description`, top-k, zero-overlap excluded.
+The executor (`Agent.selectRegistryTools`) offers **all** registry tools while the catalog is small
+(≤ `maxInlineTools` = 12) and switches to **top-k for the run's task** above that — always unioned
+with run-local **ephemeral** tools so a just-authored tool stays callable even in a big catalog.
 
-- **Benefit:** zero dependencies, deterministic, good enough to keep a small catalog from flooding
-  the context window. Ties break by `seq` for reproducibility.
-- **Drawback:** no stemming/synonyms — "convert" won't match "conversion". Acceptable until the
-  catalog is large enough to need real ranking, which is when 3d/embeddings land.
+- **Benefit:** zero dependencies, deterministic, and a large catalog cannot flood the context
+  window. The query is the fixed run task, so the selection is stable across iterations (only grows
+  when a tool is authored), keeping the prompt cache useful. Emitted in registration order.
+- **Drawback:** no stemming/synonyms — "convert" won't match "conversion" — so a relevant tool can
+  miss the cut in a large catalog. The ephemeral-union covers same-run authoring; better recall waits
+  for BM25-lite/embeddings. Ranking *order* doesn't matter here, only *inclusion*.
+
+### Dedup by code hash
+
+`Register` returns the existing tool when another name has the same code hash (script hash =
+`lang\0source`); `author_tool` then points the model at the existing tool instead of creating a
+duplicate.
+
+- **Benefit:** the catalog doesn't accumulate identical logic under different names; re-authoring is
+  idempotent.
+- **Drawback:** two tools with identical code but different *descriptions/schemas* are treated as one
+  (the hash ignores the model face). Rare in practice, and the first-registered description wins;
+  documented so it isn't surprising.
+
+### Revoke / list (CLI)
+
+`agent tool list` and `agent tool revoke <name>` (`cmd/tool.go`) operate on the persistent catalog;
+a revoked tool drops from `List` and therefore the live tool set on the next run. Ephemeral tools
+need no revoke — they die with the run.
+
+- **Benefit:** a human management path without a UI, single-binary-friendly.
+- **Drawback:** no in-run revoke surfaced to the agent yet, and no audit event for revoke. Both are
+  cheap to add when the management plane (Phase 4) lands.
 
 ---
 
@@ -216,7 +243,9 @@ calls it and `return true`).
 | --- | --- | --- |
 | ~~Live wiring into the run loop~~ | 3b | **done** — broker/sandbox/registry threaded into `cmd/run.go` + executor |
 | ~~`author_tool` pipeline (validate→approve→test→register→audit)~~ | 3c | **done** — `internal/tools/authortool.go` |
-| BM25-lite / embedding search | 3d | token overlap suffices for a small catalog |
-| Revoke surfaced (CLI/authored) + dedup by `CodeHash` | 3e | lifecycle polish |
+| ~~Catalog-size-gated tool defs~~ | 3d | **done** — `Agent.selectRegistryTools` |
+| ~~Revoke/list CLI + dedup by `CodeHash`~~ | 3e | **done** — `cmd/tool.go`, `Register` dedup |
+| BM25-lite / embedding search | post-3 | token overlap suffices for a small catalog |
+| In-run revoke + revoke audit event | Phase 4 | management plane |
 | SQLite store | post-3 | only when catalog+audit+event log want one transactional store |
 | Per-user isolation (`User` ≠ `Shared`) | Phase 4+ | single-user CLI doesn't need it yet |
