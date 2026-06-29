@@ -268,8 +268,23 @@ before the transport/frontend choices (real forks, settled when reached).
     streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](api-transport.md).
 - **First frontend (4e):** Telegram vs web. Leaning Telegram (thin, good for the unattended/mobile
     approval case; web is more work for the same payoff first).
-- **Store (cross-cutting):** SQLite vs keep JSONL+JSON. Migrate when catalog+audit+memory want one
-    transactional store (design §9).
+- **Multi-user model (4e) — SETTLED: owned data + isolated sessions, sharing opt-in.** Several
+    *trusted* users (design §1: author + family) may use one engine. Two requirements:
+    1. **Session independence** — a user must never feel another is present: no run waits on another,
+       and no user can see, approve, or cancel another's session.
+    2. **Data ownership** — a user (and their session) **owns its data by default**: memory and
+       authored tools are private to the owner. Other users' data is **reachable only as an explicit
+       opt-in** (a shared space / `shared` flag), never by default.
+
+    Each run carries an `Owner` the trusted frontend asserts (a **label for scoping + attribution,
+    not an auth boundary** — hostile isolation stays a non-goal per design §1/§5). This finally makes
+    the latent `ToolSpec.Scope` `User` ≠ `Shared` split *real* (see [`tools.md`](tools.md)) and adds
+    per-owner memory namespacing. Compute independence already exists (goroutine-per-run + fresh
+    executor-per-run + concurrent-safe shared stores); 4e adds the owner label, owner-scoped data, and
+    owner-scoped control plane (approvals / run-list / cancel). *(design §1/§5 should be updated to
+    record that multiple trusted users with owned, session-isolated data is now in scope.)*
+- **Store (cross-cutting):** SQLite vs keep JSONL+JSON. Migrate when catalog+audit+memory+run-metadata
+    want one transactional store (design §9). Per-owner scoping + central audit (4e) is the likely trigger.
 
 ### 4a — Approver seam (async-ready approval)  *(DONE — `internal/tools/approval.go`)*
 
@@ -325,7 +340,8 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c and 4d are complete.** Next: 4e (management plane + a thin frontend).
+**4c and 4d are complete.** Next: 4e, starting at **4e-1** (identity + run lifecycle + session
+isolation — the `Owner` foundation everything else builds on).
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
@@ -341,26 +357,118 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     instances) + `internal/agent/memory_e2e_test.go` (fake provider remembers in run 1, a second
     executor over the same store recalls it in run 2; write is audited).
 
-### 4e — Management plane + frontends
+### 4e — Management plane + multi-user + a frontend
 
-- [ ] Approve/deny escalations, review/revoke tools, browse the audit log — over the API. Then a
-    thin frontend (see fork) as a peer client; design the approval UX so prompts don't nag.
-- [ ] **Per-run kill switch (operator last-resort).** Engine stores a `context.CancelFunc` per run
-    (derive the run ctx with `context.WithCancel`, not bare `Background`); `Engine.StopRun(id)` cancels
-    it. Expose `POST /runs/{id}/cancel` (404 unknown); add `Client.StopRun`, an `agent stop <id>`
-    command, and `signal.NotifyContext` in `agent run`/`agent client` so Ctrl+C cancels the run (the
-    *remote* run for `client`) gracefully, second Ctrl+C force-quits. Cancellation already propagates —
-    the loop passes `ctx` to `provider.Step`/tools and `shell` uses `exec.CommandContext` — so it stops
-    at the next model/tool boundary. *(Deferred here from 4c: not urgent while runs are bounded by
-    `maxIterations`, risky actions park for approval, and in-process `run` dies on Ctrl+C; it matters
-    once `serve` runs unattended, which is this phase.)*
-- *Acceptance (Phase 4):* the same run can be driven from the CLI and a second frontend against one
-    engine; escalation approvals surface in the chosen frontend and are recorded; a run can be
-    cancelled mid-flight from the CLI/API.
+Split into shippable sub-phases. The internal seams (identity, session isolation, data ownership,
+management endpoints) come first and are testable with the existing `httptest` pattern (no live API,
+no Telegram token); only the frontend (4e-6) needs the external fork settled. Build in order —
+4e-1's `Owner` label is the foundation 4e-2/4e-3/4e-4/4e-5 all build on.
 
-**Risks/notes:** keep frontends thin — all policy lives in the engine. Approval UX is an open
-question (design §9); start minimal. The async `Approver` (4a) is the contract the approval queue
-(4c) and management plane (4e) build on.
+What already exists (4c): start/stream a run, the approval queue (`GET/POST /approvals`), tool
+list/search (`GET /tools`), and `api.Client` (CLI as peer). The gaps 4e closes: runs aren't listable/cancellable; the
+engine is identity-blind (no owner → no session isolation, no per-user data); tools can't be revoked
+over the API; the audit log isn't readable over the API (per-session JSONL, no central reader);
+approvals park *silently* (clients must poll); and there is no frontend beyond the CLI.
+
+#### 4e-1 — Identity foundation + run lifecycle + session isolation
+
+- [ ] **Owner label.** `Engine.StartRun(task)` → `StartRun(RunRequest{Task, Owner})`; the trusted
+    frontend asserts `Owner` (Telegram user id; CLI uses a configured local user, default `"local"`).
+    The owner threads into the run's `GrantContext`/audit and the executor (for data scoping in 4e-2).
+- [ ] **Run metadata + lifecycle.** Extend the engine's `runs` map entry from a bare `*Hub` to a
+    `run{hub, owner, task, state(running|done|error), startedAt, endedAt, result/err, cancel}`. Derive
+    the run ctx with `context.WithCancel(context.Background())` (not bare `Background`) and store
+    `cancel`; the run goroutine sets terminal state on exit.
+- [ ] **Kill switch + listing, owner-scoped.** `Engine.StopRun(owner, id)` cancels the run ctx (404
+    unknown; refuse if not owner). `ListRuns(owner)` / `RunStatus(owner, id)` filter by owner.
+    Endpoints: `POST /runs/{id}/cancel`, `GET /runs`, `GET /runs/{id}` — all owner-scoped. Cancellation
+    already propagates (loop passes `ctx` to `provider.Step`/tools; `shell` uses `exec.CommandContext`)
+    so it stops at the next model/tool boundary.
+- [ ] **Owner-scoped approvals (the session-isolation fix).** Today `ApprovalQueue.Pending()` returns
+    *every* parked request and `Resolve(id)` accepts *any* id — so one user sees/answers another's
+    escalation. Tag each `ApprovalRequest` with the run's owner; `Pending(owner)` filters and
+    `Resolve(owner, id)` refuses another owner's id. `GET /approvals` / `POST /approvals/{id}` become
+    owner-scoped.
+- [ ] **CLI/Ctrl+C.** `Client.StopRun`; `agent stop <id> --addr`; `signal.NotifyContext` in `agent
+    run`/`agent client` so Ctrl+C cancels the run (the *remote* run for `client`) gracefully, second
+    Ctrl+C force-quits. *(This is the per-run kill switch deferred from 4c.)*
+- *Acceptance:* two runs with different owners stream independently; owner A cannot list, cancel, or
+    see/resolve owner B's run or approval (404/403); Ctrl+C cancels mid-flight. (Compute independence —
+    goroutine-per-run, fresh executor-per-run, concurrent-safe shared stores — is already in place;
+    this sub-phase adds the *control-plane* isolation on top.)
+
+#### 4e-2 — Per-user data ownership (memory + tools), sharing opt-in
+
+- [ ] **Memory namespacing.** `memory.Entry` gains an `Owner`; `Store` methods key by `(owner, key)`.
+    `recall` searches the caller's namespace ∪ a reserved `shared` namespace; `remember` writes to the
+    caller's namespace unless an explicit `shared: true` is set. One backing file, partitioned by the
+    owner field (not separate files). The executor passes the run's owner into the memory tools.
+- [ ] **Tool scope made real (`User` ≠ `Shared`).** Activate the latent split (`tools.md`): a
+    `User`-scoped authored tool is visible/callable only to its owner; `Shared` is everyone's; both
+    persist. `Agent.selectRegistryTools` filters the catalog by the run's owner ∪ shared. `author_tool`
+    defaults new tools to `User` scope (owned); promoting to `Shared` is the explicit opt-in.
+- [ ] **Sharing is opt-in, never default.** Owned-by-default for both memory and tools; the only paths
+    to shared are the `shared` flag (memory) and `Shared` scope (tools). Ephemeral/run-scoped data
+    (existing `ScopeEphemeral`) stays the session's own and dies with it.
+- *Acceptance:* a fact/tool created by owner A is recalled/callable by A in a later run but is absent
+    for owner B; a shared fact/tool is reachable by both; ephemeral stays run-local.
+
+#### 4e-3 — Tool review / revoke over the API
+
+- [ ] `DELETE /tools/{name}` → `Registry.Revoke` (404 if absent; owner-scoped — only the owner or a
+    shared-tool revoke), emitting a new `tool_revoked` audit event (the revoke-audit gap noted in
+    `tools.md`). Optional `GET /tools/{name}` detail that *includes* the impl source (omitted from the
+    listing). `Client.RevokeTool`; extend `agent tool revoke` with an `--addr` path (today it edits the
+    local catalog file directly).
+- *Acceptance:* a tool revoked over the API drops from `List`/the live set and the revoke is audited;
+    a user cannot revoke another user's `User`-scoped tool.
+
+#### 4e-4 — Central audit log + browse over the API
+
+- [ ] Today `serve` opens a *per-run* `JSONLRecorder` inside `newServeRunner` — no queryable history.
+    Add an `audit.Reader` (`Tail(n, filter)`) and a single **process-wide** recorder for `serve` (e.g.
+    `~/.config/ai-agent/audit.jsonl`) shared across runs (same "one shared instance" pattern as the
+    registry/memory store); per-session logs stay for the transcript.
+- [ ] `GET /audit?run=&type=&limit=` — owner-scoped (a user sees only their runs' events); `Client.Audit`;
+    `agent audit --addr`. This makes the audit log the single review surface for everything effectful
+    (capability use, `tool_authored`, `tool_revoked`, `memory_write`), now owner-attributed.
+- *Acceptance:* effects from a run are browsable over the API and scoped to the run's owner.
+- *Note:* per-owner data + run metadata + central audit is the likely **SQLite tipping point** (design
+    §9) — swap the JSON/JSONL backings behind their existing interfaces when it bites, not before.
+
+#### 4e-5 — Approval events on the stream (poll → push)
+
+- [ ] The UX seam. `ApprovalQueue.Approve` currently parks silently; a streaming client learns of an
+    escalation only by polling `/approvals`. Give the queue an observer hook so parking/resolving
+    **emits `approval_requested` / `approval_resolved` events into the run's hub** (owner-routed, since
+    the hub is per-run). Any streaming frontend then learns of an escalation in the event stream it is
+    already reading; the existing `POST /approvals/{id}` resolves it. Small change, big leverage for
+    every frontend.
+- *Acceptance:* a parked escalation appears as a stream event on its run (and only that run); resolving
+    it emits the resolution event.
+
+#### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork)*
+
+- [ ] `internal/frontend/telegram` driving `api.Client` (a peer, like `agent client` — not special).
+    Maps Telegram user → engine `Owner`; keeps a per-user chat↔run mapping; a message starts a run and
+    streams events back; a parked approval (from the 4e-5 stream event) becomes an **inline keyboard**
+    (Approve / Deny) wired to `Client.Resolve`. This is the unattended/mobile approval case the plan
+    leans Telegram for.
+- [ ] **Auth lives in the frontend:** an allowlist of Telegram user ids (config), each mapped to an
+    engine owner. The engine stays bound to `127.0.0.1`; only the bot faces the network. (No
+    engine-level auth on the localhost single-user box — the owner is a trusted label, per 4e-1.)
+- *Acceptance (Phase 4):* two family members drive independent, owner-isolated sessions from Telegram
+    against one engine; each sees only their own runs, data, and approvals; an escalation surfaces in
+    the right user's chat and is recorded; a run can be cancelled mid-flight from the CLI/API/bot.
+
+**Risks/notes:** keep frontends thin — *all* policy (scoping, approval, audit) lives in the engine; the
+bot must contain zero policy, only rendering + relaying. The `Owner` is a trusted label, not an auth
+boundary — multi-tenant/hostile isolation stays a non-goal (design §1/§5); revisit only if the box
+ever opens to untrusted users (then Phase 5's wazero tier + real auth, as a sibling). Cancellation is
+cooperative (stops at the next boundary), fine given `maxIterations` bounds runs. Approval UX (design
+§9 open question): the tier dial already suppresses routine prompts; 4e-5 makes escalations ambient
+rather than polled; keep them batched/inline, never a nagging loop. The async `Approver` (4a) is the
+contract the queue (4c) and this management plane build on.
 
 ---
 

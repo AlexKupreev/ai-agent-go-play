@@ -19,8 +19,19 @@ _Last session: 2026-06-29._
   (`resolveModel`/`resolveTier` in `cmd/config.go`; tier default `balanced`, validated by
   `capability.ParseTier`, tested). Fixed a latent bug: the setters now merge into the existing
   config instead of overwriting (old `set-key` would clobber). `saveConfig` message made generic.
-- Build/vet/test all green. **Next: Phase 4e** (management plane + a thin frontend; fork Telegram
-  vs web).
+- Build/vet/test all green.
+- **Phase 4e planned + staged in `plan.md`** (4e-1…4e-6). **Multi-user model SETTLED: owned data +
+  isolated sessions, sharing opt-in** — several *trusted* users (author + family) on one engine;
+  (1) session independence (no run waits on another; no user sees/approves/cancels another's
+  session), (2) each user/session **owns its memory + tools by default**, sharing is explicit
+  opt-in (shared flag / `Shared` scope). `Owner` is a trusted label asserted by the frontend, **not**
+  an auth boundary — hostile isolation stays a non-goal. Activates the latent `User`≠`Shared` tool
+  scope. Key finding: **compute independence already exists** (goroutine-per-run + fresh
+  executor-per-run + concurrent-safe shared stores); the gaps are the **global approval queue**
+  (`Pending()`/`Resolve` aren't owner-scoped → users see each other's escalations) and unscoped
+  run-list/cancel. **Next: start 4e-1** (Owner label + run lifecycle/kill switch + owner-scoped
+  approvals — the foundation 4e-2…4e-6 build on). **TODO:** update design §1/§5 to record multi-user
+  (trusted, owned, session-isolated) is now in scope.
 
 ---
 
