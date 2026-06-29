@@ -99,9 +99,14 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    Registry`, shares the glue with `run_code`, resolves via `Agent.dispatch`, sets Trusted/Exposed.
    Tests in `internal/agent/executor_dispatch_test.go`. `run_code` signature now takes the shared
    glue. All green.
-6. **NEXT:** **Phase 3c** — the `author_tool` meta-tool: validate (name regex, schema, parse) →
-   approve (caps beyond tier → `ConfirmFunc`) → smoke-test under exactly the approved caps →
-   register at scope → audit `ToolAuthored`. Built-in `tools.Tool`; host-side, not model-controlled.
-   Then the cross-phase fake-provider end-to-end test.
-7. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
+6. ~~**Phase 3c** — the `author_tool` meta-tool + cross-phase test.~~ **DONE:**
+   `internal/tools/authortool.go` (validate→approve→smoke-test→register→audit), tier policy
+   `capability.Tier.AutoApproves`, shared script contract `tools.WrapScript`/`WrapTest`,
+   `sandbox.Parse`. **Fixed:** `buildToolDefs` recomputed per iteration (was hoisted) so authored
+   tools are callable same-run; logging made nil-safe. Tests: `authortool_test.go` (gates) +
+   `authoring_e2e_test.go` (fake-provider end-to-end). All green.
+7. **NEXT:** **Phase 3d** (tool-search: `Registry.Search` already token-overlap; wire executor to
+   include top-k when the catalog is large, all when small ≤~12) then **3e** (revoke surfaced via
+   CLI/authored path; dedup by `CodeHash`).
+8. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
    language tag).

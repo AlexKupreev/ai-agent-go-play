@@ -202,20 +202,24 @@ Only *authored* tools go through the sandbox/broker; built-ins are unchanged fro
     Covered by `internal/agent/executor_dispatch_test.go`. *(Live model loop needs an API key;
     not exercised here.)*
 
-### 3c — `author_tool` meta-tool (the pipeline)
+### 3c — `author_tool` meta-tool (the pipeline)  *(DONE — `internal/tools/authortool.go`)*
 
 A built-in `tools.Tool` whose `Run` performs, host-side (not model-controllable):
 
-- [ ] 1. **Validate** — `name` regex, `input_schema` is an object, `code` parses (LuaGlue
-    parse-only). Syntax errors return to the model to retry.
-- [ ] 2. **Approve** — caps beyond the run's tier → `ConfirmFunc`; declined → reject.
-- [ ] 3. **Smoke-test** — run the mandatory `test` in the sandbox under a grant of **exactly the
-    approved caps**; the assertion must hold, else reject.
-- [ ] 4. **Register** at scope (assigns version/seq); appears in the next iteration's tool defs
-    automatically (3a's append-only list).
-- [ ] 5. **Audit** `ToolAuthored{code_hash, caps, scope}` (event type already defined).
-- *Acceptance:* the agent hits a gap, authors a tool, passes its test, and calls it in the same
-    run; parse-fail and test-fail both reject; cap-beyond-tier prompts; the lifecycle is in the log.
+- [x] 1. **Validate** — `name` regex, `input_schema` is an object, `code` + `test` parse
+    (`sandbox.Parse` on the wrapped forms). Rejections return to the model as content to retry.
+- [x] 2. **Approve** — caps where `!tier.AutoApproves(kind)` → `ConfirmFunc`; declined or no
+    channel → reject. Tier policy added as `capability.Tier.AutoApproves`.
+- [x] 3. **Smoke-test** — run the mandatory `test` in the sandbox under a grant of **exactly the
+    requested caps**; must `return true`, else reject. Tool body + test share one contract via
+    `tools.WrapScript`/`WrapTest` (body is callable as `tool(input)`), so the test exercises the
+    real code; runtime execution uses the same wrap.
+- [x] 4. **Register** at scope; **`buildToolDefs` now recomputes each iteration**, so the tool
+    appears on the next step (was hoisted out of the loop — fixed).
+- [x] 5. **Audit** `ToolAuthored{name, code_hash, caps, scope, version}`.
+- [x] *Acceptance:* covered by `authortool_test.go` (gate-by-gate) and `authoring_e2e_test.go`
+    (fake provider authors `triple`, then calls it same run; test-fail rejects; not offered before
+    authoring, offered after). Logging made nil-safe so the loop runs without a disk logger.
 
 ### 3d — Tool-search
 
@@ -231,8 +235,8 @@ A built-in `tools.Tool` whose `Run` performs, host-side (not model-controllable)
 
 ### Cross-phase test (no live API)
 
-- [ ] A fake provider that emits an `author_tool` call then a call to the new tool drives the
-    whole pipeline end-to-end in a unit test.
+- [x] A fake provider that emits an `author_tool` call then a call to the new tool drives the
+    whole pipeline end-to-end in a unit test (`internal/agent/authoring_e2e_test.go`).
 
 **Done in advance:** `call_tool` allowlist primitive (broker `Trusted`/`Exposed`) — a trusted
 built-in is reachable from the sandbox only when explicitly exposed *and* named directly in the

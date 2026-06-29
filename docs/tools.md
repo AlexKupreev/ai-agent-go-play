@@ -5,11 +5,12 @@ design choice. Complements [`plan.md`](plan.md) Phase 3 (the staged build) and
 [`security.md`](security.md) (the boundary authored tools run behind). Update this as the design
 moves through stages 3a–3e.
 
-**Status:** stages **3a + 3b** are implemented. 3a = `ToolSpec` + `Registry`
+**Status:** stages **3a–3c** are implemented. 3a = `ToolSpec` + `Registry`
 (`internal/tools/spec.go`, `internal/tools/registry.go`). 3b = live wiring: the executor
 (`internal/agent/agent.go`) builds `Broker → LuaGlue → Registry` per run, resolves tool calls via
-`Agent.dispatch` (built-ins first, then registry), and audits every brokered effect. Next is **3c**
-(`author_tool`).
+`Agent.dispatch` (built-ins first, then registry), and audits every brokered effect. 3c =
+`author_tool` (`internal/tools/authortool.go`): the agent authors, tests, and registers a tool
+mid-run. Next is **3d** (tool-search) / **3e** (lifecycle).
 
 ---
 
@@ -147,12 +148,74 @@ input schema, and impl completeness. It does **not** enforce the smoke-test or a
 
 ---
 
+## `author_tool`: the authoring pipeline
+
+**File:** `internal/tools/authortool.go`. A built-in `tools.Tool` whose `Run` is the only path that
+turns model output into a registered tool. Every step runs **host-side** — the model supplies the
+spec as arguments, never the control flow:
+
+`validate → approve → smoke-test (under exactly the requested caps) → register → audit`.
+
+- **Benefit:** the model can extend itself, but a tool only becomes callable after it **parses**, a
+  human has **approved** any capability beyond the tier, and its **own test passed under exactly the
+  caps it will hold**. Rejections come back as content so the model can fix and retry; nothing
+  partial is registered.
+- **Drawback:** more model-facing surface and a multi-step gate; a determined model can still author
+  a *useless-but-valid* tool (passing a trivial test). The test gate is a quality wall, not a proof
+  of correctness.
+
+### Approve-then-test ordering
+
+The smoke test runs **after** approval, under a grant of exactly the requested caps.
+
+- **Benefit:** no capability is exercised before a human says yes — testing-first would run real
+  effects (a write, a fetch) under caps not yet approved.
+- **Drawback:** a tool can be approved and *then* fail its test (effort "wasted" on a prompt).
+  Acceptable: approval is about authority, the test is about correctness; conflating them would leak
+  authority.
+
+### Tier-gated approval (`capability.Tier.AutoApproves`)
+
+The tier decides which caps auto-approve vs. prompt: Permissive = all; Balanced = side-effect-free
+reads (`clock`/`random`/`read_file`) auto, the rest prompt; Safe = prompt for everything.
+
+- **Benefit:** one user-tunable autonomy dial. Routine tools self-serve; risky ones wait for a human
+  — and with no approval channel (unattended), an over-tier cap simply rejects (safe default).
+- **Drawback:** the policy is a coarse per-kind table, not per-target risk (an `http_get` to a
+  benign host is treated like any other). The cap's allowlist still bounds blast radius; finer
+  policy can come later.
+
+### Shared script contract (`WrapScript` / `WrapTest`)
+
+The tool body is the inside of `function tool(input) ... end`. Runtime runs `WrapScript` (call
+`tool(input)` and return its value); the smoke test runs `WrapTest` (same `tool` in scope, the test
+calls it and `return true`).
+
+- **Benefit:** the test exercises *exactly* the code that will run in production — no drift between
+  "tested" and "deployed". One contract for both.
+- **Drawback:** the body must follow the `input`-in/`return`-out convention (it can't be an arbitrary
+  multi-return chunk), and a syntax error surfaces against the wrapped form. A small constraint the
+  tool description spells out to the model.
+
+### Per-iteration tool defs (the mid-run visibility fix)
+
+`buildToolDefs` is recomputed each loop iteration, so a tool authored on step *n* is offered on step
+*n+1*.
+
+- **Benefit:** "author then call it in the same run" works, and because the registry list is
+  append-only and stable, the serialized prefix is unchanged until a tool is added — prompt cache
+  stays warm.
+- **Drawback:** a tiny rebuild per iteration. Negligible at this catalog size; the stable ordering is
+  what keeps it cache-safe rather than a cache-buster.
+
+---
+
 ## What's intentionally deferred
 
 | Item | Stage | Why not now |
 | --- | --- | --- |
 | ~~Live wiring into the run loop~~ | 3b | **done** — broker/sandbox/registry threaded into `cmd/run.go` + executor |
-| `author_tool` pipeline (validate→approve→test→register→audit) | 3c | the policy gate; depends on 3b |
+| ~~`author_tool` pipeline (validate→approve→test→register→audit)~~ | 3c | **done** — `internal/tools/authortool.go` |
 | BM25-lite / embedding search | 3d | token overlap suffices for a small catalog |
 | Revoke surfaced (CLI/authored) + dedup by `CodeHash` | 3e | lifecycle polish |
 | SQLite store | post-3 | only when catalog+audit+event log want one transactional store |

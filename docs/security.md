@@ -177,13 +177,43 @@ highest-leverage reduction of injection leverage. The durable control remains th
 
 ---
 
-## Capability tiers (plumbing in place, dial not yet wired)
+## 6. Tool-authoring gate (`author_tool`)
 
-`capability.Tier` (`Safe` | `Balanced` | `Permissive`) is defined on `GrantContext` to generalize
-pi's safe/balanced/permissive bands — the intended user-tunable autonomy dial: routine actions
-auto-run, risky ones wait for approval. The type exists; wiring it to drive auto-approval (and
-making `ConfirmFunc` async/frontend-routable so approval works unattended) is the Phase 3/4 approval
-refactor, not yet implemented.
+**Files:** `internal/tools/authortool.go`, `internal/capability/capability.go` (`Tier.AutoApproves`)
+
+A self-extending agent that can register code is, without a gate, "an RCE service with an LLM
+picking the payloads" (design §5). `author_tool` is that gate. It is a built-in whose `Run` is the
+**only** path from model output to a registered tool, and every step runs host-side (the model
+supplies the spec as arguments, never the control flow):
+
+1. **Validate** — name regex, `input_schema` is an object, and both the tool body and its test
+   **parse** (`sandbox.Parse` on the wrapped forms). Bad input returns to the model to retry.
+2. **Approve** — any requested capability the tier does not auto-approve routes to `ConfirmFunc`;
+   declined, or no approval channel available (unattended), → reject.
+3. **Smoke-test** — the mandatory test runs in the sandbox under a grant of **exactly the requested
+   caps** and must `return true`. Approve-*then*-test guarantees no capability is exercised before a
+   human approves it.
+4. **Register** at scope, then **5. Audit** `tool_authored{name, code_hash, caps, scope, version}`.
+
+**Defends against:** the agent silently gaining new effectful capability. Authored tools are
+capability-bounded (they run through the same broker/sandbox as §1–2), tested before they go live,
+and every authoring event is in the audit log.
+
+**Honest limit:** the test gate is a *quality* wall, not a correctness proof — a model can author a
+valid tool that passes a trivial test. And `author_tool` is **not** exposed to sandboxed code
+(`exposedBuiltins` = `{web_search, web_fetch}` only), so authored tools cannot author more tools.
+
+### The tier dial (`capability.Tier.AutoApproves`)
+
+`Safe | Balanced | Permissive` on `GrantContext` is the user-tunable autonomy dial that step 2
+consults: **Permissive** auto-approves all; **Balanced** auto-approves side-effect-free reads
+(`clock`/`random`/`read_file`) and prompts for the rest; **Safe** prompts for everything. The run's
+tier is set in `cmd/run.go` (currently `Balanced`).
+
+**Defends against:** unattended over-reach — alone, the agent can self-serve routine caps but an
+over-tier cap with no approval channel simply rejects. **Limit:** the policy is a coarse per-kind
+table, not per-target risk; the cap's own allowlist still bounds blast radius. Async/frontend-routable
+approval (so a human can approve remotely rather than reject) is the Phase 4 refactor.
 
 ---
 
@@ -203,6 +233,8 @@ refactor, not yet implemented.
 | Symlink path escape | Symlink-resolved containment | `capability/capability.go` |
 | `call_tool` → `shell` transitive escape | Trusted/Exposed + direct-name gate | `capability/broker.go` |
 | Prompt injection via web content | Untrusted-content framing + prompt rule | `tools/untrusted.go`, `agent/agent.go` |
+| Agent silently gaining new capability | `author_tool` gate (validate→approve→test→audit) | `tools/authortool.go` |
+| Unattended capability over-reach | Tier dial (`Tier.AutoApproves`) | `capability/capability.go` |
 | Destructive shell command | Heuristic confirm gate | `tools/destructive.go` |
 | Undetectable misbehavior | Append-only audit log | `audit/audit.go` |
 | Runaway authored code | Context-timeout abort | `sandbox/luaglue.go` |
