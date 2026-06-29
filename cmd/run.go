@@ -49,7 +49,13 @@ var runCmd = &cobra.Command{
 
 		prov := openaiprovider.New(cfg.OpenAIKey)
 
-		planner := agent.NewPlanner(prov, modelFlag, verboseFlag, log)
+		// Run events fan out to the disk log always, and to the CLI when verbose.
+		obs := agent.Observers{agent.NewLoggerObserver(log)}
+		if verboseFlag {
+			obs = append(obs, agent.NewCLIObserver(os.Stderr))
+		}
+
+		planner := agent.NewPlanner(prov, modelFlag, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(context.Background(), task)
 		if err != nil {
@@ -89,7 +95,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, modelFlag, verboseFlag, log, registry, rec, capability.TierBalanced)
+		executor := agent.NewExecutor(prov, workDir, modelFlag, log.RunID, obs, registry, rec, capability.TierBalanced)
 		result, err := executor.Run(context.Background(), plan.RefinedTask)
 		if err != nil {
 			return err

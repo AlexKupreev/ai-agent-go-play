@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
-	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/sandbox"
 	"ai-agent-go-play/internal/tools"
@@ -68,12 +66,11 @@ Rules:
 type Agent struct {
 	provider       provider.Provider
 	model          string
-	verbose        bool
 	systemPrompt   string
 	responseFormat *provider.ResponseFormat
 	tools          []tools.Tool
 	byName         map[string]tools.Tool // built-in tools indexed by name
-	log            *logger.Logger
+	obs            Observer              // run-event sink (logging, CLI, API); may be nil
 
 	// Registry/sandbox wiring (executor only; nil on the planner). Authored tools
 	// resolve here and run sandboxed under their grant; built-ins resolve first.
@@ -84,7 +81,7 @@ type Agent struct {
 	task     string // the run's task, used as the tool-search query
 }
 
-func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
+func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tools.Tool, obs Observer) *Agent {
 	if model == "" {
 		model = defaultModel
 	}
@@ -95,29 +92,25 @@ func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, age
 	return &Agent{
 		provider:     p,
 		model:        model,
-		verbose:      verbose,
 		systemPrompt: systemPrompt,
 		tools:        agentTools,
 		byName:       byName,
-		log:          log,
+		obs:          obs,
 	}
 }
 
 // NewExecutor creates an agent that executes tasks using shell, code, and web
 // tools, plus any agent-authored tools in the registry. It wires the live
 // capability broker + sandbox: authored Script tools run under their grant and
-// every brokered effect is audited via rec.
-func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *logger.Logger, registry tools.Registry, rec audit.Recorder, tier capability.Tier) *Agent {
+// every brokered effect is audited via rec. Run events go to obs; runID
+// identifies the run for grants/audit.
+func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, rec audit.Recorder, tier capability.Tier) *Agent {
 	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
 	// caller is assigned after the agent exists, breaking the broker⇄dispatch
 	// cycle; the broker only invokes it at run time.
 	broker := capability.NewBroker(rec, nil)
 	glue := sandbox.NewLuaGlue(broker)
 
-	runID := ""
-	if log != nil {
-		runID = log.RunID
-	}
 	authorTool := tools.NewAuthorTool(tools.AuthorToolDeps{
 		Registry: registry,
 		Glue:     glue,
@@ -127,13 +120,13 @@ func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *
 		Approver: tools.StdinApprover{},
 	})
 
-	a := newAgent(p, model, executorPrompt, verbose, []tools.Tool{
+	a := newAgent(p, model, executorPrompt, []tools.Tool{
 		tools.NewShell(workDir, tools.StdinApprover{}),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		authorTool,
-	}, log)
+	}, obs)
 	a.registry = registry
 	a.glue = glue
 	a.tier = tier
@@ -151,20 +144,27 @@ func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *
 // NewPlanner creates an agent that clarifies and refines a task before execution.
 // It has no shell access — only web research and the ability to ask the user questions.
 // Its final response is a structured Plan enforced via JSON schema.
-func NewPlanner(p provider.Provider, model string, verbose bool, log *logger.Logger) *Agent {
-	a := newAgent(p, model, plannerPrompt, verbose, []tools.Tool{
+func NewPlanner(p provider.Provider, model string, obs Observer) *Agent {
+	a := newAgent(p, model, plannerPrompt, []tools.Tool{
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		tools.AskUser,
-	}, log)
+	}, obs)
 	a.responseFormat = &planResponseFormat
 	return a
+}
+
+// emit sends a run event to the observer (no-op if none is attached).
+func (a *Agent) emit(e Event) {
+	if a.obs != nil {
+		a.obs.Emit(e)
+	}
 }
 
 // Run executes the ReAct loop and returns the final text answer.
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.task = userInput
-	a.logStart(userInput)
+	a.emit(Event{Kind: EvStart, Task: userInput})
 
 	messages := []provider.Message{
 		provider.SystemText(a.systemPrompt),
@@ -176,7 +176,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		// the next step. The list is append-only and stable, so the serialized
 		// prefix is unchanged until a tool is added — cache stays warm.
 		toolDefs := a.buildToolDefs()
-		a.logRequest(i, messages)
+		a.emit(Event{Kind: EvRequest, Iteration: i, Messages: messages})
 
 		start := time.Now()
 		resp, err := a.provider.Step(ctx, provider.StepRequest{
@@ -192,65 +192,30 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 
 		text := resp.Text()
 		toolCalls := resp.ToolCalls()
-		a.logResponse(i, text, toolCalls, resp.Usage, durationMs)
+		a.emit(Event{Kind: EvResponse, Iteration: i, Text: text, Calls: toolCalls, Usage: resp.Usage, DurationMs: durationMs})
 
 		if len(toolCalls) == 0 {
 			return text, nil
-		}
-
-		if a.verbose && text != "" {
-			fmt.Fprintln(os.Stderr, text)
 		}
 
 		// Append the assistant turn (text + tool calls) before its results.
 		messages = append(messages, provider.Message{Role: provider.RoleAssistant, Content: resp.Content})
 
 		for _, call := range toolCalls {
-			if a.verbose {
-				fmt.Fprintf(os.Stderr, "\n[tool: %s] %s\n", call.Name, string(call.Input))
-			}
+			a.emit(Event{Kind: EvToolStart, Call: &call})
 
 			result, err := a.executeTool(ctx, call)
 			if err != nil {
 				result = fmt.Sprintf("tool error: %v", err)
 			}
 
-			if a.verbose {
-				fmt.Fprintf(os.Stderr, "[result] %s\n", result)
-			}
-			a.logToolResult(call.Name, call.ID, string(call.Input), result)
+			a.emit(Event{Kind: EvToolResult, Call: &call, Result: result, IsError: err != nil})
 
 			messages = append(messages, provider.ToolResultMessage(call.ID, result, err != nil))
 		}
 	}
 
 	return "", fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
-}
-
-// Logging is nil-safe so the executor can run without a disk logger (tests,
-// embedded use).
-func (a *Agent) logStart(task string) {
-	if a.log != nil {
-		a.log.LogStart(task)
-	}
-}
-
-func (a *Agent) logRequest(i int, messages any) {
-	if a.log != nil {
-		a.log.LogRequest(i, messages)
-	}
-}
-
-func (a *Agent) logResponse(i int, text string, toolCalls, usage any, durationMs int64) {
-	if a.log != nil {
-		a.log.LogResponse(i, text, toolCalls, usage, durationMs)
-	}
-}
-
-func (a *Agent) logToolResult(name, id, args, result string) {
-	if a.log != nil {
-		a.log.LogToolResult(name, id, args, result)
-	}
 }
 
 func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string, error) {

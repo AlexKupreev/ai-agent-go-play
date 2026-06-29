@@ -68,7 +68,7 @@ func TestAuthoring_EndToEnd(t *testing.T) {
 
 	reg := tools.NewMemoryRegistry()
 	rec := &audit.MemoryRecorder{}
-	exec := NewExecutor(prov, t.TempDir(), "", false, nil, reg, rec, capability.TierBalanced)
+	exec := NewExecutor(prov, t.TempDir(), "", "", nil, reg, rec, capability.TierBalanced)
 
 	out, err := exec.Run(context.Background(), "triple some numbers")
 	if err != nil {
@@ -111,7 +111,7 @@ func TestAuthoring_TestFailureSurfacedToModel(t *testing.T) {
 		textStep("ok, that tool failed"),
 	}}
 	reg := tools.NewMemoryRegistry()
-	exec := NewExecutor(prov, t.TempDir(), "", false, nil, reg, &audit.MemoryRecorder{}, capability.TierBalanced)
+	exec := NewExecutor(prov, t.TempDir(), "", "", nil, reg, &audit.MemoryRecorder{}, capability.TierBalanced)
 
 	if _, err := exec.Run(context.Background(), "make a bad tool"); err != nil {
 		t.Fatalf("run: %v", err)

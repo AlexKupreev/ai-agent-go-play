@@ -16,7 +16,7 @@ func newTestExecutor(t *testing.T) (*Agent, *tools.MemoryRegistry, *audit.Memory
 	t.Helper()
 	reg := tools.NewMemoryRegistry()
 	rec := &audit.MemoryRecorder{}
-	a := NewExecutor(nil, t.TempDir(), "", false, nil, reg, rec, capability.TierBalanced)
+	a := NewExecutor(nil, t.TempDir(), "", "", nil, reg, rec, capability.TierBalanced)
 	return a, reg, rec
 }
 
