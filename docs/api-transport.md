@@ -68,6 +68,16 @@ split so B can be added without touching the core:
 So adding JSON-RPC later is a new file implementing one interface against the existing core,
 not a rewrite. The event/approval **semantics** live in the core; only framing differs.
 
+## The CLI as a client
+
+`internal/api/client.go` (`Client`) is the peer side of the SSE adapter:
+`StartRun`/`StreamEvents`/`Pending`/`Resolve`. `cmd/client.go` (`agent client <task> --addr`)
+uses it to drive a run on a running `agent serve` engine — streaming events to the terminal
+(same trace as the in-process `CLIObserver`) and, since SSE has no server push, **polling**
+`GET /approvals` to prompt the operator and `POST` the decision. This makes the CLI one client
+of the headless engine rather than a special case, the Phase 4 goal; a JSON-RPC adapter would
+ship an analogous client.
+
 ## Approval queue (the async `Approver`)
 
 Risky actions (destructive shell, capability escalation beyond the tier) route through the

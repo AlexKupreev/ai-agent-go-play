@@ -133,7 +133,14 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
     `GET /tools/search?q=&k=` over `tools.Registry` (wire `ToolView`, no source); `serve` shares ONE
     persistent registry between executor and endpoints (authored tools visible across runs + API);
     `NewServer(e, approvals, catalog)` — both optionals nil-able. Tests `internal/api/tools_test.go`.
-    All green. **NEXT 4c increment:** CLI-as-client of the engine. Then 4d (memory) / 4e (frontends).
+    **CLI-as-client DONE:** `internal/api/client.go` `Client` (`StartRun`/`StreamEvents`/`Pending`/
+    `Resolve`); `cmd/client.go` (`agent client <task> --addr`) starts+streams a run on a running
+    `serve` engine and polls `/approvals` to prompt the operator. Tests `internal/api/client_test.go`.
+    **Phase 4c is COMPLETE.** All green. **NEXT: Phase 4d** (long-term memory store as a built-in
+    tool, persisted + audited) then **4e** (management plane + a thin frontend; fork: Telegram vs web,
+    leaning Telegram). **Recorded for 4e:** per-run kill switch (`Engine.StopRun` + `POST
+    /runs/{id}/cancel` + `agent stop`/Ctrl+C) — deferred from 4c as not urgent (runs bounded by
+    `maxIterations`, risky actions park for approval), matters once `serve` runs unattended.
 11. **Forks to settle when reached** (in plan.md): transport (4c, leaning HTTP+SSE); first frontend
     Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
 12. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits

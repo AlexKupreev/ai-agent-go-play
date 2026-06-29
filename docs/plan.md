@@ -292,7 +292,7 @@ before the transport/frontend choices (real forks, settled when reached).
     direct stdout/stderr writes (grep-clean). `TestRun_EmitsEventSequence` asserts the event order;
     the API (4c) will attach its own observer to stream the same events.
 
-### 4c — `internal/api` transport  *(IN PROGRESS — HTTP+SSE, see [`api-transport.md`](api-transport.md))*
+### 4c — `internal/api` transport  *(DONE — HTTP+SSE, see [`api-transport.md`](api-transport.md))*
 
 Built as increments. Package is split so a JSON-RPC adapter can attach to the same core later.
 
@@ -315,9 +315,17 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     the endpoints, so a tool authored in a run is immediately visible to later runs and to the API.
     `NewServer` gained a nil-able `catalog` arg (endpoints registered only when supplied). Tests:
     `tools_test.go` (list order/fields, search ranking + missing-`q` 400, absent-without-catalog 404).
-- [ ] **CLI as a client** of the engine (peer to future frontends).
+- [x] **CLI as a client** of the engine (peer to future frontends). `internal/api/client.go`:
+    `Client` (`StartRun`/`StreamEvents`/`Pending`/`Resolve`) — the peer side of the same transport.
+    `cmd/client.go` (`agent client <task> --addr`) starts a run on a running `serve` engine, streams
+    events to the terminal (mirrors the `CLIObserver` trace), and polls `/approvals` to prompt the
+    operator (SSE has no server push). Tests: `client_test.go` (full start→stream→approve loop;
+    bad-status error) against a real `httptest` server.
 - *Acceptance:* a run can be started and streamed over the API ✅; an escalation parks in the queue and
-    is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅.
+    is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
+    drives a run on a separate engine process ✅.
+
+**4c is complete.** Next: 4d (long-term memory), 4e (management plane + a thin frontend).
 
 ### 4d — Long-term memory
 
@@ -329,8 +337,18 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
 
 - [ ] Approve/deny escalations, review/revoke tools, browse the audit log — over the API. Then a
     thin frontend (see fork) as a peer client; design the approval UX so prompts don't nag.
+- [ ] **Per-run kill switch (operator last-resort).** Engine stores a `context.CancelFunc` per run
+    (derive the run ctx with `context.WithCancel`, not bare `Background`); `Engine.StopRun(id)` cancels
+    it. Expose `POST /runs/{id}/cancel` (404 unknown); add `Client.StopRun`, an `agent stop <id>`
+    command, and `signal.NotifyContext` in `agent run`/`agent client` so Ctrl+C cancels the run (the
+    *remote* run for `client`) gracefully, second Ctrl+C force-quits. Cancellation already propagates —
+    the loop passes `ctx` to `provider.Step`/tools and `shell` uses `exec.CommandContext` — so it stops
+    at the next model/tool boundary. *(Deferred here from 4c: not urgent while runs are bounded by
+    `maxIterations`, risky actions park for approval, and in-process `run` dies on Ctrl+C; it matters
+    once `serve` runs unattended, which is this phase.)*
 - *Acceptance (Phase 4):* the same run can be driven from the CLI and a second frontend against one
-    engine; escalation approvals surface in the chosen frontend and are recorded.
+    engine; escalation approvals surface in the chosen frontend and are recorded; a run can be
+    cancelled mid-flight from the CLI/API.
 
 **Risks/notes:** keep frontends thin — all policy lives in the engine. Approval UX is an open
 question (design §9); start minimal. The async `Approver` (4a) is the contract the approval queue
