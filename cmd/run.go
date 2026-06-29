@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -31,6 +32,11 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// Ctrl+C cancels the run gracefully (the loop honors ctx at the next
+		// model/tool boundary); a second Ctrl+C is no longer caught and force-quits.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
 
 		log, err := logger.New()
 		if err != nil {
@@ -63,7 +69,7 @@ var runCmd = &cobra.Command{
 
 		planner := agent.NewPlanner(prov, model, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
-		planJSON, err := planner.Run(context.Background(), task)
+		planJSON, err := planner.Run(ctx, task)
 		if err != nil {
 			return fmt.Errorf("planner error: %w", err)
 		}
@@ -110,8 +116,8 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, rec, tier, tools.StdinApprover{})
-		result, err := executor.Run(context.Background(), plan.RefinedTask)
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, "local", obs, registry, mem, rec, tier, tools.StdinApprover{})
+		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err
 		}

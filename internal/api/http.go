@@ -17,7 +17,10 @@ import (
 func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /runs", handleStartRun(e))
+	mux.HandleFunc("GET /runs", handleListRuns(e))
+	mux.HandleFunc("GET /runs/{id}", handleRunStatus(e))
 	mux.HandleFunc("GET /runs/{id}/events", handleRunEvents(e))
+	mux.HandleFunc("POST /runs/{id}/cancel", handleCancelRun(e))
 	if approvals != nil {
 		mux.HandleFunc("GET /approvals", handleListApprovals(approvals))
 		mux.HandleFunc("POST /approvals/{id}", handleResolveApproval(approvals))
@@ -27,6 +30,23 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http
 		mux.HandleFunc("GET /tools/search", handleSearchTools(catalog))
 	}
 	return mux
+}
+
+// ownerHeader carries the caller's session identity. The trusted frontend asserts
+// it (a Telegram user, the CLI's local user); it is a scoping/attribution label,
+// NOT an authentication credential (design §1/§5). Absent ⇒ "local" (single-user).
+const ownerHeader = "X-Agent-Owner"
+
+func ownerOf(r *http.Request) string {
+	if o := r.Header.Get(ownerHeader); o != "" {
+		return o
+	}
+	return "local"
+}
+
+// runErrStatus maps an engine run error to an HTTP status: unknown/not-owner ⇒ 404.
+func runErrStatus(w http.ResponseWriter, err error) {
+	http.Error(w, err.Error(), http.StatusNotFound)
 }
 
 type startRunRequest struct {
@@ -48,9 +68,40 @@ func handleStartRun(e *Engine) http.HandlerFunc {
 			http.Error(w, "task is required", http.StatusBadRequest)
 			return
 		}
-		id := e.StartRun(req.Task)
+		id := e.StartRun(req.Task, ownerOf(r))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(startRunResponse{RunID: id})
+	}
+}
+
+// handleListRuns serves GET /runs — the caller's runs, newest first.
+func handleListRuns(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, e.ListRuns(ownerOf(r)))
+	}
+}
+
+// handleRunStatus serves GET /runs/{id} — metadata for one of the caller's runs.
+func handleRunStatus(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		info, err := e.RunStatus(ownerOf(r), r.PathValue("id"))
+		if err != nil {
+			runErrStatus(w, err)
+			return
+		}
+		writeJSON(w, info)
+	}
+}
+
+// handleCancelRun serves POST /runs/{id}/cancel — the per-run kill switch, scoped to
+// the caller's runs.
+func handleCancelRun(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := e.StopRun(ownerOf(r), r.PathValue("id")); err != nil {
+			runErrStatus(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -62,7 +113,7 @@ func handleRunEvents(e *Engine) http.HandlerFunc {
 			return
 		}
 
-		ch, cancel, err := e.Subscribe(r.PathValue("id"))
+		ch, cancel, err := e.Subscribe(ownerOf(r), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -93,7 +144,7 @@ func handleRunEvents(e *Engine) http.HandlerFunc {
 func handleListApprovals(q *ApprovalQueue) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(q.Pending())
+		_ = json.NewEncoder(w).Encode(q.Pending(ownerOf(r)))
 	}
 }
 
@@ -108,7 +159,7 @@ func handleResolveApproval(q *ApprovalQueue) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		if err := q.Resolve(r.PathValue("id"), req.Approved); err != nil {
+		if err := q.Resolve(ownerOf(r), r.PathValue("id"), req.Approved); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

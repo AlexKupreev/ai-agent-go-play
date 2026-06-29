@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -16,6 +17,7 @@ import (
 type Client struct {
 	BaseURL string // e.g. "http://127.0.0.1:8080"
 	HTTP    *http.Client
+	Owner   string // session identity asserted to the engine (X-Agent-Owner); "" ⇒ "local"
 }
 
 // NewClient returns a client for the engine at baseURL.
@@ -30,10 +32,25 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+// newRequest builds a request carrying the client's owner header, so every call is
+// scoped to this client's session.
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	owner := c.Owner
+	if owner == "" {
+		owner = "local"
+	}
+	req.Header.Set(ownerHeader, owner)
+	return req, nil
+}
+
 // StartRun starts a run and returns its id.
 func (c *Client) StartRun(ctx context.Context, task string) (string, error) {
 	body, _ := json.Marshal(startRunRequest{Task: task})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/runs", bytes.NewReader(body))
+	req, err := c.newRequest(ctx, http.MethodPost, "/runs", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -56,7 +73,7 @@ func (c *Client) StartRun(ctx context.Context, task string) (string, error) {
 // StreamEvents opens the run's SSE stream and calls onEvent for each event until the
 // stream ends (the run's terminal done/error event closes it) or ctx is cancelled.
 func (c *Client) StreamEvents(ctx context.Context, runID string, onEvent func(Event)) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/runs/"+runID+"/events", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/runs/"+runID+"/events", nil)
 	if err != nil {
 		return err
 	}
@@ -86,9 +103,9 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, onEvent func(Ev
 	return sc.Err()
 }
 
-// Pending lists the approvals currently parked on the engine.
+// Pending lists the approvals parked on the engine for this client's session.
 func (c *Client) Pending(ctx context.Context) ([]PendingApproval, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/approvals", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/approvals", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +127,7 @@ func (c *Client) Pending(ctx context.Context) ([]PendingApproval, error) {
 // Resolve answers a parked approval by id.
 func (c *Client) Resolve(ctx context.Context, id string, approved bool) error {
 	body, _ := json.Marshal(resolveApprovalRequest{Approved: approved})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/approvals/"+id, bytes.NewReader(body))
+	req, err := c.newRequest(ctx, http.MethodPost, "/approvals/"+id, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -122,6 +139,65 @@ func (c *Client) Resolve(ctx context.Context, id string, approved bool) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("resolve approval %s: %s", id, resp.Status)
+	}
+	return nil
+}
+
+// ListRuns returns this client's runs, newest first.
+func (c *Client) ListRuns(ctx context.Context) ([]RunInfo, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/runs", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list runs: %s", resp.Status)
+	}
+	var out []RunInfo
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RunStatus returns the metadata for one of this client's runs.
+func (c *Client) RunStatus(ctx context.Context, runID string) (RunInfo, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/runs/"+runID, nil)
+	if err != nil {
+		return RunInfo{}, err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return RunInfo{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return RunInfo{}, fmt.Errorf("run status %s: %s", runID, resp.Status)
+	}
+	var out RunInfo
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return RunInfo{}, err
+	}
+	return out, nil
+}
+
+// StopRun cancels one of this client's runs (the kill switch).
+func (c *Client) StopRun(ctx context.Context, runID string) error {
+	req, err := c.newRequest(ctx, http.MethodPost, "/runs/"+runID+"/cancel", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("stop run %s: %s", runID, resp.Status)
 	}
 	return nil
 }

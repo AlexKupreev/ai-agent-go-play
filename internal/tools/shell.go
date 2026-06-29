@@ -10,8 +10,9 @@ import (
 // directory. Any files the agent creates will land in workDir automatically.
 //
 // If approver is non-nil, commands that look destructive (see isDestructive) must
-// be approved before they run. Pass nil to disable the gate (e.g. in tests).
-func NewShell(workDir string, approver Approver) Tool {
+// be approved before they run. Pass nil to disable the gate (e.g. in tests). owner
+// scopes a parked approval to the run's session (Phase 4e).
+func NewShell(workDir, owner string, approver Approver) Tool {
 	return Tool{
 		Name:        "shell",
 		Description: "Run a shell command and return its combined stdout+stderr output. Use this for filesystem operations, running scripts, inspecting the environment, etc.",
@@ -32,6 +33,7 @@ func NewShell(workDir string, approver Approver) Tool {
 					Kind:   "shell.destructive",
 					Title:  "This command looks destructive",
 					Detail: command,
+					Owner:  owner,
 				})
 				if err != nil {
 					return fmt.Sprintf("command not run: approval failed: %v", err), nil

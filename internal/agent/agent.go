@@ -117,7 +117,13 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 //
 // mem is the long-term memory store backing the remember/recall built-ins; when
 // nil those tools are omitted (e.g. tests that don't exercise memory).
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
+//
+// owner labels the run's session: it scopes parked approvals (and, in 4e-2, owned
+// data) to the user who started the run. Empty defaults to "local" (single-user CLI).
+func NewExecutor(p provider.Provider, workDir, model, runID, owner string, obs Observer, registry tools.Registry, mem memory.Store, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
+	if owner == "" {
+		owner = "local"
+	}
 	if approver == nil {
 		approver = tools.StdinApprover{}
 	}
@@ -133,11 +139,12 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 		Audit:    rec,
 		Tier:     tier,
 		RunID:    runID,
+		Owner:    owner,
 		Approver: approver,
 	})
 
 	builtins := []tools.Tool{
-		tools.NewShell(workDir, approver),
+		tools.NewShell(workDir, owner, approver),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,

@@ -29,9 +29,18 @@ _Last session: 2026-06-29._
   scope. Key finding: **compute independence already exists** (goroutine-per-run + fresh
   executor-per-run + concurrent-safe shared stores); the gaps are the **global approval queue**
   (`Pending()`/`Resolve` aren't owner-scoped → users see each other's escalations) and unscoped
-  run-list/cancel. **Next: start 4e-1** (Owner label + run lifecycle/kill switch + owner-scoped
-  approvals — the foundation 4e-2…4e-6 build on). **TODO:** update design §1/§5 to record multi-user
-  (trusted, owned, session-isolated) is now in scope.
+  run-list/cancel. design §1/§5 updated to record multi-user (trusted, owned, session-isolated).
+- **4e-1 DONE.** Identity foundation + run lifecycle + session isolation. `Engine.StartRun(task,
+  owner)` + run metadata (`RunInfo`) + `StopRun`/`ListRuns`/`RunStatus`, all owner-scoped via
+  `lookup` (not-owner ⇒ not-found, can't probe). `ApprovalQueue.Pending(owner)`/`Resolve(owner,id)`
+  now owner-scoped — **this closed the one real correctness gap** (global queue leaked escalations
+  across users). Owner flows engine→runner→`NewExecutor(…, owner, …)`→shell/author_tool approval
+  requests; over HTTP via `X-Agent-Owner` header (default `local`). New endpoints `GET /runs`,
+  `GET /runs/{id}`, `POST /runs/{id}/cancel`. `Client` gained `Owner`/`StopRun`/`RunStatus`/
+  `ListRuns`; CLI `agent stop`, `agent client --user`, `signal.NotifyContext` Ctrl+C cancels
+  (in-process for `run`, remote for `client`). Tests in `internal/api/runs_test.go`; live-checked
+  serve wiring. **Next: 4e-2** (per-user data ownership — memory namespacing + `User`≠`Shared` tools
+  + opt-in sharing; will update memory.md/tools.md with the sharing mechanics then).
 
 ---
 

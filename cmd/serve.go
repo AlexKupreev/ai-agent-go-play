@@ -87,7 +87,7 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	return api.RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
+	return api.RunnerFunc(func(ctx context.Context, task, owner string, obs agent.Observer) (string, error) {
 		log, err := logger.New()
 		if err != nil {
 			return "", fmt.Errorf("failed to create logger: %w", err)
@@ -102,7 +102,7 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 
 		// Engine event stream + disk log see the same events.
 		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obsAll, registry, mem, rec, tier, approver)
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, owner, obsAll, registry, mem, rec, tier, approver)
 		return executor.Run(ctx, task)
 	}), nil
 }

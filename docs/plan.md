@@ -340,8 +340,8 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c and 4d are complete.** Next: 4e, starting at **4e-1** (identity + run lifecycle + session
-isolation — the `Owner` foundation everything else builds on).
+**4c, 4d, and 4e-1 are complete.** Next: **4e-2** (per-user data ownership — memory namespacing +
+`User`≠`Shared` tools + opt-in sharing), building on 4e-1's `Owner` foundation.
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
@@ -370,32 +370,31 @@ engine is identity-blind (no owner → no session isolation, no per-user data); 
 over the API; the audit log isn't readable over the API (per-session JSONL, no central reader);
 approvals park *silently* (clients must poll); and there is no frontend beyond the CLI.
 
-#### 4e-1 — Identity foundation + run lifecycle + session isolation
+#### 4e-1 — Identity foundation + run lifecycle + session isolation  *(DONE)*
 
-- [ ] **Owner label.** `Engine.StartRun(task)` → `StartRun(RunRequest{Task, Owner})`; the trusted
-    frontend asserts `Owner` (Telegram user id; CLI uses a configured local user, default `"local"`).
-    The owner threads into the run's `GrantContext`/audit and the executor (for data scoping in 4e-2).
-- [ ] **Run metadata + lifecycle.** Extend the engine's `runs` map entry from a bare `*Hub` to a
-    `run{hub, owner, task, state(running|done|error), startedAt, endedAt, result/err, cancel}`. Derive
-    the run ctx with `context.WithCancel(context.Background())` (not bare `Background`) and store
-    `cancel`; the run goroutine sets terminal state on exit.
-- [ ] **Kill switch + listing, owner-scoped.** `Engine.StopRun(owner, id)` cancels the run ctx (404
-    unknown; refuse if not owner). `ListRuns(owner)` / `RunStatus(owner, id)` filter by owner.
-    Endpoints: `POST /runs/{id}/cancel`, `GET /runs`, `GET /runs/{id}` — all owner-scoped. Cancellation
-    already propagates (loop passes `ctx` to `provider.Step`/tools; `shell` uses `exec.CommandContext`)
-    so it stops at the next model/tool boundary.
-- [ ] **Owner-scoped approvals (the session-isolation fix).** Today `ApprovalQueue.Pending()` returns
-    *every* parked request and `Resolve(id)` accepts *any* id — so one user sees/answers another's
-    escalation. Tag each `ApprovalRequest` with the run's owner; `Pending(owner)` filters and
-    `Resolve(owner, id)` refuses another owner's id. `GET /approvals` / `POST /approvals/{id}` become
-    owner-scoped.
-- [ ] **CLI/Ctrl+C.** `Client.StopRun`; `agent stop <id> --addr`; `signal.NotifyContext` in `agent
-    run`/`agent client` so Ctrl+C cancels the run (the *remote* run for `client`) gracefully, second
-    Ctrl+C force-quits. *(This is the per-run kill switch deferred from 4c.)*
-- *Acceptance:* two runs with different owners stream independently; owner A cannot list, cancel, or
-    see/resolve owner B's run or approval (404/403); Ctrl+C cancels mid-flight. (Compute independence —
-    goroutine-per-run, fresh executor-per-run, concurrent-safe shared stores — is already in place;
-    this sub-phase adds the *control-plane* isolation on top.)
+- [x] **Owner label.** `Engine.StartRun(task, owner)`; the trusted frontend asserts `owner` over the
+    `X-Agent-Owner` header (`local` default). `NewExecutor` gained an `owner` param; it threads to the
+    shell + author_tool approval requests (`tools.ApprovalRequest.Owner`). *(GrantContext/audit + data
+    scoping land in 4e-2.)*
+- [x] **Run metadata + lifecycle.** Engine `runs` map entry is now a
+    `run{hub, cancel, info RunInfo{id, owner, task, state, startedAt, endedAt, result, error}}`; the
+    run ctx is `context.WithCancel(context.Background())` and the goroutine sets terminal state on exit.
+- [x] **Kill switch + listing, owner-scoped.** `Engine.StopRun(owner, id)` / `ListRuns(owner)` /
+    `RunStatus(owner, id)`, all via `lookup(owner, id)` where **not-owner collapses to not-found**
+    (`ErrUnknownRun`) so existence can't be probed. Endpoints: `POST /runs/{id}/cancel`, `GET /runs`,
+    `GET /runs/{id}` (404 unknown). Cancellation propagates to the next model/tool boundary.
+- [x] **Owner-scoped approvals (the session-isolation fix).** `ApprovalQueue.Pending(owner)` filters by
+    `req.Owner`; `Resolve(owner, id)` refuses another owner's id (collapses to unknown). `GET /approvals`
+    / `POST /approvals/{id}` read the owner from the header.
+- [x] **CLI/Ctrl+C.** `Client` gained `Owner` (sends the header), `StopRun`, `RunStatus`, `ListRuns`;
+    `agent stop <id> --addr --user`; `agent client --user`; `signal.NotifyContext` in `agent run`
+    (cancels the in-process run) and `agent client` (first Ctrl+C cancels the *remote* run + detaches,
+    second force-quits).
+- [x] *Acceptance:* `internal/api/runs_test.go` — `TestSessionsAreOwnerIsolated` (owner A cannot list,
+    read, cancel, or resolve owner B's run/approval; A can resolve its own), `TestCancelStopsRun` (kill
+    switch ends a blocked run in the error state), `TestUnknownRunStatusIs404`. Existing transport tests
+    updated to the `Runner.Run(ctx, task, owner, obs)` signature. Live-checked the `serve` wiring
+    (owner-scoped `GET /runs` / `GET /approvals`, 404 on unknown cancel/status).
 
 #### 4e-2 — Per-user data ownership (memory + tools), sharing opt-in
 

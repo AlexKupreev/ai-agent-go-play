@@ -26,5 +26,6 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clientCmd)
+	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(toolCmd)
 }

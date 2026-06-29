@@ -24,9 +24,17 @@ Plain `net/http` JSON endpoints for requests; run events streamed over **Server-
 Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 
 - `POST /runs` → `{run_id}`
+- `GET /runs`, `GET /runs/{id}` → list runs / one run's status (metadata)
 - `GET /runs/{id}/events` → SSE stream of run events
+- `POST /runs/{id}/cancel` → kill switch (cancel a run mid-flight)
 - `GET /approvals`, `POST /approvals/{id}` → list / resolve a parked approval
 - `GET /tools`, `GET /tools/search?q=&k=` → list / search the tool catalog
+
+**Owner scoping (Phase 4e-1).** Every request carries an `X-Agent-Owner` header (the trusted
+frontend asserts it; absent ⇒ `local`). Runs and approvals are scoped to their owner: a caller
+sees, streams, cancels, and resolves only its own — another owner's run/approval is invisible
+(404, not 403, so existence can't be probed). The owner is a **scoping/attribution label, not an
+auth credential** (design §1/§5); network-facing auth lives in the frontend.
 
 **Pros:** stdlib only (no deps); `curl`-able; trivial to debug; single binary; browser-native
 via `EventSource`; maps directly onto `Observer.Emit` → one SSE frame per event, and the

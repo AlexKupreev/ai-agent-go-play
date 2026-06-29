@@ -16,7 +16,7 @@ import (
 
 // fakeRunner emits a representative event sequence, then returns a final answer —
 // standing in for the real executor so the transport is tested without a provider.
-func fakeRunner(_ context.Context, task string, obs agent.Observer) (string, error) {
+func fakeRunner(_ context.Context, task, _ string, obs agent.Observer) (string, error) {
 	obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 	obs.Emit(agent.Event{Kind: agent.EvResponse, Iteration: 0, Text: "thinking"})
 	call := provider.ToolCall{Name: "shell", ID: "c1", Input: []byte(`{"cmd":"ls"}`)}
