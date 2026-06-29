@@ -91,6 +91,11 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    green. (b)'s async/tiered approval refactor deferred to fold into Phase 3 when it forces the
    approval refactor.
 3. **All security mechanisms now documented** in [`security.md`](security.md) (threat→control map).
-4. **NEXT:** start **Phase 3a** (`ToolSpec` + `Registry`).
-5. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
+4. ~~start **Phase 3a** (`ToolSpec` + `Registry`).~~ **DONE:** `internal/tools/spec.go`,
+   `registry.go`, `registry_test.go`; all green, not wired to the loop. Tool-system design +
+   benefits/drawbacks in [`tools.md`](tools.md). `plan.md` 3a checked off.
+5. **NEXT:** **Phase 3b** — wire `JSONLRecorder` → `Broker` → `LuaGlue` → `Registry` into
+   `cmd/run.go` per run; set `broker.Trusted` = built-in names, `broker.Exposed` =
+   `{web_search, web_fetch}`; `toolCaller` resolves name → built-in `Run` or registry script-exec.
+6. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
    language tag).

@@ -174,15 +174,19 @@ Only *authored* tools go through the sandbox/broker; built-ins are unchanged fro
   the run's tier prompts at authoring time; declined → rejected. The async *pending queue* /
   management UI is **Phase 4**, not here.
 
-### 3a — `ToolSpec` + `Registry`
+### 3a — `ToolSpec` + `Registry`  *(DONE — `internal/tools/spec.go`, `registry.go`, `registry_test.go`)*
 
-- [ ] `tools.ToolSpec`: model face (`Name`, `Description`, `InputSchema`) + exec face
+- [x] `tools.ToolSpec`: model face (`Name`, `Description`, `InputSchema`) + exec face
     (`Impl: Native|Script{Lang,Source}`, `RequiredCaps []capability.Capability`, `Scope`
-    `Ephemeral|User|Shared`, `Test`, `Version`, `CreatedBy`, `CodeHash`).
-- [ ] `tools.Registry` interface + in-memory impl: `Register/Get/Search/Revoke/List(scope)`;
+    `Ephemeral|User|Shared`, `Test`, `Version`, `CreatedBy`, `CodeHash`). Name regex + SHA-256
+    code hash in `spec.go`.
+- [x] `tools.Registry` interface + in-memory impl: `Register/Get/Search/Revoke/List(scope)`;
     monotonic seq per registration for stable ordering. Ephemeral = in-memory (dies with the
-    run); Shared = JSON catalog loaded at startup; `User` collapses to `Shared` on single-user CLI.
-- *Acceptance:* register/list/revoke/search round-trip, unit-tested; not yet wired to the loop.
+    run); Shared/User = JSON catalog (atomic write) loaded at startup; `User` collapses to `Shared`
+    on single-user CLI. Native impls never persisted (skipped on save). Search = token-overlap
+    (BM25-lite deferred to 3d).
+- [x] *Acceptance:* register/list/revoke/search round-trip + persistence reload, unit-tested; not
+    wired to the loop. Design + trade-offs documented in [`tools.md`](tools.md).
 
 ### 3b — Live broker/sandbox wiring (activates Phase 2 in the run flow)
 
