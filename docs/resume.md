@@ -84,9 +84,13 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
 
 ## Concrete next actions (in order)
 
-1. **Decide** the shell-hardening scope (a/b/c above).
-2. If (a)/(b): implement untrusted-content framing for `web_fetch`/`web_search` + system-prompt
-   rule; (b) also: async/tiered approval refactor of `ConfirmFunc` + wire `Tier`.
-3. Then start **Phase 3a** (`ToolSpec` + `Registry`).
-4. Housekeeping: push `cec1fa7`; optional markdownlint fix (`design.md` fenced block needs a
+1. ~~**Decide** the shell-hardening scope (a/b/c above).~~ **DONE — chose (a).**
+2. ~~Implement untrusted-content framing for `web_fetch`/`web_search` + system-prompt rule.~~
+   **DONE:** `internal/tools/untrusted.go` (`wrapUntrusted` + delimiters), applied in
+   `webfetch.go`/`websearch_ddg.go`, executor + planner prompt rules in `agent.go`. Build/test
+   green. (b)'s async/tiered approval refactor deferred to fold into Phase 3 when it forces the
+   approval refactor.
+3. **All security mechanisms now documented** in [`security.md`](security.md) (threat→control map).
+4. **NEXT:** start **Phase 3a** (`ToolSpec` + `Registry`).
+5. Housekeeping: push commits; optional markdownlint fix (`design.md` fenced block needs a
    language tag).
