@@ -76,9 +76,9 @@ func TestReRegister_BumpsVersionKeepsPosition(t *testing.T) {
 
 func TestList_StableRegistrationOrderAndScopeFilter(t *testing.T) {
 	r := NewMemoryRegistry()
-	r.Register(scriptSpec("one", "d", "x", ScopeEphemeral))
-	r.Register(scriptSpec("two", "d", "x", ScopeShared))
-	r.Register(scriptSpec("three", "d", "x", ScopeEphemeral))
+	r.Register(scriptSpec("one", "d", "return 1", ScopeEphemeral))
+	r.Register(scriptSpec("two", "d", "return 2", ScopeShared))
+	r.Register(scriptSpec("three", "d", "return 3", ScopeEphemeral))
 
 	if names := listNames(r.List(ScopeAny)); !equal(names, []string{"one", "two", "three"}) {
 		t.Errorf("all = %v", names)
@@ -88,6 +88,25 @@ func TestList_StableRegistrationOrderAndScopeFilter(t *testing.T) {
 	}
 	if names := listNames(r.List(ScopeShared)); !equal(names, []string{"two"}) {
 		t.Errorf("shared = %v", names)
+	}
+}
+
+func TestRegister_DedupsByCodeHash(t *testing.T) {
+	r := NewMemoryRegistry()
+	r.Register(scriptSpec("alpha", "first", "return 42", ScopeEphemeral))
+
+	got, err := r.Register(scriptSpec("beta", "second", "return 42", ScopeEphemeral))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if got.Name != "alpha" {
+		t.Errorf("dedup should return the existing tool (alpha), got %q", got.Name)
+	}
+	if _, ok := r.Get("beta"); ok {
+		t.Error("identical-code tool should not be registered under a new name")
+	}
+	if n := len(r.List(ScopeAny)); n != 1 {
+		t.Errorf("catalog should hold 1 tool after dedup, got %d", n)
 	}
 }
 
@@ -111,9 +130,9 @@ func TestGetAndRevoke(t *testing.T) {
 
 func TestSearch_RanksByOverlap(t *testing.T) {
 	r := NewMemoryRegistry()
-	r.Register(scriptSpec("weather", "fetch current weather forecast", "x", ScopeEphemeral))
-	r.Register(scriptSpec("currency", "convert currency exchange rates", "x", ScopeEphemeral))
-	r.Register(scriptSpec("notes", "store personal notes", "x", ScopeEphemeral))
+	r.Register(scriptSpec("weather", "fetch current weather forecast", "return 1", ScopeEphemeral))
+	r.Register(scriptSpec("currency", "convert currency exchange rates", "return 2", ScopeEphemeral))
+	r.Register(scriptSpec("notes", "store personal notes", "return 3", ScopeEphemeral))
 
 	got := listNames(r.Search("weather forecast", 5))
 	if len(got) == 0 || got[0] != "weather" {

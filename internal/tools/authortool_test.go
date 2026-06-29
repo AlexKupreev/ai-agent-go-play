@@ -169,6 +169,24 @@ func TestAuthorTool_CapBeyondTier_NoConfirmRejects(t *testing.T) {
 	}
 }
 
+// Authoring identical code under a new name is deduped: the model is pointed at
+// the existing tool instead of creating a duplicate.
+func TestAuthorTool_DedupsIdenticalCode(t *testing.T) {
+	f := newAuthorFixture(t, capability.TierBalanced, false)
+	code, test := "return input.a + input.b", "assert(tool({a=1,b=1}) == 2); return true"
+
+	if out, _ := f.tool.Run(context.Background(), authorArgs("sum", code, test)); !strings.Contains(out, "registered tool") {
+		t.Fatalf("first author should succeed, got %q", out)
+	}
+	out, _ := f.tool.Run(context.Background(), authorArgs("plus", code, test))
+	if !strings.Contains(out, "already registered as \"sum\"") {
+		t.Errorf("expected dedup pointer to sum, got %q", out)
+	}
+	if _, ok := f.reg.Get("plus"); ok {
+		t.Error("duplicate-code tool should not be registered under a new name")
+	}
+}
+
 func hasAuthoredEvent(rec *audit.MemoryRecorder, name string) bool {
 	for _, e := range rec.Snapshot() {
 		if e.Type == audit.EventToolAuthored && e.Fields["name"] == name {

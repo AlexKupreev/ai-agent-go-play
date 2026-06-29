@@ -69,6 +69,15 @@ func (r *MemoryRegistry) Register(spec ToolSpec) (ToolSpec, error) {
 	defer r.mu.Unlock()
 
 	spec.CodeHash = spec.computeHash()
+
+	// Dedup: if identical code is already registered under a different name,
+	// return that tool instead of storing a duplicate. Re-registering the same
+	// name is an update (handled below), not a dedup. Native hashes are
+	// name-based, so they never collide across names.
+	if existing, ok := r.findByHash(spec.CodeHash); ok && existing.Name != spec.Name {
+		return existing, nil
+	}
+
 	if existing, ok := r.byName[spec.Name]; ok {
 		spec.seq = existing.seq // keep position so the append-only order is stable
 		spec.Version = existing.Version + 1
@@ -92,6 +101,17 @@ func (r *MemoryRegistry) Get(name string) (ToolSpec, bool) {
 	defer r.mu.RUnlock()
 	s, ok := r.byName[name]
 	return s, ok
+}
+
+// findByHash returns a registered tool with the given code hash, if any. Caller
+// holds the lock.
+func (r *MemoryRegistry) findByHash(hash string) (ToolSpec, bool) {
+	for _, s := range r.byName {
+		if s.CodeHash == hash {
+			return s, true
+		}
+	}
+	return ToolSpec{}, false
 }
 
 func (r *MemoryRegistry) List(scope Scope) []ToolSpec {

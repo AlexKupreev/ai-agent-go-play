@@ -85,6 +85,11 @@ func (d AuthorToolDeps) run(ctx context.Context, args map[string]any) (string, e
 	if err != nil {
 		return fmt.Sprintf("author_tool rejected: registration failed: %v", err), nil
 	}
+	// Dedup: identical code already exists under another name — nothing new was
+	// registered. Tell the model to call the existing tool instead.
+	if stored.Name != spec.Name {
+		return fmt.Sprintf("identical tool already registered as %q — call it instead of re-authoring.", stored.Name), nil
+	}
 
 	// 5. Audit -------------------------------------------------------------
 	d.auditAuthored(stored)

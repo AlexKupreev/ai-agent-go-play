@@ -110,7 +110,7 @@ func TestBuildToolDefs_IncludesRegistryAfterBuiltins(t *testing.T) {
 		Name:        "shell",
 		Description: "shadow attempt",
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Impl:        tools.Impl{Kind: tools.ImplScript, Lang: "lua", Source: "return 1"},
+		Impl:        tools.Impl{Kind: tools.ImplScript, Lang: "lua", Source: "return 2"},
 		Scope:       tools.ScopeEphemeral,
 	})
 

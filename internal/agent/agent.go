@@ -23,6 +23,11 @@ const defaultModel = "gpt-4o-mini"
 // authored Script tools).
 const scriptTimeout = 5 * time.Second
 
+// maxInlineTools is the catalog size below which every registry tool is offered
+// to the model. Above it, only the top matches for the current task are included
+// so a large catalog cannot flood the context window.
+const maxInlineTools = 12
+
 // exposedBuiltins are the only trusted built-ins reachable from sandboxed code
 // via call_tool. Both are read-only and confirm-free, so design §5 rule (b) is
 // moot for v1; shell stays unexposed and thus unreachable from authored tools.
@@ -76,6 +81,7 @@ type Agent struct {
 	glue     *sandbox.LuaGlue
 	tier     capability.Tier
 	runID    string
+	task     string // the run's task, used as the tool-search query
 }
 
 func newAgent(p provider.Provider, model, systemPrompt string, verbose bool, agentTools []tools.Tool, log *logger.Logger) *Agent {
@@ -157,6 +163,7 @@ func NewPlanner(p provider.Provider, model string, verbose bool, log *logger.Log
 
 // Run executes the ReAct loop and returns the final text answer.
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
+	a.task = userInput
 	a.logStart(userInput)
 
 	messages := []provider.Message{
@@ -318,21 +325,51 @@ func (a *Agent) buildToolDefs() []provider.ToolDef {
 		}
 	}
 
-	// Append registry tools after the built-ins, in registration order. The list
-	// is append-only and stable, so the serialized prefix stays cache-friendly. A
-	// registry tool shadowed by a built-in name is skipped (built-ins win in
-	// dispatch); author_tool rejects such collisions at authoring time (3c).
-	if a.registry != nil {
-		for _, spec := range a.registry.List(tools.ScopeAny) {
-			if _, isBuiltin := a.byName[spec.Name]; isBuiltin {
-				continue
-			}
-			defs = append(defs, provider.ToolDef{
-				Name:        spec.Name,
-				Description: spec.Description,
-				InputSchema: spec.InputSchema,
-			})
+	// Append registry tools after the built-ins. A tool shadowed by a built-in
+	// name is skipped (built-ins win in dispatch; author_tool rejects collisions).
+	for _, spec := range a.selectRegistryTools() {
+		if _, isBuiltin := a.byName[spec.Name]; isBuiltin {
+			continue
 		}
+		defs = append(defs, provider.ToolDef{
+			Name:        spec.Name,
+			Description: spec.Description,
+			InputSchema: spec.InputSchema,
+		})
 	}
 	return defs
+}
+
+// selectRegistryTools chooses which registry tools to offer the model. Below
+// maxInlineTools the whole catalog is offered in registration order (stable,
+// append-only — cache-friendly). Above it, only the top matches for the run's
+// task are offered, unioned with run-local ephemeral tools (which are few and
+// just-authored, so they must stay callable). The result is sorted by
+// registration order for a deterministic, stable list.
+func (a *Agent) selectRegistryTools() []tools.ToolSpec {
+	if a.registry == nil {
+		return nil
+	}
+	all := a.registry.List(tools.ScopeAny)
+	if len(all) <= maxInlineTools {
+		return all
+	}
+
+	keep := map[string]bool{}
+	for _, s := range a.registry.Search(a.task, maxInlineTools) {
+		keep[s.Name] = true
+	}
+	// Always keep ephemeral (run-local) tools so same-run authoring works even in
+	// a large catalog where the task query may not match the new tool.
+	for _, s := range a.registry.List(tools.ScopeEphemeral) {
+		keep[s.Name] = true
+	}
+
+	selected := make([]tools.ToolSpec, 0, len(keep))
+	for _, s := range all { // `all` is already in registration order
+		if keep[s.Name] {
+			selected = append(selected, s)
+		}
+	}
+	return selected
 }
