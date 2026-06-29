@@ -84,7 +84,7 @@ func searchDDG(ctx context.Context, query string, maxResults int) (string, error
 		return "No results found.", nil
 	}
 
-	return strings.Join(results, "\n\n"), nil
+	return wrapUntrusted(fmt.Sprintf("web search for %q", query), strings.Join(results, "\n\n")), nil
 }
 
 // extractDDGURL pulls the real URL out of a DDG redirect like /l/?uddg=https%3A%2F%2F...

@@ -68,7 +68,7 @@ func fetchPage(ctx context.Context, rawURL string) (string, error) {
 		text = text[:maxFetchChars] + fmt.Sprintf("\n\n[truncated — %d chars total]", len(text))
 	}
 
-	return text, nil
+	return wrapUntrusted(rawURL, text), nil
 }
 
 // cleanText collapses repeated whitespace and removes blank lines
