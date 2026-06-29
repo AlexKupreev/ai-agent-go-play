@@ -3,21 +3,28 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"ai-agent-go-play/internal/tools"
 )
 
-// NewServer returns the SSE transport adapter: net/http handlers over the Engine
-// and the approval queue. This is the only file that knows the wire is HTTP+SSE — a
-// future JSON-RPC adapter is a sibling over the same core (see docs/api-transport.md).
+// NewServer returns the SSE transport adapter: net/http handlers over the Engine,
+// the approval queue, and the tool catalog. This is the only file that knows the
+// wire is HTTP+SSE — a future JSON-RPC adapter is a sibling over the same core (see
+// docs/api-transport.md).
 //
-// approvals may be nil (run/stream only); the approval endpoints are registered just
-// when a queue is supplied.
-func NewServer(e *Engine, approvals *ApprovalQueue) http.Handler {
+// approvals and catalog may each be nil; their endpoints are registered only when
+// the corresponding dependency is supplied (run/stream is always available).
+func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /runs", handleStartRun(e))
 	mux.HandleFunc("GET /runs/{id}/events", handleRunEvents(e))
 	if approvals != nil {
 		mux.HandleFunc("GET /approvals", handleListApprovals(approvals))
 		mux.HandleFunc("POST /approvals/{id}", handleResolveApproval(approvals))
+	}
+	if catalog != nil {
+		mux.HandleFunc("GET /tools", handleListTools(catalog))
+		mux.HandleFunc("GET /tools/search", handleSearchTools(catalog))
 	}
 	return mux
 }

@@ -46,7 +46,7 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 				return "did it", nil
 			})
 
-			srv := httptest.NewServer(NewServer(NewEngine(runner), q))
+			srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil))
 			defer srv.Close()
 
 			// Start a run; it will block in the queue.
@@ -77,7 +77,7 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 }
 
 func TestHTTP_ResolveUnknownIs404(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), NewApprovalQueue()))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), NewApprovalQueue(), nil))
 	defer srv.Close()
 
 	body, _ := json.Marshal(resolveApprovalRequest{Approved: true})

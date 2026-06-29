@@ -309,10 +309,15 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     and endpoints. Tests:
     `approval_test.go` (park→list→resolve for approve/deny; unknown id = 404). Design in
     [`api-transport.md`](api-transport.md).
-- [ ] **Tools over the API:** `GET /tools`, `GET /tools/search?q=`.
+- [x] **Tools over the API.** `internal/api/tools.go`: `GET /tools` (catalog in registration order)
+    and `GET /tools/search?q=&k=` (relevance-ranked) over the `tools.Registry`; wire `ToolView`
+    omits impl source. `serve` now builds **one** persistent registry shared between the executor and
+    the endpoints, so a tool authored in a run is immediately visible to later runs and to the API.
+    `NewServer` gained a nil-able `catalog` arg (endpoints registered only when supplied). Tests:
+    `tools_test.go` (list order/fields, search ranking + missing-`q` 400, absent-without-catalog 404).
 - [ ] **CLI as a client** of the engine (peer to future frontends).
 - *Acceptance:* a run can be started and streamed over the API ✅; an escalation parks in the queue and
-    is resolved by an API call ✅.
+    is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅.
 
 ### 4d — Long-term memory
 

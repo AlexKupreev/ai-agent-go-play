@@ -26,7 +26,7 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - `POST /runs` → `{run_id}`
 - `GET /runs/{id}/events` → SSE stream of run events
 - `GET /approvals`, `POST /approvals/{id}` → list / resolve a parked approval
-- `GET /tools`, `GET /tools/search?q=` (later in 4c)
+- `GET /tools`, `GET /tools/search?q=&k=` → list / search the tool catalog
 
 **Pros:** stdlib only (no deps); `curl`-able; trivial to debug; single binary; browser-native
 via `EventSource`; maps directly onto `Observer.Emit` → one SSE frame per event, and the

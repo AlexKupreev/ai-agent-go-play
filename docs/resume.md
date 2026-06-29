@@ -129,8 +129,11 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
     (park/block in `Approve`, `Resolve` single-shot, `Pending` snapshot); SSE adds `GET /approvals` +
     `POST /approvals/{id}`; `serve` shares one queue between executor and endpoints; `engine.StartRun`
     now owns the run's context (was bound to the request ctx → aborted runs mid-approval). Tests in
-    `internal/api/approval_test.go`. All green. **NEXT 4c increments:** (a) `GET /tools` +
-    `/tools/search`; (b) CLI-as-client of the engine. Then 4d (memory) / 4e (frontends).
+    `internal/api/approval_test.go`. **Tools-over-API DONE:** `internal/api/tools.go` `GET /tools` +
+    `GET /tools/search?q=&k=` over `tools.Registry` (wire `ToolView`, no source); `serve` shares ONE
+    persistent registry between executor and endpoints (authored tools visible across runs + API);
+    `NewServer(e, approvals, catalog)` — both optionals nil-able. Tests `internal/api/tools_test.go`.
+    All green. **NEXT 4c increment:** CLI-as-client of the engine. Then 4d (memory) / 4e (frontends).
 11. **Forks to settle when reached** (in plan.md): transport (4c, leaning HTTP+SSE); first frontend
     Telegram vs web (4e, leaning Telegram); SQLite vs JSONL store.
 12. Housekeeping: **change commit timestamps** (user asked — do this across the Phase 1.5–4 commits

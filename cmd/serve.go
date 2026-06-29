@@ -36,12 +36,24 @@ var serveCmd = &cobra.Command{
 		// One approval queue, shared: the executor parks risky actions on it (as its
 		// Approver), and the HTTP endpoints resolve them.
 		approvals := api.NewApprovalQueue()
-		runner, err := newServeRunner(cfg, modelFlag, approvals)
+
+		// One tool catalog, shared across runs and exposed at GET /tools: a tool
+		// authored in one run is then visible to later runs and to the API.
+		catPath, err := catalogPath()
+		if err != nil {
+			return err
+		}
+		registry, err := tools.NewPersistentRegistry(catPath)
+		if err != nil {
+			return fmt.Errorf("failed to load tool catalog: %w", err)
+		}
+
+		runner, err := newServeRunner(cfg, modelFlag, approvals, registry)
 		if err != nil {
 			return err
 		}
 
-		srv := api.NewServer(api.NewEngine(runner), approvals)
+		srv := api.NewServer(api.NewEngine(runner), approvals, registry)
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
@@ -50,16 +62,13 @@ var serveCmd = &cobra.Command{
 }
 
 // newServeRunner builds the Runner the engine drives: each run gets its own disk
-// log, audit recorder, and executor, with engine events fanned alongside the log.
-func newServeRunner(cfg Config, model string, approver tools.Approver) (api.Runner, error) {
+// log and audit recorder, but shares the process-wide tool catalog and approver, so
+// authored tools and parked approvals are consistent across runs and with the API.
+func newServeRunner(cfg Config, model string, approver tools.Approver, registry tools.Registry) (api.Runner, error) {
 	prov := openaiprovider.New(cfg.OpenAIKey)
 	workDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
-	}
-	catPath, err := catalogPath()
-	if err != nil {
-		return nil, err
 	}
 
 	return api.RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
@@ -74,11 +83,6 @@ func newServeRunner(cfg Config, model string, approver tools.Approver) (api.Runn
 			return "", fmt.Errorf("failed to open audit log: %w", err)
 		}
 		defer rec.Close()
-
-		registry, err := tools.NewPersistentRegistry(catPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to load tool catalog: %w", err)
-		}
 
 		// Engine event stream + disk log see the same events.
 		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
