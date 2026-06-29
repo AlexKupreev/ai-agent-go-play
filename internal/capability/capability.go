@@ -44,6 +44,34 @@ const (
 	TierPermissive Tier = "permissive"
 )
 
+// AutoApproves reports whether a capability of this kind may be granted to an
+// agent-authored tool WITHOUT a human prompt at this tier. It is the policy that
+// decides which escalations the approval gate (author_tool) waves through versus
+// routes to ConfirmFunc — the user-tunable autonomy dial.
+//
+//   - Permissive: auto-approve everything (full autonomy; use only when watched).
+//   - Balanced:   auto-approve side-effect-free reads (clock, random, read_file);
+//     prompt for anything that writes, fetches the network, or calls other tools.
+//   - Safe:       prompt for every capability.
+//
+// The cap's own allowlist (hosts/path/tools) still bounds what it can touch; the
+// tier only decides whether a human must say yes first.
+func (t Tier) AutoApproves(kind Kind) bool {
+	switch t {
+	case TierPermissive:
+		return true
+	case TierBalanced:
+		switch kind {
+		case Clock, Random, ReadFile:
+			return true
+		default: // HTTPGet, WriteFile, CallTool
+			return false
+		}
+	default: // TierSafe and any unknown tier: confirm everything
+		return false
+	}
+}
+
 // GrantContext is what is live for one execution: the run it belongs to, the
 // capabilities granted, and the policy tier.
 type GrantContext struct {

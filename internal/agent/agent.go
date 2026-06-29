@@ -33,8 +33,9 @@ const executorPrompt = `You are a helpful AI agent with access to a shell and th
 When given a task:
 1. Think through what steps are needed
 2. Use tools to execute each step — shell for local operations, run_code for calculations and data shaping (sandboxed Lua), web_search to find information, web_fetch to read a specific page
-3. Observe the output and adjust if something fails
-4. Once done, provide a concise summary of what you did and the result
+3. If you find yourself repeating the same multi-step work, use author_tool to create a reusable, tested tool for it (request only the capabilities it needs); you can call the new tool immediately
+4. Observe the output and adjust if something fails
+5. Once done, provide a concise summary of what you did and the result
 
 Always explain briefly what you're about to do before each tool call.
 
@@ -107,18 +108,30 @@ func NewExecutor(p provider.Provider, workDir, model string, verbose bool, log *
 	broker := capability.NewBroker(rec, nil)
 	glue := sandbox.NewLuaGlue(broker)
 
+	runID := ""
+	if log != nil {
+		runID = log.RunID
+	}
+	authorTool := tools.NewAuthorTool(tools.AuthorToolDeps{
+		Registry: registry,
+		Glue:     glue,
+		Audit:    rec,
+		Tier:     tier,
+		RunID:    runID,
+		Confirm:  tools.StdinConfirm,
+	})
+
 	a := newAgent(p, model, executorPrompt, verbose, []tools.Tool{
 		tools.NewShell(workDir, tools.StdinConfirm),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
+		authorTool,
 	}, log)
 	a.registry = registry
 	a.glue = glue
 	a.tier = tier
-	if log != nil {
-		a.runID = log.RunID
-	}
+	a.runID = runID
 
 	// Trust boundary: every built-in runs with ambient authority (Trusted), but
 	// only web_search/web_fetch are Exposed to sandboxed code. So call_tool can
@@ -144,17 +157,19 @@ func NewPlanner(p provider.Provider, model string, verbose bool, log *logger.Log
 
 // Run executes the ReAct loop and returns the final text answer.
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
-	a.log.LogStart(userInput)
+	a.logStart(userInput)
 
 	messages := []provider.Message{
 		provider.SystemText(a.systemPrompt),
 		provider.UserText(userInput),
 	}
 
-	toolDefs := a.buildToolDefs()
-
 	for i := range maxIterations {
-		a.log.LogRequest(i, messages)
+		// Recompute each iteration so a tool authored mid-run becomes callable on
+		// the next step. The list is append-only and stable, so the serialized
+		// prefix is unchanged until a tool is added — cache stays warm.
+		toolDefs := a.buildToolDefs()
+		a.logRequest(i, messages)
 
 		start := time.Now()
 		resp, err := a.provider.Step(ctx, provider.StepRequest{
@@ -170,7 +185,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 
 		text := resp.Text()
 		toolCalls := resp.ToolCalls()
-		a.log.LogResponse(i, text, toolCalls, resp.Usage, durationMs)
+		a.logResponse(i, text, toolCalls, resp.Usage, durationMs)
 
 		if len(toolCalls) == 0 {
 			return text, nil
@@ -196,13 +211,39 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 			if a.verbose {
 				fmt.Fprintf(os.Stderr, "[result] %s\n", result)
 			}
-			a.log.LogToolResult(call.Name, call.ID, string(call.Input), result)
+			a.logToolResult(call.Name, call.ID, string(call.Input), result)
 
 			messages = append(messages, provider.ToolResultMessage(call.ID, result, err != nil))
 		}
 	}
 
 	return "", fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
+}
+
+// Logging is nil-safe so the executor can run without a disk logger (tests,
+// embedded use).
+func (a *Agent) logStart(task string) {
+	if a.log != nil {
+		a.log.LogStart(task)
+	}
+}
+
+func (a *Agent) logRequest(i int, messages any) {
+	if a.log != nil {
+		a.log.LogRequest(i, messages)
+	}
+}
+
+func (a *Agent) logResponse(i int, text string, toolCalls, usage any, durationMs int64) {
+	if a.log != nil {
+		a.log.LogResponse(i, text, toolCalls, usage, durationMs)
+	}
+}
+
+func (a *Agent) logToolResult(name, id, args, result string) {
+	if a.log != nil {
+		a.log.LogToolResult(name, id, args, result)
+	}
 }
 
 func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string, error) {
@@ -245,7 +286,7 @@ func (a *Agent) runRegistered(ctx context.Context, spec tools.ToolSpec, args map
 			return "", fmt.Errorf("tool %q: no sandbox available", spec.Name)
 		}
 		grant := &capability.GrantContext{Run: a.runID, Granted: spec.RequiredCaps, Tier: a.tier}
-		return a.glue.Run(ctx, spec.Impl.Source, args, grant, scriptTimeout)
+		return a.glue.Run(ctx, tools.WrapScript(spec.Impl.Source), args, grant, scriptTimeout)
 	default:
 		return "", fmt.Errorf("tool %q: unknown impl kind %q", spec.Name, spec.Impl.Kind)
 	}

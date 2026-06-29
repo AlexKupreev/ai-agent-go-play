@@ -18,6 +18,15 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+// Parse compiles code without running it, returning a syntax error if any. Used
+// by author_tool to validate authored source before approval/registration.
+func Parse(code string) error {
+	L := lua.NewState(lua.Options{SkipOpenLibs: true})
+	defer L.Close()
+	_, err := L.LoadString(code)
+	return err
+}
+
 // LuaGlue runs Lua scripts, brokering effects through a capability.Broker.
 // The broker may be nil for compute-only use (empty grants need no broker).
 type LuaGlue struct {
