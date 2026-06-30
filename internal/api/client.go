@@ -17,7 +17,6 @@ import (
 type Client struct {
 	BaseURL string // e.g. "http://127.0.0.1:8080"
 	HTTP    *http.Client
-	Owner   string // session identity asserted to the engine (X-Agent-Owner); "" ⇒ "local"
 }
 
 // NewClient returns a client for the engine at baseURL.
@@ -32,19 +31,9 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-// newRequest builds a request carrying the client's owner header, so every call is
-// scoped to this client's session.
+// newRequest builds a request against the engine.
 func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
-	if err != nil {
-		return nil, err
-	}
-	owner := c.Owner
-	if owner == "" {
-		owner = "local"
-	}
-	req.Header.Set(ownerHeader, owner)
-	return req, nil
+	return http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 }
 
 // StartRun starts a run and returns its id.

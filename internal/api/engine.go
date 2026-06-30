@@ -11,9 +11,7 @@ import (
 	"ai-agent-go-play/internal/agent"
 )
 
-// ErrUnknownRun is returned when a run id is not found — or is not visible to the
-// requesting owner. Not-owner collapses to not-found on purpose: a user must not be
-// able to probe for the existence of another user's run (Phase 4e session isolation).
+// ErrUnknownRun is returned when a run id is not found.
 var ErrUnknownRun = errors.New("unknown run")
 
 // Run states.
@@ -26,23 +24,22 @@ const (
 // Runner executes a task to completion, emitting run events to obs. It abstracts
 // the agent wiring (provider, registry, broker, executor) so the API core stays
 // independent of how a run is assembled — cmd injects the real wiring, tests inject
-// a fake. owner labels the run's session (scopes approvals + owned data).
+// a fake.
 type Runner interface {
-	Run(ctx context.Context, task, owner string, obs agent.Observer) (string, error)
+	Run(ctx context.Context, task string, obs agent.Observer) (string, error)
 }
 
 // RunnerFunc adapts a plain function to Runner.
-type RunnerFunc func(ctx context.Context, task, owner string, obs agent.Observer) (string, error)
+type RunnerFunc func(ctx context.Context, task string, obs agent.Observer) (string, error)
 
-func (f RunnerFunc) Run(ctx context.Context, task, owner string, obs agent.Observer) (string, error) {
-	return f(ctx, task, owner, obs)
+func (f RunnerFunc) Run(ctx context.Context, task string, obs agent.Observer) (string, error) {
+	return f(ctx, task, obs)
 }
 
-// RunInfo is the metadata + status of a run, owner-scoped and serializable for the
-// management endpoints (GET /runs, GET /runs/{id}).
+// RunInfo is the metadata + status of a run, serializable for the management
+// endpoints (GET /runs, GET /runs/{id}).
 type RunInfo struct {
 	ID        string     `json:"id"`
-	Owner     string     `json:"owner"`
 	Task      string     `json:"task"`
 	State     string     `json:"state"` // running | done | error
 	StartedAt time.Time  `json:"started_at"`
@@ -82,18 +79,14 @@ func NewEngine(r Runner) *Engine {
 	return &Engine{runner: r, runs: make(map[string]*run)}
 }
 
-// StartRun begins a run in the background and returns its id. owner labels the
-// session; an empty owner defaults to "local" (single-user CLI). Events flow to the
+// StartRun begins a run in the background and returns its id. Events flow to the
 // run's Hub, which callers reach via Subscribe; the hub closes when the run ends.
 //
 // The run gets its own cancellable context, not the caller's: it outlives the
 // request that started it (an HTTP handler's context is cancelled when the handler
 // returns, which would abort the run mid-flight — e.g. while it waits for an
 // approval). The stored cancel is the per-run kill switch (StopRun).
-func (e *Engine) StartRun(task, owner string) string {
-	if owner == "" {
-		owner = "local"
-	}
+func (e *Engine) StartRun(task string) string {
 	id := newRunID()
 	hub := newHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -103,7 +96,6 @@ func (e *Engine) StartRun(task, owner string) string {
 		cancel: cancel,
 		info: RunInfo{
 			ID:        id,
-			Owner:     owner,
 			Task:      task,
 			State:     StateRunning,
 			StartedAt: time.Now().UTC(),
@@ -116,7 +108,7 @@ func (e *Engine) StartRun(task, owner string) string {
 
 	go func() {
 		defer cancel() // release the run context once the run finishes
-		result, err := e.runner.Run(ctx, task, owner, hub)
+		result, err := e.runner.Run(ctx, task, hub)
 
 		ended := time.Now().UTC()
 		r.mu.Lock()
@@ -141,22 +133,21 @@ func (e *Engine) StartRun(task, owner string) string {
 	return id
 }
 
-// lookup returns a run only if it exists AND belongs to owner; otherwise
-// ErrUnknownRun (not-owner is indistinguishable from not-found by design).
-func (e *Engine) lookup(owner, id string) (*run, error) {
+// lookup returns a run by id, or ErrUnknownRun if it does not exist.
+func (e *Engine) lookup(id string) (*run, error) {
 	e.mu.Lock()
 	r, ok := e.runs[id]
 	e.mu.Unlock()
-	if !ok || r.snapshot().Owner != owner {
+	if !ok {
 		return nil, ErrUnknownRun
 	}
 	return r, nil
 }
 
-// Subscribe returns the event stream for one of owner's runs (history replayed, then
-// live) plus a cancel func to detach. ErrUnknownRun if the id is unknown to owner.
-func (e *Engine) Subscribe(owner, id string) (<-chan Event, func(), error) {
-	r, err := e.lookup(owner, id)
+// Subscribe returns the event stream for a run (history replayed, then live) plus a
+// cancel func to detach. ErrUnknownRun if the id is unknown.
+func (e *Engine) Subscribe(id string) (<-chan Event, func(), error) {
+	r, err := e.lookup(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -164,11 +155,11 @@ func (e *Engine) Subscribe(owner, id string) (<-chan Event, func(), error) {
 	return ch, cancel, nil
 }
 
-// StopRun cancels one of owner's runs (the kill switch). Cancellation propagates
-// through the run context to provider.Step/tools, so the run stops at the next
-// model/tool boundary. ErrUnknownRun if the id is unknown to owner. Idempotent.
-func (e *Engine) StopRun(owner, id string) error {
-	r, err := e.lookup(owner, id)
+// StopRun cancels a run (the kill switch). Cancellation propagates through the run
+// context to provider.Step/tools, so the run stops at the next model/tool boundary.
+// ErrUnknownRun if the id is unknown. Idempotent.
+func (e *Engine) StopRun(id string) error {
+	r, err := e.lookup(id)
 	if err != nil {
 		return err
 	}
@@ -176,14 +167,12 @@ func (e *Engine) StopRun(owner, id string) error {
 	return nil
 }
 
-// ListRuns returns owner's runs, newest first.
-func (e *Engine) ListRuns(owner string) []RunInfo {
+// ListRuns returns all runs, newest first.
+func (e *Engine) ListRuns() []RunInfo {
 	e.mu.Lock()
 	out := make([]RunInfo, 0, len(e.runs))
 	for _, r := range e.runs {
-		if info := r.snapshot(); info.Owner == owner {
-			out = append(out, info)
-		}
+		out = append(out, r.snapshot())
 	}
 	e.mu.Unlock()
 	// Newest first by start time.
@@ -195,9 +184,9 @@ func (e *Engine) ListRuns(owner string) []RunInfo {
 	return out
 }
 
-// RunStatus returns the metadata for one of owner's runs. ErrUnknownRun otherwise.
-func (e *Engine) RunStatus(owner, id string) (RunInfo, error) {
-	r, err := e.lookup(owner, id)
+// RunStatus returns the metadata for a run. ErrUnknownRun otherwise.
+func (e *Engine) RunStatus(id string) (RunInfo, error) {
+	r, err := e.lookup(id)
 	if err != nil {
 		return RunInfo{}, err
 	}

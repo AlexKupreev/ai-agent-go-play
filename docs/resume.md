@@ -20,27 +20,20 @@ _Last session: 2026-06-29._
   `capability.ParseTier`, tested). Fixed a latent bug: the setters now merge into the existing
   config instead of overwriting (old `set-key` would clobber). `saveConfig` message made generic.
 - Build/vet/test all green.
-- **Phase 4e planned + staged in `plan.md`** (4e-1…4e-6). **Multi-user model SETTLED: owned data +
-  isolated sessions, sharing opt-in** — several *trusted* users (author + family) on one engine;
-  (1) session independence (no run waits on another; no user sees/approves/cancels another's
-  session), (2) each user/session **owns its memory + tools by default**, sharing is explicit
-  opt-in (shared flag / `Shared` scope). `Owner` is a trusted label asserted by the frontend, **not**
-  an auth boundary — hostile isolation stays a non-goal. Activates the latent `User`≠`Shared` tool
-  scope. Key finding: **compute independence already exists** (goroutine-per-run + fresh
-  executor-per-run + concurrent-safe shared stores); the gaps are the **global approval queue**
-  (`Pending()`/`Resolve` aren't owner-scoped → users see each other's escalations) and unscoped
-  run-list/cancel. design §1/§5 updated to record multi-user (trusted, owned, session-isolated).
-- **4e-1 DONE.** Identity foundation + run lifecycle + session isolation. `Engine.StartRun(task,
-  owner)` + run metadata (`RunInfo`) + `StopRun`/`ListRuns`/`RunStatus`, all owner-scoped via
-  `lookup` (not-owner ⇒ not-found, can't probe). `ApprovalQueue.Pending(owner)`/`Resolve(owner,id)`
-  now owner-scoped — **this closed the one real correctness gap** (global queue leaked escalations
-  across users). Owner flows engine→runner→`NewExecutor(…, owner, …)`→shell/author_tool approval
-  requests; over HTTP via `X-Agent-Owner` header (default `local`). New endpoints `GET /runs`,
-  `GET /runs/{id}`, `POST /runs/{id}/cancel`. `Client` gained `Owner`/`StopRun`/`RunStatus`/
-  `ListRuns`; CLI `agent stop`, `agent client --user`, `signal.NotifyContext` Ctrl+C cancels
-  (in-process for `run`, remote for `client`). Tests in `internal/api/runs_test.go`; live-checked
-  serve wiring. **Next: 4e-2** (per-user data ownership — memory namespacing + `User`≠`Shared` tools
-  + opt-in sharing; will update memory.md/tools.md with the sharing mechanics then).
+- **Phase 4e planned + staged in `plan.md`** (4e-1, 4e-3…4e-6). **Multi-user model DROPPED — engine is
+  single-user (one shared trust domain, design §1).** An earlier draft added a per-run `Owner` label,
+  session isolation, and per-user data ownership (private memory/tools, opt-in sharing); it was removed
+  to simplify — a family sharing one trusted box shares its memory + tool catalog, and a user with
+  shell access could reach another's data anyway. Concurrent runs stay compute-independent
+  (goroutine-per-run + fresh executor-per-run + concurrent-safe shared stores) but share data freely.
+  design §1/§5, plan.md, tools.md, memory.md, api-transport.md all updated to record single-user.
+- **4e-1 DONE.** Run lifecycle (no identity layer). `Engine.StartRun(task)` + run metadata (`RunInfo`)
+  + `StopRun`/`ListRuns`/`RunStatus` via `lookup(id)` (`ErrUnknownRun` if absent). New endpoints
+  `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`. `Client` gained `StopRun`/`RunStatus`/
+  `ListRuns`; CLI `agent stop`, `signal.NotifyContext` Ctrl+C cancels (in-process for `run`, remote
+  for `client`). Tests in `internal/api/runs_test.go` (`TestCancelStopsRun`, `TestUnknownRunStatusIs404`).
+  *(The old owner-scoping + the old 4e-2 data-ownership phase were removed.)* **Next: 4e-3** (tool
+  revoke over the API).
 
 ---
 

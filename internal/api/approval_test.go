@@ -30,13 +30,12 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 
 			// The runner asks the queue to approve a destructive action, mirroring
 			// what shell/author_tool do through the Approver seam.
-			runner := RunnerFunc(func(ctx context.Context, task, owner string, obs agent.Observer) (string, error) {
+			runner := RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
 				ok, err := q.Approve(ctx, tools.ApprovalRequest{
 					Kind:   "shell.destructive",
 					Title:  "rm -rf build",
 					Detail: "rm -rf ./build",
 					RunID:  task,
-					Owner:  owner,
 				})
 				if err != nil {
 					return "", err

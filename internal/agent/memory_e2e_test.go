@@ -23,7 +23,7 @@ func TestMemory_PersistsAcrossRuns(t *testing.T) {
 		toolCallStep("c1", "remember", map[string]any{"key": "user.editor", "value": "neovim", "tags": []any{"preference"}}),
 		textStep("noted your editor"),
 	}}
-	exec1 := NewExecutor(run1, t.TempDir(), "", "run-1", "", nil, tools.NewMemoryRegistry(), store, rec, capability.TierBalanced, nil)
+	exec1 := NewExecutor(run1, t.TempDir(), "", "run-1", nil, tools.NewMemoryRegistry(), store, rec, capability.TierBalanced, nil)
 	if _, err := exec1.Run(context.Background(), "remember my editor is neovim"); err != nil {
 		t.Fatalf("run 1: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestMemory_PersistsAcrossRuns(t *testing.T) {
 		toolCallStep("c2", "recall", map[string]any{"key": "user.editor"}),
 		textStep("your editor is neovim"),
 	}}
-	exec2 := NewExecutor(run2, t.TempDir(), "", "run-2", "", obs, tools.NewMemoryRegistry(), store, rec, capability.TierBalanced, nil)
+	exec2 := NewExecutor(run2, t.TempDir(), "", "run-2", obs, tools.NewMemoryRegistry(), store, rec, capability.TierBalanced, nil)
 	if _, err := exec2.Run(context.Background(), "what editor do I use?"); err != nil {
 		t.Fatalf("run 2: %v", err)
 	}

@@ -90,8 +90,9 @@ fact remembered in one run is recallable by later runs and any future frontend.
 - **Benefit:** this *is* the 4d acceptance criterion, and it falls out of sharing one instance —
   no per-run reload needed.
 - **Drawback:** all runs on one engine share one global keyspace (no per-run or per-user
-  namespacing). Correct for the single-user deployment (§1); per-user scoping is a Phase 4+ concern
-  if the trust model ever widens.
+  namespacing). Correct for the single-user deployment (§1) — the trusted users share one memory.
+  Per-user scoping was considered (an earlier Phase 4e draft) and **dropped**; revisit only if the
+  trust model ever widens to untrusted users.
 
 ---
 
@@ -130,6 +131,6 @@ The executor prompt tells the model it has cross-run memory: `recall` at the sta
 | Auto-recall (inject top-k relevant notes into the run's context at start) | v2 | v1 is tool-driven to keep prompt-cache behavior predictable; add once the store proves out |
 | `forget` tool (agent-driven delete) + delete audit event | Phase 4e | `Store.Delete` exists; surface it with the management plane |
 | Expose read-only `recall` to the sandbox | when an authored tool needs it | idempotent like `web_fetch`, but a deliberate boundary decision, not a default |
-| Per-run / per-user namespacing | Phase 4+ | single-user box shares one keyspace (design §1) |
+| ~~Per-run / per-user namespacing~~ | — | **dropped** — single-user box shares one keyspace (design §1) |
 | Value versioning / history | non-goal | upsert is enough for notes; audit records that a write happened |
 | SQLite backing | post-Phase-4 | when catalog + audit + memory want one transactional store (design §9) |

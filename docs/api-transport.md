@@ -30,11 +30,11 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - `GET /approvals`, `POST /approvals/{id}` → list / resolve a parked approval
 - `GET /tools`, `GET /tools/search?q=&k=` → list / search the tool catalog
 
-**Owner scoping (Phase 4e-1).** Every request carries an `X-Agent-Owner` header (the trusted
-frontend asserts it; absent ⇒ `local`). Runs and approvals are scoped to their owner: a caller
-sees, streams, cancels, and resolves only its own — another owner's run/approval is invisible
-(404, not 403, so existence can't be probed). The owner is a **scoping/attribution label, not an
-auth credential** (design §1/§5); network-facing auth lives in the frontend.
+**No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
+approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an
+`X-Agent-Owner` header + owner-scoped runs/approvals; it was **removed** — the trusted users share
+one engine and one data domain. Network-facing auth (who may reach the engine) lives in the
+frontend, not in a per-request owner label.
 
 **Pros:** stdlib only (no deps); `curl`-able; trivial to debug; single binary; browser-native
 via `EventSource`; maps directly onto `Observer.Emit` → one SSE frame per event, and the

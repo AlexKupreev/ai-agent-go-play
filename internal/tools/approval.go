@@ -16,7 +16,6 @@ type ApprovalRequest struct {
 	Title  string // short human summary
 	Detail string // full text: the command, or the capability list
 	RunID  string // owning run, for routing/queueing (may be empty)
-	Owner  string // owning user, for scoping a parked request to its session (Phase 4e)
 }
 
 // Approver decides whether an action may proceed. Approve may block — a CLI

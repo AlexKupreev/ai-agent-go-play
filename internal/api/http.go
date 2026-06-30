@@ -32,19 +32,7 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http
 	return mux
 }
 
-// ownerHeader carries the caller's session identity. The trusted frontend asserts
-// it (a Telegram user, the CLI's local user); it is a scoping/attribution label,
-// NOT an authentication credential (design §1/§5). Absent ⇒ "local" (single-user).
-const ownerHeader = "X-Agent-Owner"
-
-func ownerOf(r *http.Request) string {
-	if o := r.Header.Get(ownerHeader); o != "" {
-		return o
-	}
-	return "local"
-}
-
-// runErrStatus maps an engine run error to an HTTP status: unknown/not-owner ⇒ 404.
+// runErrStatus maps an engine run error to an HTTP status: unknown run ⇒ 404.
 func runErrStatus(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusNotFound)
 }
@@ -68,23 +56,23 @@ func handleStartRun(e *Engine) http.HandlerFunc {
 			http.Error(w, "task is required", http.StatusBadRequest)
 			return
 		}
-		id := e.StartRun(req.Task, ownerOf(r))
+		id := e.StartRun(req.Task)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(startRunResponse{RunID: id})
 	}
 }
 
-// handleListRuns serves GET /runs — the caller's runs, newest first.
+// handleListRuns serves GET /runs — all runs, newest first.
 func handleListRuns(e *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, e.ListRuns(ownerOf(r)))
+		writeJSON(w, e.ListRuns())
 	}
 }
 
-// handleRunStatus serves GET /runs/{id} — metadata for one of the caller's runs.
+// handleRunStatus serves GET /runs/{id} — metadata for a run.
 func handleRunStatus(e *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		info, err := e.RunStatus(ownerOf(r), r.PathValue("id"))
+		info, err := e.RunStatus(r.PathValue("id"))
 		if err != nil {
 			runErrStatus(w, err)
 			return
@@ -93,11 +81,10 @@ func handleRunStatus(e *Engine) http.HandlerFunc {
 	}
 }
 
-// handleCancelRun serves POST /runs/{id}/cancel — the per-run kill switch, scoped to
-// the caller's runs.
+// handleCancelRun serves POST /runs/{id}/cancel — the per-run kill switch.
 func handleCancelRun(e *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := e.StopRun(ownerOf(r), r.PathValue("id")); err != nil {
+		if err := e.StopRun(r.PathValue("id")); err != nil {
 			runErrStatus(w, err)
 			return
 		}
@@ -113,7 +100,7 @@ func handleRunEvents(e *Engine) http.HandlerFunc {
 			return
 		}
 
-		ch, cancel, err := e.Subscribe(ownerOf(r), r.PathValue("id"))
+		ch, cancel, err := e.Subscribe(r.PathValue("id"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -144,7 +131,7 @@ func handleRunEvents(e *Engine) http.HandlerFunc {
 func handleListApprovals(q *ApprovalQueue) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(q.Pending(ownerOf(r)))
+		_ = json.NewEncoder(w).Encode(q.Pending())
 	}
 }
 
@@ -159,7 +146,7 @@ func handleResolveApproval(q *ApprovalQueue) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		if err := q.Resolve(ownerOf(r), r.PathValue("id"), req.Approved); err != nil {
+		if err := q.Resolve(r.PathValue("id"), req.Approved); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

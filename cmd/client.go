@@ -16,7 +16,6 @@ import (
 )
 
 var clientAddrFlag string
-var clientUserFlag string
 
 var clientCmd = &cobra.Command{
 	Use:   "client <task>",
@@ -28,7 +27,6 @@ var clientCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		task := strings.Join(args, " ")
 		c := api.NewClient("http://" + clientAddrFlag)
-		c.Owner = clientUserFlag
 
 		// First Ctrl+C cancels the *remote* run and detaches; a second is no longer
 		// caught and force-quits the client.
@@ -68,7 +66,6 @@ var stopCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c := api.NewClient("http://" + clientAddrFlag)
-		c.Owner = clientUserFlag
 		if err := c.StopRun(cmd.Context(), args[0]); err != nil {
 			return err
 		}
@@ -137,7 +134,5 @@ func watchApprovals(ctx context.Context, c *api.Client) {
 
 func init() {
 	clientCmd.Flags().StringVar(&clientAddrFlag, "addr", "127.0.0.1:8080", "engine address to connect to")
-	clientCmd.Flags().StringVar(&clientUserFlag, "user", "local", "session identity asserted to the engine")
 	stopCmd.Flags().StringVar(&clientAddrFlag, "addr", "127.0.0.1:8080", "engine address to connect to")
-	stopCmd.Flags().StringVar(&clientUserFlag, "user", "local", "session identity asserted to the engine")
 }

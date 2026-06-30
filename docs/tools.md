@@ -80,14 +80,14 @@ SHA-256 over `lang\x00source` for scripts (over `kind\x00name` for natives, whic
 ## Scopes: lifetime and persistence
 
 `Ephemeral` (in-memory, dies with the run) · `User` · `Shared` (both persist to the JSON catalog).
-On the single-user CLI, `User` collapses to `Shared`.
+The engine is single-user (one shared trust domain, design §1), so `User` and `Shared` behave
+identically — both persist to the one shared catalog.
 
 - **Benefit:** the agent can author a throwaway tool for one run (`Ephemeral`) without polluting the
-  durable catalog, or promote a useful one to `Shared`. The collapse keeps single-user simple while
-  leaving room for a multi-frontend deployment later.
-- **Drawback:** `User`/`Shared` being the same store today means the distinction is latent — a
-  reader might expect per-user isolation that doesn't exist yet. Documented here so it isn't a
-  surprise.
+  durable catalog, or persist a useful one.
+- **Note:** the `User`/`Shared` enum values both exist in the code but resolve to the same shared
+  store. Per-user isolation was considered (an earlier Phase 4e draft) and **dropped** — the trusted
+  users share one catalog. The latent `User` value is harmless; treat persisted tools as shared.
 
 ---
 
@@ -248,4 +248,4 @@ calls it and `return true`).
 | BM25-lite / embedding search | post-3 | token overlap suffices for a small catalog |
 | In-run revoke + revoke audit event | Phase 4 | management plane |
 | SQLite store | post-3 | only when catalog+audit+event log want one transactional store |
-| Per-user isolation (`User` ≠ `Shared`) | Phase 4+ | single-user CLI doesn't need it yet |
+| ~~Per-user isolation (`User` ≠ `Shared`)~~ | — | **dropped** — engine is single-user (design §1) |

@@ -12,36 +12,29 @@ records **what is decided for this project, what exists today, and what to build
 
 ## 1. Deployment & trust model (read this first — it sizes everything else)
 
-- **Small, trusted user base: the author and family.** Not a public, multi-tenant service.
-- **Multiple trusted users, one engine — owned data + isolated sessions.** Several family members
-  may use the same engine concurrently. Two properties hold (Phase 4e):
-  - **Session independence.** No run waits on another (goroutine-per-run + fresh executor-per-run
-    + concurrent-safe shared stores already give this), and no user can see, approve, or cancel
-    another's session.
-  - **Data ownership, sharing opt-in.** A user (and their session) **owns its memory and authored
-    tools by default**; another user's data is reachable only by an explicit opt-in (a shared
-    space / `Shared` scope), never automatically.
-  Each run carries an **`Owner`** the trusted frontend asserts. Crucially, the owner is a **label
-  for scoping + attribution, not an authentication/authorization boundary** — these users trust
-  each other and the box. It buys "users don't trip over each other," not defense against a
-  malicious insider.
+- **Small, trusted user base: the author and family — one shared trust domain.** Not a public,
+  multi-tenant service. Everyone who can reach the engine is trusted, so the engine is **single-user
+  in its data model**: one shared keyspace for memory, one shared tool catalog. There is no per-user
+  `Owner`, no data ownership, and no session-isolation boundary — those were considered and
+  **deliberately dropped** as complexity the deployment doesn't need (a family sharing one box shares
+  its tools and memory). Concurrent runs are still independent at the compute level (goroutine-per-run
+  + fresh executor-per-run + concurrent-safe shared stores), but they share data freely.
 - **Frontends are for convenience, not exposure.** Web / Telegram / CLI are all welcome; they
-  are peer clients of one engine. No frontend is "the" frontend. Any network-facing auth (e.g. a
-  Telegram chat-id allowlist mapped to an `Owner`) lives in the **frontend**; the engine binds to
-  localhost and trusts the owner label it is handed.
+  are peer clients of one engine. No frontend is "the" frontend. The engine binds to localhost; any
+  network-facing auth (e.g. a Telegram chat-id allowlist) lives in the **frontend**, gating who may
+  reach the engine at all — not partitioning data between trusted users.
 - **What is *not* trusted:** the **content the agent ingests** (a web page or data file can
   carry a prompt-injection payload) and the **code the agent authors at runtime**. These are
   the only genuinely untrusted elements in the system. The users themselves remain trusted.
 - **Therefore the broker + sandbox exist for blast-radius limiting, auditability, and
   injection defense — proportionate to a private box — not for hostile-user isolation.**
-  Multi-tenant escape, per-user auth boundaries as a *security* barrier, and public-service
-  hardening are **non-goals**. (Per-user data scoping exists for ownership/convenience, not as a
-  hostile boundary.) Revisit only if the box ever opens to untrusted users — then a real auth
-  boundary + the Phase 5 wazero tier attach as siblings.
+  Multi-tenant escape, per-user auth boundaries, per-user data scoping, and public-service
+  hardening are **non-goals**. Revisit only if the box ever opens to untrusted users — then a real
+  auth boundary + per-user scoping + the Phase 5 wazero tier attach as siblings.
 
 This is the load-bearing context for §2 and §5: human-invoked / built-in tools are trusted;
-**machine-authored** tools are sandboxed and brokered; multiple trusted users get owned data and
-isolated sessions, but not a hostile-isolation boundary.
+**machine-authored** tools are sandboxed and brokered; the trusted users share one data domain
+without a hostile-isolation boundary.
 
 ---
 
@@ -171,17 +164,16 @@ For the authored tier:
   first hop is not a boundary: HTTP redirects are re-validated per hop against the host
   allowlist (done), and file paths are symlink-resolved before the prefix check so a link inside
   an allowed prefix cannot point outside it (done).
-- **Per-user scoping is ownership, not a security boundary (Phase 4e).** With multiple trusted
-  users (§1), each run carries an `Owner`; memory + authored tools are owned (private by default,
-  shared by opt-in) and the control plane (approvals, run list/cancel) is owner-scoped so users
-  don't trip over each other. This is **convenience + attribution among trusted users**, *not*
-  isolation against a malicious insider: the `Owner` is a label the frontend asserts, not an
-  authenticated principal, and a user with shell/box access can reach another's data directly.
-  Treat it accordingly — it sits *above* the trust line, unlike the broker which sits below it.
+- **No per-user scoping — one shared trust domain (§1).** The trusted users share one memory
+  keyspace and one tool catalog; there is no `Owner` label, no per-user data ownership, and no
+  session-isolation boundary. This was considered (an earlier Phase 4e draft) and dropped: among
+  users who trust each other and the box, owned/private data is ceremony without payoff, and a user
+  with shell access could reach another's data anyway. Concurrent runs stay compute-independent but
+  share data.
 
-What we deliberately **skip** (non-goals): multi-tenant isolation, per-user auth *as a security
-boundary* (the Phase-4e owner label is for scoping/attribution only, see above), hostile-user
-defense, hard per-instance memory caps (gopher-lua op/time limits + abort are enough here).
+What we deliberately **skip** (non-goals): multi-tenant isolation, per-user auth, per-user data
+scoping, hostile-user defense, hard per-instance memory caps (gopher-lua op/time limits + abort are
+enough here).
 
 ---
 

@@ -53,7 +53,7 @@ func TestShell_NonDestructiveSkipsConfirm(t *testing.T) {
 		t.Fatal("approver should not be called for a safe command")
 		return false, nil
 	})
-	sh := NewShell(t.TempDir(), "local", approver)
+	sh := NewShell(t.TempDir(), approver)
 	out, err := sh.Run(context.Background(), map[string]any{"command": "echo hello"})
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
@@ -66,7 +66,7 @@ func TestShell_NonDestructiveSkipsConfirm(t *testing.T) {
 func TestShell_DestructiveDeclined(t *testing.T) {
 	called := false
 	approver := ApproverFunc(func(context.Context, ApprovalRequest) (bool, error) { called = true; return false, nil })
-	sh := NewShell(t.TempDir(), "local", approver)
+	sh := NewShell(t.TempDir(), approver)
 
 	out, err := sh.Run(context.Background(), map[string]any{"command": "rm -rf /tmp/should-not-run-xyz"})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestShell_DestructiveDeclined(t *testing.T) {
 func TestShell_DestructiveApproved(t *testing.T) {
 	approver := ApproverFunc(func(context.Context, ApprovalRequest) (bool, error) { return true, nil })
 	dir := t.TempDir()
-	sh := NewShell(dir, "local", approver)
+	sh := NewShell(dir, approver)
 
 	// Overwrite redirection is flagged as destructive; approving should run it.
 	out, err := sh.Run(context.Background(), map[string]any{"command": "echo data > out.txt && cat out.txt"})
@@ -100,7 +100,7 @@ func TestShell_ApprovalErrorBlocks(t *testing.T) {
 	approver := ApproverFunc(func(context.Context, ApprovalRequest) (bool, error) {
 		return false, context.DeadlineExceeded
 	})
-	sh := NewShell(t.TempDir(), "local", approver)
+	sh := NewShell(t.TempDir(), approver)
 	out, err := sh.Run(context.Background(), map[string]any{"command": "rm -rf /tmp/should-not-run-xyz"})
 	if err != nil {
 		t.Fatalf("Run error: %v", err)

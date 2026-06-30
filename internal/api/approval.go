@@ -32,7 +32,6 @@ type PendingApproval struct {
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 	RunID  string `json:"run_id"`
-	Owner  string `json:"owner"`
 }
 
 func NewApprovalQueue() *ApprovalQueue {
@@ -67,37 +66,30 @@ func (q *ApprovalQueue) Approve(ctx context.Context, req tools.ApprovalRequest) 
 	}
 }
 
-// Pending returns a snapshot of owner's parked requests for a frontend to render.
-// A request is owner-scoped so one user never sees another user's escalation
-// (Phase 4e session isolation).
-func (q *ApprovalQueue) Pending(owner string) []PendingApproval {
+// Pending returns a snapshot of the parked requests for a frontend to render.
+func (q *ApprovalQueue) Pending() []PendingApproval {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]PendingApproval, 0, len(q.pending))
 	for _, p := range q.pending {
-		if p.req.Owner != owner {
-			continue
-		}
 		out = append(out, PendingApproval{
 			ID:     p.id,
 			Kind:   p.req.Kind,
 			Title:  p.req.Title,
 			Detail: p.req.Detail,
 			RunID:  p.req.RunID,
-			Owner:  p.req.Owner,
 		})
 	}
 	return out
 }
 
-// Resolve delivers a decision to one of owner's parked requests. It errors if the id
-// is unknown to owner (already resolved, expired, never existed, or owned by someone
-// else — not-owner collapses to unknown so a user can't probe others' requests).
-func (q *ApprovalQueue) Resolve(owner, id string, approved bool) error {
+// Resolve delivers a decision to a parked request. It errors if the id is unknown
+// (already resolved, expired, or never existed).
+func (q *ApprovalQueue) Resolve(id string, approved bool) error {
 	q.mu.Lock()
 	p, ok := q.pending[id]
 	q.mu.Unlock()
-	if !ok || p.req.Owner != owner {
+	if !ok {
 		return fmt.Errorf("unknown approval: %s", id)
 	}
 	// Buffered channel + single delivery: a second Resolve for the same id finds it

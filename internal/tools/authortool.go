@@ -23,7 +23,6 @@ type AuthorToolDeps struct {
 	Audit    audit.Recorder
 	Tier     capability.Tier
 	RunID    string
-	Owner    string   // owning user, for scoping a parked approval to its session (Phase 4e)
 	Approver Approver // approval gate for caps beyond the tier; nil = cannot escalate
 }
 
@@ -170,7 +169,6 @@ func (d AuthorToolDeps) approve(ctx context.Context, spec ToolSpec) string {
 		Title:  fmt.Sprintf("Authorize tool %q with elevated capabilities", spec.Name),
 		Detail: strings.Join(beyond, "\n"),
 		RunID:  d.RunID,
-		Owner:  d.Owner,
 	})
 	if err != nil {
 		return fmt.Sprintf("author_tool rejected: approval failed: %v", err)
