@@ -30,7 +30,7 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 
 			// The runner asks the queue to approve a destructive action, mirroring
 			// what shell/author_tool do through the Approver seam.
-			runner := RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
+			runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
 				ok, err := q.Approve(ctx, tools.ApprovalRequest{
 					Kind:   "shell.destructive",
 					Title:  "rm -rf build",
@@ -73,6 +73,76 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 				t.Fatalf("queue not drained: %+v", got)
 			}
 		})
+	}
+}
+
+// TestApprovalEmitter_PushesOntoRunStream proves 4e-5: a parked escalation appears
+// as an approval_requested event on its run's stream, and resolving it emits
+// approval_resolved (ordered ahead of the terminal done) — no polling required.
+func TestApprovalEmitter_PushesOntoRunStream(t *testing.T) {
+	q := NewApprovalQueue()
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+		ok, err := q.Approve(ctx, tools.ApprovalRequest{
+			Kind:   "shell.destructive",
+			Title:  "rm -rf build",
+			Detail: "rm -rf ./build",
+			RunID:  runID, // the engine's id — what routes the escalation back to this run
+		})
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "declined", nil
+		}
+		return "did it", nil
+	})
+	e := NewEngine(runner)
+	q.SetEmitter(e.PublishToRun)
+
+	id := e.StartRun("clean")
+	ch, cancel, err := e.Subscribe(id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	var approvalID, final string
+	var sawRequested, sawResolved bool
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timed out; requested=%v resolved=%v", sawRequested, sawResolved)
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("stream closed early; requested=%v resolved=%v", sawRequested, sawResolved)
+			}
+			switch ev.Kind {
+			case KindApprovalRequested:
+				sawRequested = true
+				approvalID = ev.ApprovalID
+				if ev.Tool != "shell.destructive" || ev.Text != "rm -rf build" || ev.Input != "rm -rf ./build" {
+					t.Fatalf("bad requested event: %+v", ev)
+				}
+				if err := q.Resolve(approvalID, true); err != nil {
+					t.Fatalf("resolve: %v", err)
+				}
+			case KindApprovalResolved:
+				sawResolved = true
+				if ev.ApprovalID != approvalID || ev.Approved == nil || !*ev.Approved {
+					t.Fatalf("bad resolved event: %+v", ev)
+				}
+			case KindDone:
+				if !sawRequested || !sawResolved {
+					t.Fatalf("done before approval events: requested=%v resolved=%v", sawRequested, sawResolved)
+				}
+				final = ev.Text
+				if final != "did it" {
+					t.Fatalf("final = %q, want %q", final, "did it")
+				}
+				return
+			}
+		}
 	}
 }
 

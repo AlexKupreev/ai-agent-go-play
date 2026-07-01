@@ -19,6 +19,13 @@ type Event struct {
 	Input     string `json:"input,omitempty"`
 	Result    string `json:"result,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+
+	// Approval escalation fields (KindApprovalRequested / KindApprovalResolved). A
+	// requested event carries the id a frontend POSTs back to resolve; a resolved
+	// event carries the decision. Reused fields on a requested event: Tool = the
+	// action category, Text = the human title, Input = the full detail.
+	ApprovalID string `json:"approval_id,omitempty"`
+	Approved   *bool  `json:"approved,omitempty"`
 }
 
 // fromAgentEvent projects an internal agent.Event onto the wire schema.
@@ -43,4 +50,12 @@ func fromAgentEvent(e agent.Event) Event {
 const (
 	KindDone  = "done"  // run finished; Text holds the final answer
 	KindError = "error" // run failed; Text holds the error message
+)
+
+// Approval escalation event kinds. Emitted into a run's stream by the shared
+// ApprovalQueue so a streaming frontend learns of a parked escalation (and its
+// resolution) in the event stream it is already reading, rather than by polling.
+const (
+	KindApprovalRequested = "approval_requested"
+	KindApprovalResolved  = "approval_resolved"
 )

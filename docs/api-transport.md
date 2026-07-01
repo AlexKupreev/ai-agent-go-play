@@ -34,6 +34,11 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
 
+Parked approvals are also **pushed onto the run's event stream** (`approval_requested` /
+`approval_resolved` events carrying `approval_id`), so a streaming frontend need not poll `/approvals`;
+`POST /approvals/{id}` still resolves. This relies on the engine's run id being threaded through the
+runner into the executor, so the escalation's `RunID` routes back to the right stream.
+
 **No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
 approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an
 `X-Agent-Owner` header + owner-scoped runs/approvals; it was **removed** — the trusted users share

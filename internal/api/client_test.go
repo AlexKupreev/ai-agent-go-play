@@ -16,7 +16,7 @@ import (
 // streaming, and confirm the streamed terminal event reflects the decision.
 func TestClient_DrivesRunWithApproval(t *testing.T) {
 	q := NewApprovalQueue()
-	runner := RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
 		obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 		ok, err := q.Approve(ctx, tools.ApprovalRequest{Kind: "shell.destructive", Title: "rm", Detail: "rm -rf x", RunID: task})
 		if err != nil {

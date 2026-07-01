@@ -334,9 +334,9 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c, 4d, 4e-1, 4e-3, and 4e-4 are complete.** Next: **4e-5** (approval events on the stream, poll →
-push). *(4e-2, per-user data ownership, was dropped — the engine stays single-user; see the multi-user
-decision above.)*
+**4c, 4d, 4e-1, 4e-3, 4e-4, and 4e-5 are complete.** Next: **4e-6** (Telegram frontend as a peer
+client — resolves the frontend fork). *(4e-2, per-user data ownership, was dropped — the engine stays
+single-user; see the multi-user decision above.)*
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
@@ -415,15 +415,22 @@ approvals; that was removed — the engine is single-user, see the multi-user de
     JSON/JSONL backings behind their existing interfaces when it bites, not before. `JSONLRecorder.Tail`
     re-reads the whole file per call, which is the natural pressure point for that swap.
 
-#### 4e-5 — Approval events on the stream (poll → push)
+#### 4e-5 — Approval events on the stream (poll → push)  *(DONE)*
 
-- [ ] The UX seam. `ApprovalQueue.Approve` currently parks silently; a streaming client learns of an
-    escalation only by polling `/approvals`. Give the queue an observer hook so parking/resolving
-    **emits `approval_requested` / `approval_resolved` events into the run's hub**. Any streaming
-    frontend then learns of an escalation in the event stream it is already reading; the existing
-    `POST /approvals/{id}` resolves it. Small change, big leverage for every frontend.
+- [x] `ApprovalQueue` gained an emitter hook (`SetEmitter(func(runID string, ev Event))`, wired in
+    `serve` to `Engine.PublishToRun`). `Approve` emits `approval_requested` when it parks; the *run's own
+    goroutine* emits `approval_resolved` the instant it receives the decision (ordered ahead of the
+    terminal `done`, so it can't be dropped by the hub closing). `Engine.PublishToRun(runID, ev)`
+    broadcasts into a run's hub (+ replay history), no-op on unknown/closed. New event kinds +
+    `Event.ApprovalID`/`Approved` (requested reuses `Tool`=category, `Text`=title, `Input`=detail). The
+    existing `POST /approvals/{id}` still resolves.
+- [x] **Unified the run id** so routing works: `Runner.Run` now takes the engine's `runID`, threaded
+    into the executor (and `logger.NewWithID`) — so the session dir, event stream, audit `Run`, and
+    approval `RunID` all key off one id (previously the executor minted its own via `logger.New`, which
+    would have mis-routed the push). CLI `printEvent` renders the two new kinds.
 - *Acceptance:* a parked escalation appears as a stream event on its run; resolving it emits the
-    resolution event.
+    resolution event ✅. Test: `TestApprovalEmitter_PushesOntoRunStream` (real `Engine` + emitter,
+    race-clean).
 
 #### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork)*
 

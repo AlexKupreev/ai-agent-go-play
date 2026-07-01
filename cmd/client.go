@@ -90,6 +90,14 @@ func printEvent(e api.Event) {
 		if e.Text != "" {
 			fmt.Println(e.Text)
 		}
+	case api.KindApprovalRequested:
+		fmt.Printf("\n[escalation %s] %s: %s\n", e.ApprovalID, e.Tool, e.Text)
+	case api.KindApprovalResolved:
+		decision := "denied"
+		if e.Approved != nil && *e.Approved {
+			decision = "approved"
+		}
+		fmt.Printf("[escalation %s] %s\n", e.ApprovalID, decision)
 	case api.KindError:
 		fmt.Fprintf(os.Stderr, "run error: %s\n", e.Text)
 	}

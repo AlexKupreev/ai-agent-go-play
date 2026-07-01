@@ -17,15 +17,20 @@ type Logger struct {
 	file         *os.File
 }
 
-// New creates a session directory for this run and opens the log file inside it.
+// New creates a session directory under a freshly generated run id. See NewWithID.
+func New() (*Logger, error) {
+	return NewWithID(generateRunID())
+}
+
+// NewWithID creates a session directory for the given run id and opens the log file
+// inside it. Callers that already have a run id (e.g. the engine, so the session
+// dir, event stream, audit records, and approvals all share one id) pass it here.
 // Structure:
 //
 //	~/.local/share/ai-agent/sessions/<runID>/
 //	  run.jsonl
 //	  artifacts/
-func New() (*Logger, error) {
-	runID := generateRunID()
-
+func NewWithID(runID string) (*Logger, error) {
 	sessionsDir, err := baseSessionsDir()
 	if err != nil {
 		return nil, err

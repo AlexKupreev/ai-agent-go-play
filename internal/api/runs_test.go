@@ -11,7 +11,7 @@ import (
 // TestCancelStopsRun is the kill switch: a blocked run is cancelled mid-flight and
 // ends in the error state via context cancellation.
 func TestCancelStopsRun(t *testing.T) {
-	runner := RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
 		obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 		<-ctx.Done() // block until the kill switch cancels the run context
 		return "", ctx.Err()

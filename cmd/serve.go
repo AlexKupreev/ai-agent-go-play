@@ -86,7 +86,12 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 
-		srv := api.NewServer(api.NewEngine(runner), approvals, registry, rec, rec)
+		engine := api.NewEngine(runner)
+		// Push parked escalations (and their resolutions) onto the owning run's event
+		// stream, so a streaming frontend learns of them without polling /approvals.
+		approvals.SetEmitter(engine.PublishToRun)
+
+		srv := api.NewServer(engine, approvals, registry, rec, rec)
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
@@ -106,8 +111,11 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	return api.RunnerFunc(func(ctx context.Context, task string, obs agent.Observer) (string, error) {
-		log, err := logger.New()
+	return api.RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+		// Use the engine's run id everywhere (session dir, audit Run field, approval
+		// RunID) so the whole run keys off one id — which is what routes an approval
+		// escalation back to this run's event stream.
+		log, err := logger.NewWithID(runID)
 		if err != nil {
 			return "", fmt.Errorf("failed to create logger: %w", err)
 		}
@@ -125,7 +133,7 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 
 		// Engine event stream + disk log see the same events.
 		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obsAll, registry, mem, rec, tier, approver)
+		executor := agent.NewExecutor(prov, workDir, model, runID, obsAll, registry, mem, rec, tier, approver)
 		return executor.Run(ctx, task)
 	}), nil
 }

@@ -6,7 +6,26 @@ _Last session: 2026-07-01._
 
 ---
 
-## Latest session (2026-07-01): Phase 4e-4 — central audit log + browse over the API
+## Latest session (2026-07-01): Phase 4e-5 — approval events on the stream (poll → push)
+
+- **4e-5 DONE.** `ApprovalQueue.SetEmitter(func(runID, ev))` (wired in `serve` to `Engine.PublishToRun`).
+  `Approve` emits `approval_requested` on parking; the **run's own goroutine** emits `approval_resolved`
+  when it receives the decision — ordered ahead of the terminal `done` so the hub-close can't drop it
+  (emitting from `Resolve` would race). `Engine.PublishToRun(runID, ev)` broadcasts into a run's hub +
+  replay history (no-op on unknown/closed). New event kinds `KindApprovalRequested`/`Resolved` +
+  `Event.ApprovalID`/`Approved`; a requested event reuses `Tool`=category, `Text`=title, `Input`=detail.
+- **Unified the run id (important):** `Runner.Run(ctx, runID, task, obs)` now threads the engine's id;
+  `serve` passes it to `logger.NewWithID` + `NewExecutor` so session dir / event stream / audit `Run` /
+  approval `RunID` all share one id. Previously the executor minted its own via `logger.New`, so the
+  push would have mis-routed. This also means `GET /audit?run=<engine id>` now matches a run's events.
+  CLI `printEvent` renders the two new kinds. Test: `TestApprovalEmitter_PushesOntoRunStream` (real
+  Engine + emitter, race-clean). Build/vet/test green. **Next: 4e-6** (Telegram frontend as a peer
+  client via `api.Client`; the pushed `approval_requested` becomes an inline Approve/Deny keyboard →
+  `Client.Resolve`; auth = Telegram user-id allowlist in the frontend, engine stays localhost).
+
+---
+
+## Session (2026-07-01): Phase 4e-4 — central audit log + browse over the API
 
 - **4e-4 DONE.** `audit.Reader` (`Tail(n, Filter{Run,Type})`, oldest-first, n≤0 ⇒ all) on both
   `MemoryRecorder` and `JSONLRecorder` (the latter re-reads its file; `path` now tracked). `audit.Filter`

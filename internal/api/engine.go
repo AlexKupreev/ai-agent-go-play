@@ -24,16 +24,18 @@ const (
 // Runner executes a task to completion, emitting run events to obs. It abstracts
 // the agent wiring (provider, registry, broker, executor) so the API core stays
 // independent of how a run is assembled — cmd injects the real wiring, tests inject
-// a fake.
+// a fake. runID is the engine's id for the run: the runner threads it into the
+// executor so the session dir, event stream, audit records, and parked approvals all
+// key off one id (which is what routes approval escalations back to this run's hub).
 type Runner interface {
-	Run(ctx context.Context, task string, obs agent.Observer) (string, error)
+	Run(ctx context.Context, runID, task string, obs agent.Observer) (string, error)
 }
 
 // RunnerFunc adapts a plain function to Runner.
-type RunnerFunc func(ctx context.Context, task string, obs agent.Observer) (string, error)
+type RunnerFunc func(ctx context.Context, runID, task string, obs agent.Observer) (string, error)
 
-func (f RunnerFunc) Run(ctx context.Context, task string, obs agent.Observer) (string, error) {
-	return f(ctx, task, obs)
+func (f RunnerFunc) Run(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	return f(ctx, runID, task, obs)
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -108,7 +110,7 @@ func (e *Engine) StartRun(task string) string {
 
 	go func() {
 		defer cancel() // release the run context once the run finishes
-		result, err := e.runner.Run(ctx, task, hub)
+		result, err := e.runner.Run(ctx, id, task, hub)
 
 		ended := time.Now().UTC()
 		r.mu.Lock()
@@ -153,6 +155,18 @@ func (e *Engine) Subscribe(id string) (<-chan Event, func(), error) {
 	}
 	ch, cancel := r.hub.Subscribe()
 	return ch, cancel, nil
+}
+
+// PublishToRun broadcasts ev into a run's event stream (and its replay history).
+// It is a no-op if the run is unknown or its hub has already closed. This lets
+// out-of-band producers — notably the shared ApprovalQueue — surface events on the
+// stream a frontend is already reading, instead of requiring a side poll.
+func (e *Engine) PublishToRun(runID string, ev Event) {
+	r, err := e.lookup(runID)
+	if err != nil {
+		return
+	}
+	r.hub.publish(ev)
 }
 
 // StopRun cancels a run (the kill switch). Cancellation propagates through the run

@@ -17,6 +17,7 @@ type ApprovalQueue struct {
 	mu      sync.Mutex
 	pending map[string]*pendingApproval
 	seq     int
+	emit    func(runID string, ev Event) // optional; pushes escalations onto a run's stream
 }
 
 type pendingApproval struct {
@@ -38,6 +39,23 @@ func NewApprovalQueue() *ApprovalQueue {
 	return &ApprovalQueue{pending: make(map[string]*pendingApproval)}
 }
 
+// SetEmitter installs a hook that pushes approval escalations onto the owning run's
+// event stream (typically Engine.PublishToRun), so streaming frontends see a parked
+// request — and its resolution — without polling. Optional; nil leaves the queue
+// poll-only via GET /approvals.
+func (q *ApprovalQueue) SetEmitter(emit func(runID string, ev Event)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.emit = emit
+}
+
+// emitter returns the current emit hook under lock (nil if unset).
+func (q *ApprovalQueue) emitter() func(runID string, ev Event) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.emit
+}
+
 // Approve implements tools.Approver. It registers the request, then blocks until
 // Resolve delivers a decision or ctx is done (treated as not-approved, per the
 // Approver contract). The pending entry is always removed before returning.
@@ -52,6 +70,18 @@ func (q *ApprovalQueue) Approve(ctx context.Context, req tools.ApprovalRequest) 
 	q.pending[p.id] = p
 	q.mu.Unlock()
 
+	// Announce the parked escalation on the run's stream (best-effort; a nil emitter
+	// or unknown run is a no-op). Reused fields: Tool=category, Text=title, Input=detail.
+	if emit := q.emitter(); emit != nil {
+		emit(req.RunID, Event{
+			Kind:       KindApprovalRequested,
+			ApprovalID: p.id,
+			Tool:       req.Kind,
+			Text:       req.Title,
+			Input:      req.Detail,
+		})
+	}
+
 	defer func() {
 		q.mu.Lock()
 		delete(q.pending, p.id)
@@ -62,6 +92,18 @@ func (q *ApprovalQueue) Approve(ctx context.Context, req tools.ApprovalRequest) 
 	case <-ctx.Done():
 		return false, ctx.Err()
 	case decision := <-p.resolve:
+		// Emit the resolution here, on the run's own goroutine, before it proceeds —
+		// so approval_resolved is ordered ahead of any later run events (and the
+		// terminal done that closes the hub). Emitting from Resolve instead would race
+		// the run completing and could be dropped after the hub closed.
+		if emit := q.emitter(); emit != nil {
+			decided := decision
+			emit(req.RunID, Event{
+				Kind:       KindApprovalResolved,
+				ApprovalID: p.id,
+				Approved:   &decided,
+			})
+		}
 		return decision, nil
 	}
 }
@@ -93,7 +135,10 @@ func (q *ApprovalQueue) Resolve(id string, approved bool) error {
 		return fmt.Errorf("unknown approval: %s", id)
 	}
 	// Buffered channel + single delivery: a second Resolve for the same id finds it
-	// already removed by Approve's defer, so it returns the unknown-id error.
+	// already removed by Approve's defer, so it returns the unknown-id error. The
+	// approval_resolved stream event is emitted by Approve (on the run's goroutine)
+	// once it receives this decision, so it stays ordered ahead of the run's later
+	// events.
 	select {
 	case p.resolve <- approved:
 		return nil
