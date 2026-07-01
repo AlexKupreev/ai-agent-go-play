@@ -82,7 +82,11 @@ func NewCLIObserver(w io.Writer) *CLIObserver { return &CLIObserver{w: w} }
 func (c *CLIObserver) Emit(e Event) {
 	switch e.Kind {
 	case EvResponse:
-		if e.Text != "" {
+		// Print response text only when it precedes a tool call (the "explain what
+		// I'm about to do" preamble). A response with no tool calls is the final
+		// answer, which the command prints itself — printing it here too would
+		// duplicate it.
+		if e.Text != "" && len(e.Calls) > 0 {
 			fmt.Fprintln(c.w, e.Text)
 		}
 	case EvToolStart:
