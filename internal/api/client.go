@@ -132,6 +132,44 @@ func (c *Client) Resolve(ctx context.Context, id string, approved bool) error {
 	return nil
 }
 
+// ToolDetail returns one catalog tool including its implementation source.
+func (c *Client) ToolDetail(ctx context.Context, name string) (ToolDetailView, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/tools/"+name, nil)
+	if err != nil {
+		return ToolDetailView{}, err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return ToolDetailView{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ToolDetailView{}, fmt.Errorf("tool detail %s: %s", name, resp.Status)
+	}
+	var out ToolDetailView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ToolDetailView{}, err
+	}
+	return out, nil
+}
+
+// RevokeTool removes an authored tool from the remote engine's catalog.
+func (c *Client) RevokeTool(ctx context.Context, name string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/tools/"+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("revoke tool %s: %s", name, resp.Status)
+	}
+	return nil
+}
+
 // ListRuns returns this client's runs, newest first.
 func (c *Client) ListRuns(ctx context.Context) ([]RunInfo, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, "/runs", nil)

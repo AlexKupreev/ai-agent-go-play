@@ -17,6 +17,7 @@ const (
 	EventCapabilityExercised = "capability_exercised"
 	EventCapabilityDenied    = "capability_denied"
 	EventToolAuthored        = "tool_authored"
+	EventToolRevoked         = "tool_revoked"
 	EventMemoryWrite         = "memory_write"
 )
 

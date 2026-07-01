@@ -2,7 +2,25 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-06-29._
+_Last session: 2026-07-01._
+
+---
+
+## Latest session (2026-07-01): Phase 4e-3 — tool review / revoke over the API
+
+- **4e-3 DONE.** `DELETE /tools/{name}` → `Registry.Revoke` (404 if absent) emitting a new
+  `audit.EventToolRevoked` (`tool_revoked`: name, code_hash, scope, version). `GET /tools/{name}`
+  returns a `ToolDetailView` (listing fields + impl **source**/lang + smoke **test**, which the
+  listing omits). `NewServer` gained a nil-able `audit.Recorder` param for management-plane effects;
+  `serve` opens **one process-wide** `~/.config/ai-agent/audit.jsonl` for it (the first process-wide
+  recorder — 4e-4 generalizes it to all runs + adds a browse endpoint). `Client.ToolDetail` /
+  `Client.RevokeTool`; `agent tool revoke --addr` routes to a running engine (default still edits the
+  local catalog directly). Tests: `TestHTTP_RevokeTool`, `TestHTTP_ToolDetail`, `TestClient_RevokeTool`.
+  Note: because `serve` shares one registry between executor and endpoints and tool defs recompute per
+  iteration, an API revoke drops the tool from an in-flight run at its next iteration, not just the
+  next run. Build/vet/test all green. Docs: `plan.md` 4e-3 checked off, `tools.md` revoke section +
+  deferred-table updated. **Next: 4e-4** (central audit log + browse over the API) — the process-wide
+  recorder introduced here is the seam to build on.
 
 ---
 

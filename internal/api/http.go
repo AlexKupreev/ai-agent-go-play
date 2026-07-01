@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/tools"
 )
 
@@ -13,8 +14,10 @@ import (
 // docs/api-transport.md).
 //
 // approvals and catalog may each be nil; their endpoints are registered only when
-// the corresponding dependency is supplied (run/stream is always available).
-func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http.Handler {
+// the corresponding dependency is supplied (run/stream is always available). rec is
+// the management-plane audit sink (used when a tool is revoked over the API); it may
+// be nil, in which case revokes are not audited.
+func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec audit.Recorder) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /runs", handleStartRun(e))
 	mux.HandleFunc("GET /runs", handleListRuns(e))
@@ -27,7 +30,11 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry) http
 	}
 	if catalog != nil {
 		mux.HandleFunc("GET /tools", handleListTools(catalog))
+		// The literal /tools/search takes precedence over the {name} wildcard in
+		// Go 1.22+ mux precedence, so both can coexist.
 		mux.HandleFunc("GET /tools/search", handleSearchTools(catalog))
+		mux.HandleFunc("GET /tools/{name}", handleToolDetail(catalog))
+		mux.HandleFunc("DELETE /tools/{name}", handleRevokeTool(catalog, rec))
 	}
 	return mux
 }

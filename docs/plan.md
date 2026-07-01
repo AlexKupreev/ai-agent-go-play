@@ -334,8 +334,9 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c, 4d, and 4e-1 are complete.** Next: **4e-3** (tool revoke over the API). *(4e-2, per-user data
-ownership, was dropped — the engine stays single-user; see the multi-user decision above.)*
+**4c, 4d, 4e-1, and 4e-3 are complete.** Next: **4e-4** (central audit log + browse over the API).
+*(4e-2, per-user data ownership, was dropped — the engine stays single-user; see the multi-user
+decision above.)*
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
@@ -381,13 +382,18 @@ approvals park *silently* (clients must poll); and there is no frontend beyond t
 approvals; that was removed — the engine is single-user, see the multi-user decision above. The old
 4e-2, per-user data ownership, was dropped with it.)*
 
-#### 4e-3 — Tool review / revoke over the API
+#### 4e-3 — Tool review / revoke over the API  *(DONE)*
 
-- [ ] `DELETE /tools/{name}` → `Registry.Revoke` (404 if absent), emitting a new `tool_revoked` audit
-    event (the revoke-audit gap noted in `tools.md`). Optional `GET /tools/{name}` detail that *includes*
-    the impl source (omitted from the listing). `Client.RevokeTool`; extend `agent tool revoke` with an
-    `--addr` path (today it edits the local catalog file directly).
-- *Acceptance:* a tool revoked over the API drops from `List`/the live set and the revoke is audited.
+- [x] `DELETE /tools/{name}` → `Registry.Revoke` (404 if absent), emitting a new `tool_revoked` audit
+    event (closes the revoke-audit gap noted in `tools.md`). `GET /tools/{name}` detail that *includes*
+    the impl source + smoke test (`ToolDetailView`, omitted from the listing). `Client.ToolDetail` /
+    `Client.RevokeTool`; `agent tool revoke --addr` routes to a running engine (default still edits the
+    local catalog file directly).
+- [x] `NewServer` gained an `audit.Recorder` param (nil-able) for management-plane effects; `serve`
+    opens **one process-wide** `audit.jsonl` (`~/.config/ai-agent/audit.jsonl`) for it — the first
+    process-wide recorder, which 4e-4 generalizes to all runs and adds a browse endpoint over.
+- *Acceptance:* a tool revoked over the API drops from `List`/the live set and the revoke is audited ✅.
+    Tests: `TestHTTP_RevokeTool`, `TestHTTP_ToolDetail`, `TestClient_RevokeTool`.
 
 #### 4e-4 — Central audit log + browse over the API
 

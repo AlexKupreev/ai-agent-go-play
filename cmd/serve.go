@@ -60,6 +60,21 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
+		// One process-wide audit sink for management-plane effects (e.g. a tool
+		// revoked over the API); per-run transcripts keep their own audit file.
+		auditFile, err := auditPath()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(auditFile), 0700); err != nil {
+			return fmt.Errorf("failed to create audit dir: %w", err)
+		}
+		rec, err := audit.NewJSONLRecorder(auditFile)
+		if err != nil {
+			return fmt.Errorf("failed to open audit log: %w", err)
+		}
+		defer rec.Close()
+
 		tier, err := resolveTier(tierFlag, cfg)
 		if err != nil {
 			return err
@@ -69,7 +84,7 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 
-		srv := api.NewServer(api.NewEngine(runner), approvals, registry)
+		srv := api.NewServer(api.NewEngine(runner), approvals, registry, rec)
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)

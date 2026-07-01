@@ -28,7 +28,7 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 		return "did it", nil
 	})
 
-	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 	ctx := context.Background()
@@ -71,8 +71,38 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 	}
 }
 
+// TestClient_RevokeTool exercises the client's tool-detail + revoke path against a
+// real server sharing a catalog.
+func TestClient_RevokeTool(t *testing.T) {
+	cat := catalogWith(t, scriptSpec("reverse_string", "reverse the characters in a string"))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	ctx := context.Background()
+
+	detail, err := c.ToolDetail(ctx, "reverse_string")
+	if err != nil {
+		t.Fatalf("ToolDetail: %v", err)
+	}
+	if detail.Source == "" {
+		t.Fatalf("detail missing source: %+v", detail)
+	}
+
+	if err := c.RevokeTool(ctx, "reverse_string"); err != nil {
+		t.Fatalf("RevokeTool: %v", err)
+	}
+	if _, ok := cat.Get("reverse_string"); ok {
+		t.Fatal("tool still present after client revoke")
+	}
+
+	// Revoking a missing tool surfaces an error.
+	if err := c.RevokeTool(ctx, "reverse_string"); err == nil {
+		t.Fatal("expected error revoking absent tool, got nil")
+	}
+}
+
 func TestClient_StartRunErrorsOnBadStatus(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 

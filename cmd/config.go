@@ -94,6 +94,18 @@ func memoryPath() (string, error) {
 	return filepath.Join(home, ".config", "ai-agent", "memory.json"), nil
 }
 
+// auditPath returns the path to the process-wide audit log used by the serve
+// management plane, e.g. ~/.config/ai-agent/audit.jsonl. (Per-run transcripts keep
+// their own audit file under the session dir; this one records management-plane
+// effects such as tool revocation. A run-spanning central reader is Phase 4e-4.)
+func auditPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "ai-agent", "audit.jsonl"), nil
+}
+
 func saveConfig(cfg Config) error {
 	path, err := configPath()
 	if err != nil {

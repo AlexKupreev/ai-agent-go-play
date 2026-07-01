@@ -149,15 +149,23 @@ duplicate.
   (the hash ignores the model face). Rare in practice, and the first-registered description wins;
   documented so it isn't surprising.
 
-### Revoke / list (CLI)
+### Revoke / list (CLI + API)
 
 `agent tool list` and `agent tool revoke <name>` (`cmd/tool.go`) operate on the persistent catalog;
 a revoked tool drops from `List` and therefore the live tool set on the next run. Ephemeral tools
 need no revoke — they die with the run.
 
-- **Benefit:** a human management path without a UI, single-binary-friendly.
-- **Drawback:** no in-run revoke surfaced to the agent yet, and no audit event for revoke. Both are
-  cheap to add when the management plane (Phase 4) lands.
+Over the API (Phase 4e-3): `GET /tools/{name}` returns a `ToolDetailView` (the listing fields plus
+the impl **source** and smoke **test**, which the listing omits); `DELETE /tools/{name}` revokes and
+records a `tool_revoked` audit event (name, code hash, scope, version). `agent tool revoke --addr`
+routes to a running engine so the *live* set — and the process-wide `audit.jsonl` — reflect the
+revoke, not just the on-disk catalog. `api.Client.ToolDetail` / `RevokeTool` are the peer methods.
+
+- **Benefit:** a human management path without a UI, single-binary-friendly; over the API the revoke
+  hits the live engine's shared registry, so an in-flight run drops the tool at its next iteration's
+  tool-def recompute (not just on the next run), and the removal is audited.
+- **Drawback:** the agent still has no *self*-revoke meta-tool (only humans revoke). Cheap to add if
+  it bites.
 
 ---
 
@@ -246,6 +254,6 @@ calls it and `return true`).
 | ~~Catalog-size-gated tool defs~~ | 3d | **done** — `Agent.selectRegistryTools` |
 | ~~Revoke/list CLI + dedup by `CodeHash`~~ | 3e | **done** — `cmd/tool.go`, `Register` dedup |
 | BM25-lite / embedding search | post-3 | token overlap suffices for a small catalog |
-| In-run revoke + revoke audit event | Phase 4 | management plane |
+| ~~Revoke over the API + revoke audit event~~ | 4e-3 | **done** — `DELETE /tools/{name}`, `tool_revoked`, `GET /tools/{name}` detail |
 | SQLite store | post-3 | only when catalog+audit+event log want one transactional store |
 | ~~Per-user isolation (`User` ≠ `Shared`)~~ | — | **dropped** — engine is single-user (design §1) |

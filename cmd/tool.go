@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
+	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
 )
+
+// toolRevokeAddr, when set, routes `agent tool revoke` to a running engine over the
+// API instead of editing the local catalog file directly.
+var toolRevokeAddr string
 
 var toolCmd = &cobra.Command{
 	Use:   "tool",
@@ -40,6 +46,16 @@ var toolRevokeCmd = &cobra.Command{
 	Short: "Remove an authored tool from the catalog",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if toolRevokeAddr != "" {
+			// Route to a running engine so the live set (and its audit log) reflect
+			// the revoke, not just the on-disk catalog.
+			client := api.NewClient("http://" + toolRevokeAddr)
+			if err := client.RevokeTool(context.Background(), args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("revoked %q on %s\n", args[0], toolRevokeAddr)
+			return nil
+		}
 		reg, err := openCatalog()
 		if err != nil {
 			return err
@@ -62,6 +78,7 @@ func openCatalog() (*tools.MemoryRegistry, error) {
 }
 
 func init() {
+	toolRevokeCmd.Flags().StringVar(&toolRevokeAddr, "addr", "", "revoke on a running engine at this address instead of the local catalog")
 	toolCmd.AddCommand(toolListCmd)
 	toolCmd.AddCommand(toolRevokeCmd)
 }

@@ -26,7 +26,7 @@ func fakeRunner(_ context.Context, task string, obs agent.Observer) (string, err
 }
 
 func TestHTTP_StartRunAndStreamEvents(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
 	defer srv.Close()
 
 	// Start a run.
@@ -84,7 +84,7 @@ func TestHTTP_StartRunAndStreamEvents(t *testing.T) {
 }
 
 func TestHTTP_UnknownRunIs404(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/runs/deadbeef/events")

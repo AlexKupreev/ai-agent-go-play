@@ -16,7 +16,7 @@ func TestCancelStopsRun(t *testing.T) {
 		<-ctx.Done() // block until the kill switch cancels the run context
 		return "", ctx.Err()
 	})
-	srv := httptest.NewServer(NewServer(NewEngine(runner), nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(runner), nil, nil, nil))
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
@@ -45,7 +45,7 @@ func TestCancelStopsRun(t *testing.T) {
 }
 
 func TestUnknownRunStatusIs404(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 	if _, err := c.RunStatus(context.Background(), "deadbeef"); err == nil {
