@@ -87,9 +87,8 @@ func printEvent(e api.Event) {
 	case string(agent.EvToolResult):
 		fmt.Printf("[result] %s\n", e.Result)
 	case api.KindDone:
-		if e.Text != "" {
-			fmt.Println(e.Text)
-		}
+		// Terminal marker only: its Text duplicates the final EvResponse (already
+		// printed above), so don't render it again.
 	case api.KindApprovalRequested:
 		fmt.Printf("\n[escalation %s] %s: %s\n", e.ApprovalID, e.Tool, e.Text)
 	case api.KindApprovalResolved:

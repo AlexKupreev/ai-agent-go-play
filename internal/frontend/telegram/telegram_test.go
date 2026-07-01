@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
 )
 
@@ -112,11 +113,15 @@ func (c *fakeClient) StreamEvents(ctx context.Context, _ string, onEvent func(ap
 	select {
 	case d := <-c.resolved:
 		onEvent(api.Event{Kind: api.KindApprovalResolved, ApprovalID: "a1", Approved: &d})
-		if d {
-			onEvent(api.Event{Kind: api.KindDone, Text: "did it"})
-		} else {
-			onEvent(api.Event{Kind: api.KindDone, Text: "declined"})
+		// Mirror the real engine: the final answer arrives as a response event, then
+		// the done event is just a terminal marker (its text duplicates the response
+		// and must not be forwarded again).
+		answer := "did it"
+		if !d {
+			answer = "declined"
 		}
+		onEvent(api.Event{Kind: string(agent.EvResponse), Text: answer})
+		onEvent(api.Event{Kind: api.KindDone, Text: answer})
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

@@ -104,8 +104,10 @@ Flags: `--model`, `--tier` (override config for this run), `--verbose`.
 ### `agent chat`
 
 An interactive REPL — type a message, get a reply, keep going, with the **conversation
-history retained across turns** (like a chat CLI). Tools, long-term memory, and the audit
-log are shared with the rest of this agent (scoped by `--config-dir`).
+history retained across turns** (like a chat CLI). The tool catalog and long-term memory are
+shared with the rest of this agent (scoped by `--config-dir`). Its audit trail, though, goes
+to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the process-wide
+`audit.jsonl` that only `agent serve` writes and `agent audit` reads — see [Audit log](#audit-log).
 
 ```bash
 ./agent chat                 # executor-only conversation
@@ -301,7 +303,7 @@ to `127.0.0.1`; only the bot faces the network. The allowlist is **fail-closed**
 the bot rejects everyone). The bot only needs *outbound* network access to
 `api.telegram.org` (it long-polls Telegram; nothing needs to reach into your box).
 
-The live transport uses the Telegram Bot API (`github.com/go-telegram-bot-api/telegram-bot-api`)
+The live transport uses the Telegram Bot API (`github.com/go-telegram-bot-api/telegram-bot-api/v5`)
 and long-polls for updates, so it needs outbound access to `api.telegram.org`. If the token
 is rejected or unreachable, `serve` logs `telegram: connect: … — running without the bot`
 and the engine runs normally; the Bot API handshake happens in the background so it never

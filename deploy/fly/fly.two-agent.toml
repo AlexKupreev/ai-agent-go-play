@@ -1,0 +1,48 @@
+# Two independent agents on one Fly machine.
+#
+# Deploy from the repo root:  fly deploy -c deploy/fly/fly.two-agent.toml
+#
+# This mirrors the docs' "two serve processes on one box, separate config dirs +
+# ports" model. The two agents share nothing (separate tools/memory/audit/sessions
+# under /data/work and /data/home) and are each driven by their own Telegram bot.
+#
+# Isolation note: this is ONE machine / ONE crash domain. If either agent's `serve`
+# exits, Fly restarts the whole machine (both agents). For fully independent
+# restart/crash domains, deploy the one-agent config twice as two apps instead —
+# see deploy/fly/README.md.
+#
+# Same security model as the single-agent config: no public port; each engine binds
+# to its own localhost port; the per-agent Telegram allowlist is the auth gate.
+
+app = "ai-agent-duo"    # CHANGE ME — must be globally unique
+primary_region = "waw"  # CHANGE ME
+
+[build]
+  dockerfile = "deploy/fly/Dockerfile"
+
+# Run the two-agent supervisor instead of the image default.
+[processes]
+  app = "/usr/local/bin/entrypoint-two.sh"
+
+[env]
+  # Per-agent autonomy dials (defaults mirror the docs example).
+  WORK_TIER = "safe"
+  HOME_TIER = "balanced"
+  # Per-agent Telegram user-id allowlists (comma-separated; empty = reject everyone).
+  WORK_ALLOWED_USERS = ""
+  HOME_ALLOWED_USERS = ""
+
+# One volume holds both agents' state, under /data/work and /data/home.
+[mounts]
+  source = "agent_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb" # two engines + sandboxes; give them room.
+
+# Secrets to set once (not stored in this file):
+#   fly secrets set OPENAI_API_KEY=sk-...            # shared by both agents
+#   fly secrets set WORK_TELEGRAM_TOKEN=123:abc      # the "work" agent's bot
+#   fly secrets set HOME_TELEGRAM_TOKEN=456:def      # the "home" agent's bot
+# Optional per-agent keys:  WORK_OPENAI_API_KEY / HOME_OPENAI_API_KEY

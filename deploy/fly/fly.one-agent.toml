@@ -1,0 +1,42 @@
+# Single agent on Fly.io.
+#
+# Deploy from the repo root:  fly deploy -c deploy/fly/fly.one-agent.toml
+#
+# Security model (see docs/usage.md): the engine binds to 127.0.0.1 and has NO
+# auth. There is deliberately no [http_service] / public port — the only network
+# face is the Telegram bot, which long-polls api.telegram.org OUTBOUND. Auth is the
+# Telegram user-id allowlist (fail-closed). To reach the HTTP API for admin, SSH in
+# (`fly ssh console`) and talk to 127.0.0.1:8080 locally.
+
+app = "ai-agent"        # CHANGE ME — must be globally unique
+primary_region = "waw"  # CHANGE ME — pick a region near you (fly platform regions)
+
+[build]
+  dockerfile = "deploy/fly/Dockerfile"
+
+# Run the single-agent launcher instead of the image default.
+[processes]
+  app = "/usr/local/bin/entrypoint-one.sh"
+
+[env]
+  AI_AGENT_CONFIG_DIR = "/data/config"
+  AI_AGENT_SESSIONS_DIR = "/data/sessions"
+  AGENT_TIER = "balanced" # safe | balanced | permissive (autonomy dial)
+  # Telegram user-id allowlist (comma-separated ids). NOT a secret; leaving it
+  # empty means the bot rejects everyone (fail-closed). Fill it in, e.g. "11111111,22222222".
+  AI_AGENT_TELEGRAM_ALLOWED_USERS = ""
+
+# Persistent state (tools, memory, audit, sessions, shell workspace). A single
+# always-on machine with one attached volume — the JSON/JSONL stores are
+# single-writer, so do not scale this past one machine.
+[mounts]
+  source = "agent_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb" # ~2 GB target box; 1 GB is comfortable for one agent. Bump if needed.
+
+# Secrets to set once (not stored in this file):
+#   fly secrets set OPENAI_API_KEY=sk-...
+#   fly secrets set AI_AGENT_TELEGRAM_TOKEN=123456:abcdef

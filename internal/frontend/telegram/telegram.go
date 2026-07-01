@@ -218,9 +218,8 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 		case api.KindApprovalRequested:
 			b.sendApproval(ctx, chatID, e)
 		case api.KindDone:
-			if e.Text != "" {
-				_ = b.transport.Send(ctx, chatID, e.Text, nil)
-			}
+			// Terminal marker only: its Text duplicates the final EvResponse
+			// (already forwarded by the default branch), so don't send it again.
 		case api.KindError:
 			_ = b.transport.Send(ctx, chatID, "run error: "+e.Text, nil)
 		default:

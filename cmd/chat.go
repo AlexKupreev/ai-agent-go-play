@@ -27,8 +27,9 @@ var chatCmd = &cobra.Command{
 	Use:   "chat",
 	Short: "Interactive multi-turn chat (REPL) with retained context",
 	Long: "Start an interactive session: type a message, get a reply, and keep going — " +
-		"the conversation history is retained across turns (like a chat CLI). Tools, memory, " +
-		"and the audit log are shared with the rest of this agent (see --config-dir).\n\n" +
+		"the conversation history is retained across turns (like a chat CLI). The tool catalog " +
+		"and memory are shared with the rest of this agent (see --config-dir); the audit trail " +
+		"goes to this run's transcript, not the process-wide log that `agent serve` exposes.\n\n" +
 		"Commands: /reset clears the conversation, /exit (or Ctrl-D) quits. Ctrl-C cancels the " +
 		"current turn.",
 	Args: cobra.NoArgs,
