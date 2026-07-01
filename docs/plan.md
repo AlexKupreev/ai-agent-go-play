@@ -266,8 +266,9 @@ before the transport/frontend choices (real forks, settled when reached).
 
 - **Transport (4c):** ~~HTTP+SSE vs JSON-RPC/WebSocket.~~ **DECIDED: HTTP+SSE** (simplest, curl-able,
     streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](api-transport.md).
-- **First frontend (4e):** Telegram vs web. Leaning Telegram (thin, good for the unattended/mobile
-    approval case; web is more work for the same payoff first).
+- **First frontend (4e):** ~~Telegram vs web.~~ **DECIDED: Telegram** (thin, good for the
+    unattended/mobile approval case; web is more work for the same payoff first). Built in 4e-6 with the
+    live transport stubbed behind an interface — see `internal/frontend/telegram`.
 - **Multi-user model (4e) — DROPPED: single shared trust domain.** An earlier draft of 4e added a
     per-run `Owner` label, session isolation, and per-user data ownership (private memory/tools, opt-in
     sharing). That was **removed** to simplify: design §1 is a family sharing one trusted box, so owned
@@ -334,9 +335,11 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c, 4d, 4e-1, 4e-3, 4e-4, and 4e-5 are complete.** Next: **4e-6** (Telegram frontend as a peer
-client — resolves the frontend fork). *(4e-2, per-user data ownership, was dropped — the engine stays
-single-user; see the multi-user decision above.)*
+**4c, 4d, and 4e-1…4e-6 are complete — Phase 4e is done** (bar the live Telegram transport, a single
+stubbed seam). Frontend fork **resolved: Telegram.** Next: implement `telegram.NewHTTPTransport` (Bot
+API long-poll + send) when a bot token is in hand, then the remaining housekeeping (commit timestamps,
+push, markdownlint). *(4e-2, per-user data ownership, was dropped — the engine stays single-user; see
+the multi-user decision above.)*
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
 
@@ -398,8 +401,8 @@ approvals; that was removed — the engine is single-user, see the multi-user de
 #### 4e-4 — Central audit log + browse over the API  *(DONE)*
 
 - [x] `audit.Reader` (`Tail(n, Filter{Run,Type})`, oldest-first, n≤0 ⇒ all) implemented by both
-    `MemoryRecorder` (in-memory) and `JSONLRecorder` (re-reads its file; `path` tracked). `audit.Filter`
-    + shared `tailMatching`. `audit.Recorders` fans one event to several sinks.
+    `MemoryRecorder` (in-memory) and `JSONLRecorder` (re-reads its file; `path` tracked), sharing
+    `tailMatching` over an `audit.Filter`. `audit.Recorders` fans one event to several sinks.
 - [x] `serve` now shares the **process-wide** `~/.config/ai-agent/audit.jsonl` across runs: each run's
     events fan out (`audit.Recorders{sessionRec, central}`) to both the session transcript **and** the
     central log (`newServeRunner` gained a `central` param). The 4e-3 process-wide recorder is now the
@@ -432,18 +435,29 @@ approvals; that was removed — the engine is single-user, see the multi-user de
     resolution event ✅. Test: `TestApprovalEmitter_PushesOntoRunStream` (real `Engine` + emitter,
     race-clean).
 
-#### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork)*
+#### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork — Telegram)*  *(DONE, transport stubbed)*
 
-- [ ] `internal/frontend/telegram` driving `api.Client` (a peer, like `agent client` — not special).
-    Keeps a chat↔run mapping; a message starts a run and streams events back; a parked approval (from
-    the 4e-5 stream event) becomes an **inline keyboard** (Approve / Deny) wired to `Client.Resolve`.
-    This is the unattended/mobile approval case the plan leans Telegram for.
-- [ ] **Auth lives in the frontend:** an allowlist of Telegram user ids (config) gating who may reach
-    the engine at all. The engine stays bound to `127.0.0.1`; only the bot faces the network. (No
-    engine-level auth on the localhost single-user box — design §1.)
+- [x] `internal/frontend/telegram`: `Bot` drives a `Client` (the slice of `api.Client` it needs — a peer,
+    like `agent client`, no special access). A message starts a run and streams its events back to the
+    chat; a parked approval (the 4e-5 `approval_requested` stream event) becomes an **Approve / Deny
+    inline keyboard** whose callback is wired to `Client.Resolve`. No chat↔run map needed — the callback
+    data carries the approval id, and each run's stream goroutine captures its chat.
+- [x] **Transport stubbed behind an interface** so the whole frontend is testable with no live bot:
+    `Transport` (Updates/Send/Answer) + `Update`/`Message`/`Callback`/`Button`. `NewHTTPTransport` is the
+    single unimplemented seam (returns `ErrTransportNotBuilt`) — the live Bot API client + long-poll is
+    the deferred "add a bot later" step; everything else is done and unit-tested (`telegram_test.go`,
+    race-clean: full approval loop, auth rejection for message + callback, callback parsing).
+- [x] **Optional + activated by token:** `serve` starts the bot only when a token is set (config
+    `telegram_token` / env `AI_AGENT_TELEGRAM_TOKEN`); no token ⇒ engine runs unchanged. While the live
+    transport is unbuilt, a configured token degrades gracefully (logs, runs without the bot).
+- [x] **Auth lives in the frontend:** allowlist of Telegram user ids (config `telegram_allowed_users` /
+    env `AI_AGENT_TELEGRAM_ALLOWED_USERS`), **fail-closed** (empty ⇒ reject everyone). Engine stays bound
+    to `127.0.0.1`; only the bot faces the network. (No engine-level auth on the localhost single-user
+    box — design §1.)
 - *Acceptance (Phase 4):* a family member drives a session from Telegram against one engine; an
     escalation surfaces in the chat and is recorded; a run can be cancelled mid-flight from the
-    CLI/API/bot.
+    CLI/API/bot. **Met at the logic level** (fake-transport e2e test); the last mile is the live
+    `NewHTTPTransport` impl (needs a bot token + egress).
 
 **Risks/notes:** keep frontends thin — *all* policy (approval, audit) lives in the engine; the bot must
 contain zero policy, only rendering + relaying. Cancellation is cooperative (stops at the next

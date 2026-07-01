@@ -115,9 +115,23 @@ Risky actions (destructive shell, capability escalation beyond the tier) route t
   (for the endpoints), so what the engine parks is exactly what the API exposes.
 
 This replaces the slice's stdin limitation: with the queue wired, headless runs no longer block
-on a terminal — a risky action parks in the queue and waits for an API decision. Because SSE is
-not server-push, a client learns of a pending approval by polling `GET /approvals` (or by
-watching for the gap in the run's event stream); a future JSON-RPC adapter could push it.
+on a terminal — a risky action parks in the queue and waits for an API decision. As of Phase 4e-5
+the queue also **pushes** the escalation onto the owning run's event stream
+(`approval_requested`/`approval_resolved`, via `SetEmitter` → `Engine.PublishToRun`), so a
+streaming frontend need not poll `GET /approvals` (which remains as a fallback). `POST
+/approvals/{id}` still resolves.
+
+## Frontends as peer clients (Telegram)
+
+A frontend is just another `api.Client` consumer — no privileged path into the engine. The
+optional Telegram bot (`internal/frontend/telegram`, Phase 4e-6) is the reference: a `Bot` drives
+the client, turning a chat message into a run and the pushed `approval_requested` event into an
+**Approve/Deny inline keyboard** wired back to `Client.Resolve`. Its chat backend sits behind a
+`Transport` interface so the bot logic is tested with a fake and no network; the live Bot API
+transport (`NewHTTPTransport`) is the one deferred seam. The bot is **optional and
+token-activated** (config/env), **auth lives in the frontend** (a fail-closed Telegram user-id
+allowlist), and the engine stays bound to `127.0.0.1` — only the bot faces the network. This is
+why auth is a frontend concern (design §1): the engine trusts localhost; the bot is the gate.
 
 ## Consequences
 

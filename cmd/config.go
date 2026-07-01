@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"ai-agent-go-play/internal/capability"
 
@@ -16,6 +18,11 @@ type Config struct {
 	OpenAIKey string `json:"openai_key"`
 	Model     string `json:"model,omitempty"` // default model; overridden by --model
 	Tier      string `json:"tier,omitempty"`  // default trust tier; overridden by --tier
+
+	// Optional Telegram frontend. Empty token ⇒ the bot is disabled and the engine
+	// runs unchanged. Both may be supplied via env vars (see resolveTelegram*).
+	TelegramToken        string  `json:"telegram_token,omitempty"`
+	TelegramAllowedUsers []int64 `json:"telegram_allowed_users,omitempty"`
 }
 
 var configCmd = &cobra.Command{
@@ -104,6 +111,44 @@ func auditPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "ai-agent", "audit.jsonl"), nil
+}
+
+// Env vars overriding the Telegram config (env wins, so a token can be supplied
+// without editing the config file).
+const (
+	envTelegramToken   = "AI_AGENT_TELEGRAM_TOKEN"
+	envTelegramAllowed = "AI_AGENT_TELEGRAM_ALLOWED_USERS" // comma-separated user ids
+)
+
+// resolveTelegramToken returns the bot token, env taking precedence over config.
+// Empty means the frontend stays disabled.
+func resolveTelegramToken(cfg Config) string {
+	if v := strings.TrimSpace(os.Getenv(envTelegramToken)); v != "" {
+		return v
+	}
+	return strings.TrimSpace(cfg.TelegramToken)
+}
+
+// resolveTelegramAllowed returns the allowed Telegram user ids, env (comma-separated)
+// taking precedence over config. Malformed env ids are skipped with a warning.
+func resolveTelegramAllowed(cfg Config) []int64 {
+	if v := strings.TrimSpace(os.Getenv(envTelegramAllowed)); v != "" {
+		var ids []int64
+		for part := range strings.SplitSeq(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := strconv.ParseInt(part, 10, 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "telegram: ignoring invalid user id %q in %s\n", part, envTelegramAllowed)
+				continue
+			}
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return cfg.TelegramAllowedUsers
 }
 
 func saveConfig(cfg Config) error {

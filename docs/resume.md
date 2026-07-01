@@ -6,7 +6,33 @@ _Last session: 2026-07-01._
 
 ---
 
-## Latest session (2026-07-01): Phase 4e-5 — approval events on the stream (poll → push)
+## Latest session (2026-07-01): Phase 4e-6 — Telegram frontend as a peer client (transport stubbed)
+
+- **4e-6 DONE (transport stubbed).** `internal/frontend/telegram`: `Bot` drives a `Client` (the slice
+  of `api.Client` it needs) — a peer, no special access. A message starts a run and streams events back
+  to the chat; the 4e-5 `approval_requested` event becomes an **Approve/Deny inline keyboard** whose
+  callback calls `Client.Resolve`. No chat↔run map needed (callback data carries the approval id; each
+  run's stream goroutine captures its chat).
+- **Transport behind an interface** (`Transport`: Updates/Send/Answer; `Update`/`Message`/`Callback`/
+  `Button`) so the whole frontend is testable with no live bot. `NewHTTPTransport` is the ONE
+  unimplemented seam (returns `ErrTransportNotBuilt`) — the live Bot API long-poll/send is the deferred
+  "add a bot later" step (needs a token + outbound network / egress). Tests `telegram_test.go` cover the
+  full approval loop + auth rejection (message + callback) + callback parsing, race-clean.
+- **Optional + token-activated:** `serve` starts the bot only when a token is set — config
+  `telegram_token` / env `AI_AGENT_TELEGRAM_TOKEN`; allowlist config `telegram_allowed_users` / env
+  `AI_AGENT_TELEGRAM_ALLOWED_USERS` (comma-sep), env wins (`resolveTelegramToken`/`resolveTelegramAllowed`
+  in `cmd/config.go`). **No token ⇒ engine runs unchanged**; a token while the transport is unbuilt
+  degrades gracefully (logs "live transport not built yet — running without the bot"). Allowlist is
+  **fail-closed** (empty ⇒ rejects everyone; serve warns). Smoke-tested both paths.
+- **Phase 4e is complete** bar the live transport. Frontend fork **resolved: Telegram.** **Next:**
+  implement `telegram.NewHTTPTransport` when a bot token is available (Bot API `getUpdates` long-poll →
+  `Update`s; `sendMessage`/`answerCallbackQuery` for Send/Answer) — the day it returns a working
+  `Transport`, supplying a token activates the bot with no other change. Then housekeeping: commit
+  timestamps, push, markdownlint (`plan.md` has pre-existing `+`-wrapped-line false positives).
+
+---
+
+## Session (2026-07-01): Phase 4e-5 — approval events on the stream (poll → push)
 
 - **4e-5 DONE.** `ApprovalQueue.SetEmitter(func(runID, ev))` (wired in `serve` to `Engine.PublishToRun`).
   `Approve` emits `approval_requested` on parking; the **run's own goroutine** emits `approval_resolved`

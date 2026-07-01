@@ -11,6 +11,7 @@ import (
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/frontend/telegram"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
@@ -92,6 +93,11 @@ var serveCmd = &cobra.Command{
 		approvals.SetEmitter(engine.PublishToRun)
 
 		srv := api.NewServer(engine, approvals, registry, rec, rec)
+
+		// Optional Telegram frontend: a peer client of this same engine over localhost.
+		// Active only when a token is configured; the engine runs unchanged otherwise.
+		startTelegramIfConfigured(cfg)
+
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
@@ -136,6 +142,36 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 		executor := agent.NewExecutor(prov, workDir, model, runID, obsAll, registry, mem, rec, tier, approver)
 		return executor.Run(ctx, task)
 	}), nil
+}
+
+// startTelegramIfConfigured launches the optional Telegram bot when a token is
+// configured (config or env). The bot is a peer client of this engine over the local
+// HTTP transport — it drives api.Client exactly like `agent client`, with no special
+// access, and gates callers by the user-id allowlist. When no token is set, or while
+// the live Telegram transport is not yet built, the engine simply runs without it.
+func startTelegramIfConfigured(cfg Config) {
+	token := resolveTelegramToken(cfg)
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "telegram: disabled (no token configured)")
+		return
+	}
+	transport, err := telegram.NewHTTPTransport(token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "telegram: %v — running without the bot\n", err)
+		return
+	}
+	allowed := resolveTelegramAllowed(cfg)
+	if len(allowed) == 0 {
+		fmt.Fprintln(os.Stderr, "telegram: warning — no allowed user ids; the bot will reject everyone")
+	}
+	// The bot reaches the engine over localhost, like any other client.
+	bot := telegram.NewBot(transport, api.NewClient("http://"+addrFlag), allowed)
+	go func() {
+		if err := bot.Run(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "telegram: bot stopped: %v\n", err)
+		}
+	}()
+	fmt.Fprintln(os.Stderr, "telegram: bot enabled")
 }
 
 func init() {
