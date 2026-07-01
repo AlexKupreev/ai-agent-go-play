@@ -89,6 +89,6 @@ internal/
   provider/                LLM provider port (OpenAI adapter under provider/openai)
   audit/                   append-only audit log (+ reader)
   api/                     headless engine: HTTP+SSE transport, run lifecycle, approval queue, client
-  frontend/telegram/       optional Telegram bot (peer client; transport stubbed)
+  frontend/telegram/       optional Telegram bot (peer client; go-telegram-bot-api)
   logger/                  per-run session transcripts
 ```

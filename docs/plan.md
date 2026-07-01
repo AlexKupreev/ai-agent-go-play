@@ -267,8 +267,9 @@ before the transport/frontend choices (real forks, settled when reached).
 - **Transport (4c):** ~~HTTP+SSE vs JSON-RPC/WebSocket.~~ **DECIDED: HTTP+SSE** (simplest, curl-able,
     streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](api-transport.md).
 - **First frontend (4e):** ~~Telegram vs web.~~ **DECIDED: Telegram** (thin, good for the
-    unattended/mobile approval case; web is more work for the same payoff first). Built in 4e-6 with the
-    live transport stubbed behind an interface — see `internal/frontend/telegram`.
+    unattended/mobile approval case; web is more work for the same payoff first). Built in 4e-6 (bot
+    logic behind a `Transport` interface; live transport via the `go-telegram-bot-api` SDK) — see
+    `internal/frontend/telegram`.
 - **Multi-user model (4e) — DROPPED: single shared trust domain.** An earlier draft of 4e added a
     per-run `Owner` label, session isolation, and per-user data ownership (private memory/tools, opt-in
     sharing). That was **removed** to simplify: design §1 is a family sharing one trusted box, so owned
@@ -335,8 +336,9 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c, 4d, and 4e-1…4e-6 are complete — Phase 4e is done** (bar the live Telegram transport, a single
-stubbed seam). Frontend fork **resolved: Telegram.** Next: implement `telegram.NewHTTPTransport` (Bot
+**4c, 4d, and 4e-1…4e-6 are complete — Phase 4e is done.** The live Telegram transport
+(`telegram.NewHTTPTransport`, `go-telegram-bot-api` SDK) is now implemented too. Frontend fork
+**resolved: Telegram.** Earlier note (now satisfied): implement `telegram.NewHTTPTransport` (Bot
 API long-poll + send) when a bot token is in hand, then the remaining housekeeping (commit timestamps,
 push, markdownlint). *(4e-2, per-user data ownership, was dropped — the engine stays single-user; see
 the multi-user decision above.)*
@@ -435,29 +437,30 @@ approvals; that was removed — the engine is single-user, see the multi-user de
     resolution event ✅. Test: `TestApprovalEmitter_PushesOntoRunStream` (real `Engine` + emitter,
     race-clean).
 
-#### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork — Telegram)*  *(DONE, transport stubbed)*
+#### 4e-6 — Telegram frontend as a peer client *(resolves the frontend fork — Telegram)*  *(DONE; live transport added)*
 
 - [x] `internal/frontend/telegram`: `Bot` drives a `Client` (the slice of `api.Client` it needs — a peer,
     like `agent client`, no special access). A message starts a run and streams its events back to the
     chat; a parked approval (the 4e-5 `approval_requested` stream event) becomes an **Approve / Deny
     inline keyboard** whose callback is wired to `Client.Resolve`. No chat↔run map needed — the callback
     data carries the approval id, and each run's stream goroutine captures its chat.
-- [x] **Transport stubbed behind an interface** so the whole frontend is testable with no live bot:
-    `Transport` (Updates/Send/Answer) + `Update`/`Message`/`Callback`/`Button`. `NewHTTPTransport` is the
-    single unimplemented seam (returns `ErrTransportNotBuilt`) — the live Bot API client + long-poll is
-    the deferred "add a bot later" step; everything else is done and unit-tested (`telegram_test.go`,
-    race-clean: full approval loop, auth rejection for message + callback, callback parsing).
-- [x] **Optional + activated by token:** `serve` starts the bot only when a token is set (config
-    `telegram_token` / env `AI_AGENT_TELEGRAM_TOKEN`); no token ⇒ engine runs unchanged. While the live
-    transport is unbuilt, a configured token degrades gracefully (logs, runs without the bot).
+- [x] **Transport behind an interface** so the frontend is testable with no live bot: `Transport`
+    (Updates/Send/Answer) + `Update`/`Message`/`Callback`/`Button`, exercised by `telegram_test.go`
+    (race-clean: full approval loop, auth rejection for message + callback, callback parsing). The **live
+    transport** (`NewHTTPTransport`) is now implemented with the `go-telegram-bot-api/v5` SDK (long-poll
+    `getUpdates`; `sendMessage` + inline keyboard; `answerCallbackQuery`).
+- [x] **Optional + activated by token:** `serve` starts the bot (in a goroutine, so the Bot API
+    handshake never delays listening) only when a token is set (config `telegram_token` / env
+    `AI_AGENT_TELEGRAM_TOKEN`); no token, or a rejected/unreachable token, ⇒ engine runs unchanged
+    (logs and continues).
 - [x] **Auth lives in the frontend:** allowlist of Telegram user ids (config `telegram_allowed_users` /
     env `AI_AGENT_TELEGRAM_ALLOWED_USERS`), **fail-closed** (empty ⇒ reject everyone). Engine stays bound
     to `127.0.0.1`; only the bot faces the network. (No engine-level auth on the localhost single-user
     box — design §1.)
 - *Acceptance (Phase 4):* a family member drives a session from Telegram against one engine; an
     escalation surfaces in the chat and is recorded; a run can be cancelled mid-flight from the
-    CLI/API/bot. **Met at the logic level** (fake-transport e2e test); the last mile is the live
-    `NewHTTPTransport` impl (needs a bot token + egress).
+    CLI/API/bot. **Met:** logic covered by the fake-transport e2e test, and the live transport is wired
+    (needs a real bot token + egress to exercise against Telegram itself).
 
 **Risks/notes:** keep frontends thin — *all* policy (approval, audit) lives in the engine; the bot must
 contain zero policy, only rendering + relaying. Cancellation is cooperative (stops at the next
@@ -488,7 +491,7 @@ cross-device conversation continuity (start on SSH, continue on Telegram).
   `POST /sessions/{id}/turns`. `Client` gained the four peer methods. *Only the message history is
   persisted; the live executor is rebuilt per turn — nothing unserializable is stored.*
 - **Telegram is now session-based:** chat→session map, `/new` / `/end` commands, a message is a turn.
-- *Deferred:* live Telegram transport (still stubbed); `agent chat --addr` to drive a *remote* session
+- *Deferred:* `agent chat --addr` to drive a *remote* session
   (the SSH→Telegram continuity payoff); context-window trimming for long sessions.
 
 ---

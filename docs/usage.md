@@ -301,11 +301,11 @@ to `127.0.0.1`; only the bot faces the network. The allowlist is **fail-closed**
 the bot rejects everyone). The bot only needs *outbound* network access to
 `api.telegram.org` (it long-polls Telegram; nothing needs to reach into your box).
 
-> **Status:** the bot logic, config, and wiring are complete, but the live Telegram
-> transport is not implemented yet. Setting a token today logs `telegram: live transport
-> not built yet — running without the bot` and the engine runs normally. See
-> `internal/frontend/telegram/transport_http.go` — implementing `NewHTTPTransport`
-> activates the bot with no other change.
+The live transport uses the Telegram Bot API (`github.com/go-telegram-bot-api/telegram-bot-api`)
+and long-polls for updates, so it needs outbound access to `api.telegram.org`. If the token
+is rejected or unreachable, `serve` logs `telegram: connect: … — running without the bot`
+and the engine runs normally; the Bot API handshake happens in the background so it never
+delays startup.
 
 ---
 

@@ -30,8 +30,15 @@ _Last session: 2026-07-01._
 - **Also this session:** `--config-dir`/`AI_AGENT_CONFIG_DIR` (isolate config/tools/memory/audit for
   independent agents) and `--sessions-dir`/`AI_AGENT_SESSIONS_DIR` (isolate per-run transcripts);
   refreshed `README.md` + new `docs/usage.md` operator guide. All build/vet/test green, race-clean.
-  **Next open ideas:** implement the live Telegram transport; `agent chat --addr` to drive a remote
-  session (same conversation from SSH → Telegram); context-window trimming for long sessions.
+- **Live Telegram transport — DONE (later same session).** `telegram.NewHTTPTransport` implemented with
+  the `github.com/go-telegram-bot-api/telegram-bot-api/v5` SDK (long-poll `getUpdates`; `sendMessage`
+  with inline keyboard; `answerCallbackQuery`), adapted behind the existing `Transport` interface. serve
+  starts the bot in a **goroutine** so the Bot API handshake never delays listening; a bad/unreachable
+  token logs `telegram: connect: … — running without the bot` and the engine runs normally (verified —
+  a fake token got a real `Unauthorized` from api.telegram.org, so egress works). The bot is now fully
+  live given a real token + allowlist.
+  **Next open ideas:** `agent chat --addr` to drive a remote session (same conversation from SSH →
+  Telegram); context-window trimming for long sessions.
 
 ---
 

@@ -149,8 +149,9 @@ optional Telegram bot (`internal/frontend/telegram`, Phase 4e-6) is the referenc
 chat to an engine **session**, turning a chat message into a *turn* (`PostTurn`) and the pushed
 `approval_requested` event into an **Approve/Deny inline keyboard** wired back to `Client.Resolve`.
 `/new` starts a fresh session, `/end` terminates it. Its chat backend sits behind a
-`Transport` interface so the bot logic is tested with a fake and no network; the live Bot API
-transport (`NewHTTPTransport`) is the one deferred seam. The bot is **optional and
+`Transport` interface so the bot logic is tested with a fake and no network; the live transport
+(`NewHTTPTransport`, backed by the `go-telegram-bot-api` SDK) long-polls the Bot API. The bot is
+**optional and
 token-activated** (config/env), **auth lives in the frontend** (a fail-closed Telegram user-id
 allowlist), and the engine stays bound to `127.0.0.1` — only the bot faces the network. This is
 why auth is a frontend concern (design §1): the engine trusts localhost; the bot is the gate.

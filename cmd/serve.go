@@ -118,7 +118,8 @@ var serveCmd = &cobra.Command{
 
 		// Optional Telegram frontend: a peer client of this same engine over localhost.
 		// Active only when a token is configured; the engine runs unchanged otherwise.
-		startTelegramIfConfigured(cfg)
+		// Started in the background so the Bot API handshake never delays serving.
+		go startTelegramIfConfigured(cfg)
 
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
@@ -192,8 +193,8 @@ func (d serveDeps) turnRunner() api.TurnRunner {
 // startTelegramIfConfigured launches the optional Telegram bot when a token is
 // configured (config or env). The bot is a peer client of this engine over the local
 // HTTP transport — it drives api.Client exactly like `agent client`, with no special
-// access, and gates callers by the user-id allowlist. When no token is set, or while
-// the live Telegram transport is not yet built, the engine simply runs without it.
+// access, and gates callers by the user-id allowlist. When no token is set, or the
+// token/connection is rejected, the engine simply runs without it.
 func startTelegramIfConfigured(cfg Config) {
 	token := resolveTelegramToken(cfg)
 	if token == "" {
