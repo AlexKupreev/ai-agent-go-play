@@ -40,6 +40,12 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 	if auditLog != nil {
 		mux.HandleFunc("GET /audit", handleAudit(auditLog))
 	}
+	if e.SessionsEnabled() {
+		mux.HandleFunc("POST /sessions", handleStartSession(e))
+		mux.HandleFunc("GET /sessions", handleListSessions(e))
+		mux.HandleFunc("DELETE /sessions/{id}", handleCloseSession(e))
+		mux.HandleFunc("POST /sessions/{id}/turns", handlePostTurn(e))
+	}
 	return mux
 }
 

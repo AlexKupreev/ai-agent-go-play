@@ -13,7 +13,9 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 
 	"ai-agent-go-play/internal/api"
 )
@@ -61,20 +63,28 @@ type Transport interface {
 
 // Client is the slice of api.Client the bot needs. Declaring it here (rather than
 // depending on the concrete type) keeps the bot testable and documents the exact
-// surface the frontend uses. *api.Client satisfies it.
+// surface the frontend uses. *api.Client satisfies it. The bot talks to the engine in
+// terms of sessions (persistent conversations), so each chat is a running dialogue.
 type Client interface {
-	StartRun(ctx context.Context, task string) (string, error)
+	StartSession(ctx context.Context) (string, error)
+	PostTurn(ctx context.Context, sessionID, text string) (runID string, err error)
+	CloseSession(ctx context.Context, sessionID string) error
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
 }
 
 // Bot wires a chat Transport to the engine Client, gating access by an allowlist of
-// Telegram user ids. A message starts a run and streams its events back to the chat;
-// a parked approval becomes an Approve/Deny inline keyboard resolved over the API.
+// Telegram user ids. Each chat is mapped to an engine session (a persistent
+// conversation): a message runs a turn and streams its events back to the chat; a
+// parked approval becomes an Approve/Deny inline keyboard resolved over the API.
+// /new starts a fresh session, /end terminates the current one.
 type Bot struct {
 	transport Transport
 	client    Client
 	allowed   map[int64]bool
+
+	mu       sync.Mutex
+	sessions map[int64]string // chat id -> engine session id
 }
 
 // NewBot builds a bot. allowed is the set of Telegram user ids permitted to reach the
@@ -84,7 +94,7 @@ func NewBot(transport Transport, client Client, allowed []int64) *Bot {
 	for _, id := range allowed {
 		set[id] = true
 	}
-	return &Bot{transport: transport, client: client, allowed: set}
+	return &Bot{transport: transport, client: client, allowed: set, sessions: map[int64]string{}}
 }
 
 // Run reads updates and dispatches them until ctx is cancelled or the update stream
@@ -124,14 +134,81 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 		_ = b.transport.Send(ctx, m.ChatID, "not authorized", nil)
 		return
 	}
-	runID, err := b.client.StartRun(ctx, m.Text)
-	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "failed to start run: "+err.Error(), nil)
+	if strings.HasPrefix(m.Text, "/") {
+		b.handleCommand(ctx, m)
 		return
 	}
-	// Stream this run's events back to the chat. A run outlives the update that
-	// started it, so give the stream its own goroutine.
+
+	// A normal message is a turn on this chat's session (created on first use).
+	sessionID, err := b.sessionFor(ctx, m.ChatID)
+	if err != nil {
+		_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+		return
+	}
+	runID, err := b.client.PostTurn(ctx, sessionID, m.Text)
+	if err != nil {
+		_ = b.transport.Send(ctx, m.ChatID, "failed to run turn: "+err.Error(), nil)
+		return
+	}
+	// Stream the turn's events back to the chat. It outlives this update, so give the
+	// stream its own goroutine.
 	go b.stream(ctx, m.ChatID, runID)
+}
+
+// handleCommand handles the chat control commands: /new (fresh session), /end
+// (terminate the current session). Unknown commands get a short hint.
+func (b *Bot) handleCommand(ctx context.Context, m Message) {
+	switch strings.Fields(m.Text)[0] {
+	case "/new", "/start":
+		b.closeChat(ctx, m.ChatID) // end any existing session first
+		if _, err := b.sessionFor(ctx, m.ChatID); err != nil {
+			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+			return
+		}
+		_ = b.transport.Send(ctx, m.ChatID, "started a new session — send a message to begin", nil)
+	case "/end", "/stop":
+		if b.closeChat(ctx, m.ChatID) {
+			_ = b.transport.Send(ctx, m.ChatID, "session ended", nil)
+		} else {
+			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
+		}
+	default:
+		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (start a session), /end (terminate it)", nil)
+	}
+}
+
+// sessionFor returns the chat's engine session, creating one on first use.
+func (b *Bot) sessionFor(ctx context.Context, chatID int64) (string, error) {
+	b.mu.Lock()
+	id, ok := b.sessions[chatID]
+	b.mu.Unlock()
+	if ok {
+		return id, nil
+	}
+	id, err := b.client.StartSession(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.mu.Lock()
+	b.sessions[chatID] = id
+	b.mu.Unlock()
+	return id, nil
+}
+
+// closeChat terminates the chat's session (if any) on the engine and drops the
+// mapping. Returns whether a session was active.
+func (b *Bot) closeChat(ctx context.Context, chatID int64) bool {
+	b.mu.Lock()
+	id, ok := b.sessions[chatID]
+	delete(b.sessions, chatID)
+	b.mu.Unlock()
+	if !ok {
+		return false
+	}
+	if err := b.client.CloseSession(ctx, id); err != nil {
+		fmt.Fprintf(os.Stderr, "telegram: close session %s: %v\n", id, err)
+	}
+	return true
 }
 
 // stream relays a run's events to a chat until the stream ends.

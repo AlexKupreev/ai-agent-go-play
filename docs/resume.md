@@ -6,7 +6,36 @@ _Last session: 2026-07-01._
 
 ---
 
-## Latest session (2026-07-01): Phase 4e-6 — Telegram frontend as a peer client (transport stubbed)
+## Latest session (2026-07-01): interactive chat + persistent sessions (conversations)
+
+- **Local REPL — DONE.** Executor conversation now persists across `Run` calls (`a.messages` holds the
+  conversation *excluding* the system prompt, which is prepended fresh each request so prompt changes
+  apply on resume; `Restore`/`Messages`/`Reset` added). `agent chat` (`cmd/chat.go`) is a multi-turn
+  REPL: `/reset`, `/exit`/Ctrl-D, Ctrl-C cancels the current turn; `--plan` toggles per-turn planner
+  (default off). Test `TestExecutor_RetainsConversationAcrossTurns`.
+- **Persistent sessions over the API — DONE (disk-backed).** `internal/session`: `Store` + `FileStore`
+  (one JSON file per session under `<config-dir>/sessions/`, atomic write, SQLite later). Design:
+  **a turn is a run whose executor is seeded with the session's history** — reuses the whole
+  run/hub/SSE/approval/audit machinery. Engine gained `EnableSessions`, `StartSession`, `ListSessions`,
+  `CloseSession`, `PostTurn` (per-session mutex serializes turns; `launch` helper shared with
+  `StartRun`); `TurnRunner` seam. Endpoints `POST /sessions`, `GET /sessions`, `DELETE /sessions/{id}`,
+  `POST /sessions/{id}/turns` (→ run id, stream via `/runs/{id}/events`). `Client.StartSession/PostTurn/
+  CloseSession/ListSessions`. serve builds `session.FileStore` + a `turnRunner` (shares `serveDeps.
+  buildExecutor` with the run runner). Tests: `session_test.go`, `sessions_test.go` (retain+persist,
+  unknown/closed → 404, disabled). Live-verified over HTTP (create → turn → delete → 404).
+- **Telegram now session-based.** Bot maps chat→session; `/new` starts a fresh session, `/end`
+  terminates; a normal message is a turn (`PostTurn`) with retained context. `Client` interface swapped
+  `StartRun` → `StartSession`/`PostTurn`/`CloseSession`. Tests updated + `TestBot_NewAndEndCommands`.
+  Transport still stubbed (`NewHTTPTransport` unbuilt) — bot logic fully tested with the fake.
+- **Also this session:** `--config-dir`/`AI_AGENT_CONFIG_DIR` (isolate config/tools/memory/audit for
+  independent agents) and `--sessions-dir`/`AI_AGENT_SESSIONS_DIR` (isolate per-run transcripts);
+  refreshed `README.md` + new `docs/usage.md` operator guide. All build/vet/test green, race-clean.
+  **Next open ideas:** implement the live Telegram transport; `agent chat --addr` to drive a remote
+  session (same conversation from SSH → Telegram); context-window trimming for long sessions.
+
+---
+
+## Session (2026-07-01): Phase 4e-6 — Telegram frontend as a peer client (transport stubbed)
 
 - **4e-6 DONE (transport stubbed).** `internal/frontend/telegram`: `Bot` drives a `Client` (the slice
   of `api.Client` it needs) — a peer, no special access. A message starts a run and streams events back

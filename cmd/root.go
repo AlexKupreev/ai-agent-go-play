@@ -22,8 +22,17 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringVar(&configDirFlag, "config-dir", "",
+		"directory for this agent's config/tools/memory/audit "+
+			"(default ~/.config/ai-agent; env AI_AGENT_CONFIG_DIR). "+
+			"Point two `agent serve` processes at different dirs for two independent agents.")
+	rootCmd.PersistentFlags().StringVar(&sessionsDirFlag, "sessions-dir", "",
+		"directory for per-run transcripts, one subdir per run "+
+			"(default ~/.local/share/ai-agent/sessions; env AI_AGENT_SESSIONS_DIR)")
+
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clientCmd)
 	rootCmd.AddCommand(stopCmd)

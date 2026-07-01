@@ -72,46 +72,81 @@ func init() {
 	configCmd.AddCommand(setTierCmd)
 }
 
-// configPath returns the path to the config file, e.g. ~/.config/ai-agent/config.json
-func configPath() (string, error) {
+// configDirFlag is bound to the persistent --config-dir flag (see cmd/root.go).
+var configDirFlag string
+
+// envConfigDir overrides the config directory when --config-dir is not given.
+const envConfigDir = "AI_AGENT_CONFIG_DIR"
+
+// configDir returns the base directory holding this agent's stored state — config,
+// tool catalog, memory, and the process-wide audit log. Precedence: --config-dir flag
+// > AI_AGENT_CONFIG_DIR env > the default ~/.config/ai-agent.
+//
+// Pointing two `agent serve` processes at different config dirs is how you run two
+// fully independent agents (separate tools + memory + audit) on one box — no shared
+// state between them.
+func configDir() (string, error) {
+	if configDirFlag != "" {
+		return configDirFlag, nil
+	}
+	if v := strings.TrimSpace(os.Getenv(envConfigDir)); v != "" {
+		return v, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "ai-agent", "config.json"), nil
+	return filepath.Join(home, ".config", "ai-agent"), nil
 }
+
+// sessionsDirFlag is bound to the persistent --sessions-dir flag (see cmd/root.go).
+var sessionsDirFlag string
+
+// envSessionsDir overrides the sessions directory when --sessions-dir is not given.
+const envSessionsDir = "AI_AGENT_SESSIONS_DIR"
+
+// sessionsDir returns the root under which per-run transcripts are written (each run
+// gets its own <root>/<runID>/ subdirectory). Precedence: --sessions-dir flag >
+// AI_AGENT_SESSIONS_DIR env > "" (the logger's default ~/.local/share/ai-agent/
+// sessions). Give two agents distinct sessions roots so their transcripts stay
+// separate, the same way --config-dir separates their config/tools/memory/audit.
+func sessionsDir() string {
+	if sessionsDirFlag != "" {
+		return sessionsDirFlag
+	}
+	return strings.TrimSpace(os.Getenv(envSessionsDir))
+}
+
+// underConfigDir joins name onto the resolved config directory.
+func underConfigDir(name string) (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// configPath returns the path to the config file, e.g. ~/.config/ai-agent/config.json
+func configPath() (string, error) { return underConfigDir("config.json") }
 
 // catalogPath returns the path to the persistent tool catalog, e.g.
 // ~/.config/ai-agent/tools.json (created on first authored tool).
-func catalogPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "ai-agent", "tools.json"), nil
-}
+func catalogPath() (string, error) { return underConfigDir("tools.json") }
 
 // memoryPath returns the path to the long-term memory store, e.g.
 // ~/.config/ai-agent/memory.json (created on first remembered fact).
-func memoryPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "ai-agent", "memory.json"), nil
-}
+func memoryPath() (string, error) { return underConfigDir("memory.json") }
 
 // auditPath returns the path to the process-wide audit log used by the serve
 // management plane, e.g. ~/.config/ai-agent/audit.jsonl. (Per-run transcripts keep
 // their own audit file under the session dir; this one records management-plane
-// effects such as tool revocation. A run-spanning central reader is Phase 4e-4.)
-func auditPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "ai-agent", "audit.jsonl"), nil
-}
+// effects such as tool revocation.)
+func auditPath() (string, error) { return underConfigDir("audit.jsonl") }
+
+// sessionStorePath returns the directory holding persisted conversations (one JSON
+// file per session), e.g. ~/.config/ai-agent/sessions. This is agent state (distinct
+// from the per-run transcripts under --sessions-dir, which are logs).
+func sessionStorePath() (string, error) { return underConfigDir("sessions") }
 
 // Env vars overriding the Telegram config (env wins, so a token can be supplied
 // without editing the config file).

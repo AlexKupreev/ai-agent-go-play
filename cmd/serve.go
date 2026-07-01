@@ -14,7 +14,9 @@ import (
 	"ai-agent-go-play/internal/frontend/telegram"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
+	"ai-agent-go-play/internal/provider"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
+	"ai-agent-go-play/internal/session"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -82,12 +84,32 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		runner, err := newServeRunner(cfg, resolveModel(modelFlag, cfg), tier, approvals, registry, mem, rec)
+
+		// One persistent conversation store, shared across runs and exposed at
+		// /sessions: a chat can resume across restarts and across frontends.
+		sessStoreDir, err := sessionStorePath()
 		if err != nil {
 			return err
 		}
+		sessions := session.NewFileStore(sessStoreDir)
 
-		engine := api.NewEngine(runner)
+		workDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get working directory: %w", err)
+		}
+		deps := serveDeps{
+			prov:     openaiprovider.New(cfg.OpenAIKey),
+			workDir:  workDir,
+			model:    resolveModel(modelFlag, cfg),
+			tier:     tier,
+			approver: approvals,
+			registry: registry,
+			mem:      mem,
+			central:  rec,
+		}
+
+		engine := api.NewEngine(deps.runner())
+		engine.EnableSessions(sessions, deps.turnRunner())
 		// Push parked escalations (and their resolutions) onto the owning run's event
 		// stream, so a streaming frontend learns of them without polling /approvals.
 		approvals.SetEmitter(engine.PublishToRun)
@@ -105,43 +127,66 @@ var serveCmd = &cobra.Command{
 	},
 }
 
-// newServeRunner builds the Runner the engine drives: each run gets its own disk
-// log and per-session audit recorder, but shares the process-wide tool catalog,
-// approver, and audit log, so authored tools, parked approvals, and effect history
-// are consistent across runs and with the API. central is the process-wide audit
-// sink; each run's events fan out to both it and the session transcript.
-func newServeRunner(cfg Config, model string, tier capability.Tier, approver tools.Approver, registry tools.Registry, mem memory.Store, central audit.Recorder) (api.Runner, error) {
-	prov := openaiprovider.New(cfg.OpenAIKey)
-	workDir, err := os.Getwd()
+// serveDeps holds everything needed to build a per-run executor. The shared
+// process-wide state (catalog, approver, memory, central audit) is consistent across
+// runs and with the API; per-run state (transcript, session audit file) is fresh.
+type serveDeps struct {
+	prov     *openaiprovider.Client
+	workDir  string
+	model    string
+	tier     capability.Tier
+	approver tools.Approver
+	registry tools.Registry
+	mem      memory.Store
+	central  audit.Recorder
+}
+
+// buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
+// runID (so the transcript, audit Run field, and parked approvals share one id). It
+// returns a cleanup to defer. Shared by the plain runner and the session turn runner.
+func (d serveDeps) buildExecutor(runID string, obs agent.Observer) (*agent.Agent, func(), error) {
+	log, err := logger.NewWithID(sessionsDir(), runID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get working directory: %w", err)
+		return nil, nil, fmt.Errorf("failed to create logger: %w", err)
 	}
+	sessionRec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
+	if err != nil {
+		log.Close()
+		return nil, nil, fmt.Errorf("failed to open audit log: %w", err)
+	}
+	// Effects fan out to the session transcript and the process-wide log (GET /audit).
+	rec := audit.Recorders{sessionRec, d.central}
+	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
+	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, rec, d.tier, d.approver)
+	cleanup := func() { sessionRec.Close(); log.Close() }
+	return executor, cleanup, nil
+}
 
+// runner drives a single-shot run: a fresh executor with no prior context.
+func (d serveDeps) runner() api.Runner {
 	return api.RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
-		// Use the engine's run id everywhere (session dir, audit Run field, approval
-		// RunID) so the whole run keys off one id — which is what routes an approval
-		// escalation back to this run's event stream.
-		log, err := logger.NewWithID(runID)
+		ex, cleanup, err := d.buildExecutor(runID, obs)
 		if err != nil {
-			return "", fmt.Errorf("failed to create logger: %w", err)
+			return "", err
 		}
-		defer log.Close()
+		defer cleanup()
+		return ex.Run(ctx, task)
+	})
+}
 
-		sessionRec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
+// turnRunner drives one session turn: a fresh executor seeded with the session's
+// prior history, returning the updated history for the engine to persist.
+func (d serveDeps) turnRunner() api.TurnRunner {
+	return api.TurnRunnerFunc(func(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+		ex, cleanup, err := d.buildExecutor(runID, obs)
 		if err != nil {
-			return "", fmt.Errorf("failed to open audit log: %w", err)
+			return "", nil, err
 		}
-		defer sessionRec.Close()
-
-		// Effects are recorded to both the session transcript and the process-wide
-		// log (which GET /audit reads).
-		rec := audit.Recorders{sessionRec, central}
-
-		// Engine event stream + disk log see the same events.
-		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-		executor := agent.NewExecutor(prov, workDir, model, runID, obsAll, registry, mem, rec, tier, approver)
-		return executor.Run(ctx, task)
-	}), nil
+		defer cleanup()
+		ex.Restore(prior)
+		answer, err := ex.Run(ctx, text)
+		return answer, ex.Messages(), err
+	})
 }
 
 // startTelegramIfConfigured launches the optional Telegram bot when a token is

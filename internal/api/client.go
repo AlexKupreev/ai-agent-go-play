@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/session"
 )
 
 // Client is the peer-side of the HTTP+SSE transport: it drives a remote engine the
@@ -208,6 +209,88 @@ func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit
 		return nil, err
 	}
 	return out, nil
+}
+
+// StartSession creates a persistent conversation on the engine and returns its id.
+func (c *Client) StartSession(ctx context.Context) (string, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/sessions", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("start session: %s", resp.Status)
+	}
+	var out startSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.SessionID, nil
+}
+
+// ListSessions returns the engine's sessions, newest-updated first.
+func (c *Client) ListSessions(ctx context.Context) ([]session.Info, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/sessions", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list sessions: %s", resp.Status)
+	}
+	var out []session.Info
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CloseSession terminates a session on the engine.
+func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/sessions/"+sessionID, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("close session %s: %s", sessionID, resp.Status)
+	}
+	return nil
+}
+
+// PostTurn submits a turn to a session and returns the run id to stream for its reply.
+func (c *Client) PostTurn(ctx context.Context, sessionID, text string) (string, error) {
+	body, _ := json.Marshal(postTurnRequest{Text: text})
+	req, err := c.newRequest(ctx, http.MethodPost, "/sessions/"+sessionID+"/turns", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("post turn: %s", resp.Status)
+	}
+	var out postTurnResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.RunID, nil
 }
 
 // ListRuns returns this client's runs, newest first.

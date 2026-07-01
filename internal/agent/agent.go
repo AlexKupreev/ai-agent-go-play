@@ -84,7 +84,15 @@ type Agent struct {
 	glue     *sandbox.LuaGlue
 	tier     capability.Tier
 	runID    string
-	task     string // the run's task, used as the tool-search query
+	task     string // the current turn's task, used as the tool-search query
+
+	// messages is the running conversation, EXCLUDING the system prompt (that is
+	// prepended fresh from current code on each request, so it is never persisted and
+	// prompt changes take effect on resume). It carries across Run calls so one agent
+	// can hold a multi-turn conversation (the interactive REPL); single-shot callers
+	// build a fresh agent per task. Restore/Messages let a session layer persist and
+	// reload it (see internal/session).
+	messages []provider.Message
 }
 
 func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tools.Tool, obs Observer) *Agent {
@@ -181,6 +189,26 @@ func NewPlanner(p provider.Provider, model string, obs Observer) *Agent {
 	return a
 }
 
+// Reset clears the conversation history so the next Run starts a fresh exchange.
+// Used by the interactive REPL's /reset.
+func (a *Agent) Reset() { a.messages = nil }
+
+// Restore replaces the conversation history (excluding the system prompt), so a
+// persisted session can resume in a freshly built executor. Copied defensively.
+func (a *Agent) Restore(msgs []provider.Message) {
+	a.messages = append([]provider.Message(nil), msgs...)
+}
+
+// Messages returns a copy of the current conversation history (excluding the system
+// prompt) for a session layer to persist.
+func (a *Agent) Messages() []provider.Message {
+	return append([]provider.Message(nil), a.messages...)
+}
+
+// Model returns the effective model id (after the built-in default is applied), for
+// display.
+func (a *Agent) Model() string { return a.model }
+
 // emit sends a run event to the observer (no-op if none is attached).
 func (a *Agent) emit(e Event) {
 	if a.obs != nil {
@@ -188,27 +216,30 @@ func (a *Agent) emit(e Event) {
 	}
 }
 
-// Run executes the ReAct loop and returns the final text answer.
+// Run appends a user turn to the conversation and drives the ReAct loop until the
+// model returns a final text answer. Called once it is a single-shot task; called
+// repeatedly on the same agent it is a multi-turn conversation, since the message
+// history persists on the agent between calls.
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.task = userInput
 	a.emit(Event{Kind: EvStart, Task: userInput})
 
-	messages := []provider.Message{
-		provider.SystemText(a.systemPrompt),
-		provider.UserText(userInput),
-	}
+	// The conversation (a.messages) excludes the system prompt; append the user turn.
+	a.messages = append(a.messages, provider.UserText(userInput))
 
 	for i := range maxIterations {
 		// Recompute each iteration so a tool authored mid-run becomes callable on
 		// the next step. The list is append-only and stable, so the serialized
 		// prefix is unchanged until a tool is added — cache stays warm.
 		toolDefs := a.buildToolDefs()
-		a.emit(Event{Kind: EvRequest, Iteration: i, Messages: messages})
+		// Prepend the current system prompt at request time (not stored in history).
+		reqMessages := append([]provider.Message{provider.SystemText(a.systemPrompt)}, a.messages...)
+		a.emit(Event{Kind: EvRequest, Iteration: i, Messages: reqMessages})
 
 		start := time.Now()
 		resp, err := a.provider.Step(ctx, provider.StepRequest{
 			Model:          a.model,
-			Messages:       messages,
+			Messages:       reqMessages,
 			Tools:          toolDefs,
 			ResponseFormat: a.responseFormat,
 		})
@@ -222,11 +253,13 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		a.emit(Event{Kind: EvResponse, Iteration: i, Text: text, Calls: toolCalls, Usage: resp.Usage, DurationMs: durationMs})
 
 		if len(toolCalls) == 0 {
+			// Keep the assistant's answer in the history so the next turn has context.
+			a.messages = append(a.messages, provider.Message{Role: provider.RoleAssistant, Content: resp.Content})
 			return text, nil
 		}
 
 		// Append the assistant turn (text + tool calls) before its results.
-		messages = append(messages, provider.Message{Role: provider.RoleAssistant, Content: resp.Content})
+		a.messages = append(a.messages, provider.Message{Role: provider.RoleAssistant, Content: resp.Content})
 
 		for _, call := range toolCalls {
 			a.emit(Event{Kind: EvToolStart, Call: &call})
@@ -238,7 +271,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 
 			a.emit(Event{Kind: EvToolResult, Call: &call, Result: result, IsError: err != nil})
 
-			messages = append(messages, provider.ToolResultMessage(call.ID, result, err != nil))
+			a.messages = append(a.messages, provider.ToolResultMessage(call.ID, result, err != nil))
 		}
 	}
 

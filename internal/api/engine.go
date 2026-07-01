@@ -5,14 +5,21 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/provider"
+	"ai-agent-go-play/internal/session"
 )
 
 // ErrUnknownRun is returned when a run id is not found.
 var ErrUnknownRun = errors.New("unknown run")
+
+// ErrSessionsDisabled is returned by the session methods when no session store is
+// wired (e.g. tests, or a serve without persistence).
+var ErrSessionsDisabled = errors.New("sessions are not enabled")
 
 // Run states.
 const (
@@ -36,6 +43,21 @@ type RunnerFunc func(ctx context.Context, runID, task string, obs agent.Observer
 
 func (f RunnerFunc) Run(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
 	return f(ctx, runID, task, obs)
+}
+
+// TurnRunner runs one conversation turn: it builds an executor seeded with prior
+// messages, runs text to a final answer while emitting events to obs, and returns the
+// answer plus the updated history for the session layer to persist. It is the session
+// analogue of Runner (a run whose executor carries prior context).
+type TurnRunner interface {
+	RunTurn(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (answer string, updated []provider.Message, err error)
+}
+
+// TurnRunnerFunc adapts a plain function to TurnRunner.
+type TurnRunnerFunc func(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error)
+
+func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+	return f(ctx, runID, prior, text, obs)
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -74,12 +96,31 @@ type Engine struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+
+	// Session support (optional; nil unless EnableSessions is called). turns runs a
+	// turn seeded with prior history; sessions persists the conversation; sessLocks
+	// serializes turns within one session so its history can't interleave.
+	sessions    session.Store
+	turns       TurnRunner
+	sessLocksMu sync.Mutex
+	sessLocks   map[string]*sync.Mutex
 }
 
 // NewEngine builds an engine over the given Runner.
 func NewEngine(r Runner) *Engine {
-	return &Engine{runner: r, runs: make(map[string]*run)}
+	return &Engine{runner: r, runs: make(map[string]*run), sessLocks: make(map[string]*sync.Mutex)}
 }
+
+// EnableSessions wires the persistent conversation layer: store holds histories and
+// turns runs a turn seeded with prior context. Until called, the session methods
+// return ErrSessionsDisabled and the /sessions endpoints are not served.
+func (e *Engine) EnableSessions(store session.Store, turns TurnRunner) {
+	e.sessions = store
+	e.turns = turns
+}
+
+// SessionsEnabled reports whether the conversation layer is wired.
+func (e *Engine) SessionsEnabled() bool { return e.sessions != nil && e.turns != nil }
 
 // StartRun begins a run in the background and returns its id. Events flow to the
 // run's Hub, which callers reach via Subscribe; the hub closes when the run ends.
@@ -89,6 +130,15 @@ func NewEngine(r Runner) *Engine {
 // returns, which would abort the run mid-flight — e.g. while it waits for an
 // approval). The stored cancel is the per-run kill switch (StopRun).
 func (e *Engine) StartRun(task string) string {
+	return e.launch(task, func(ctx context.Context, id string, hub *Hub) (string, error) {
+		return e.runner.Run(ctx, id, task, hub)
+	})
+}
+
+// launch registers a run, executes work in the background, records the terminal state,
+// and emits the terminal done/error event before closing the hub. It is the shared
+// spine of both a plain run (StartRun) and a session turn (PostTurn).
+func (e *Engine) launch(task string, work func(ctx context.Context, runID string, hub *Hub) (string, error)) string {
 	id := newRunID()
 	hub := newHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,7 +160,7 @@ func (e *Engine) StartRun(task string) string {
 
 	go func() {
 		defer cancel() // release the run context once the run finishes
-		result, err := e.runner.Run(ctx, id, task, hub)
+		result, err := work(ctx, id, hub)
 
 		ended := time.Now().UTC()
 		r.mu.Lock()
@@ -133,6 +183,80 @@ func (e *Engine) StartRun(task string) string {
 	}()
 
 	return id
+}
+
+// StartSession creates a new persistent conversation and returns its id.
+func (e *Engine) StartSession() (string, error) {
+	if !e.SessionsEnabled() {
+		return "", ErrSessionsDisabled
+	}
+	s, err := e.sessions.Create()
+	if err != nil {
+		return "", err
+	}
+	return s.ID, nil
+}
+
+// ListSessions returns session metadata, newest-updated first.
+func (e *Engine) ListSessions() ([]session.Info, error) {
+	if !e.SessionsEnabled() {
+		return nil, ErrSessionsDisabled
+	}
+	return e.sessions.List()
+}
+
+// CloseSession terminates (deletes) a session. session.ErrNotFound if unknown.
+func (e *Engine) CloseSession(id string) error {
+	if !e.SessionsEnabled() {
+		return ErrSessionsDisabled
+	}
+	return e.sessions.Delete(id)
+}
+
+// PostTurn runs one turn against a session: it starts a run (streamable via the usual
+// run endpoints) that loads the session's history, runs text seeded with it, and
+// persists the updated history. Turns within a session are serialized so the history
+// can't interleave. Returns the run id, or session.ErrNotFound if the session is gone.
+func (e *Engine) PostTurn(sessionID, text string) (string, error) {
+	if !e.SessionsEnabled() {
+		return "", ErrSessionsDisabled
+	}
+	// Fail fast if the session doesn't exist, before spinning up a run.
+	if _, err := e.sessions.Get(sessionID); err != nil {
+		return "", err
+	}
+	lock := e.sessionLock(sessionID)
+	id := e.launch(text, func(ctx context.Context, runID string, hub *Hub) (string, error) {
+		lock.Lock()
+		defer lock.Unlock()
+
+		sess, err := e.sessions.Get(sessionID)
+		if err != nil {
+			return "", err // closed between accept and execution
+		}
+		answer, updated, err := e.turns.RunTurn(ctx, runID, sess.Messages, text, hub)
+		if err != nil {
+			return "", err
+		}
+		sess.Messages = updated
+		if err := e.sessions.Save(sess); err != nil {
+			return "", fmt.Errorf("persist session: %w", err)
+		}
+		return answer, nil
+	})
+	return id, nil
+}
+
+// sessionLock returns the per-session turn lock, creating it on first use.
+func (e *Engine) sessionLock(id string) *sync.Mutex {
+	e.sessLocksMu.Lock()
+	defer e.sessLocksMu.Unlock()
+	lock := e.sessLocks[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		e.sessLocks[id] = lock
+	}
+	return lock
 }
 
 // lookup returns a run by id, or ErrUnknownRun if it does not exist.

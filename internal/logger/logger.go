@@ -18,22 +18,29 @@ type Logger struct {
 }
 
 // New creates a session directory under a freshly generated run id. See NewWithID.
-func New() (*Logger, error) {
-	return NewWithID(generateRunID())
+func New(baseDir string) (*Logger, error) {
+	return NewWithID(baseDir, generateRunID())
 }
 
 // NewWithID creates a session directory for the given run id and opens the log file
 // inside it. Callers that already have a run id (e.g. the engine, so the session
 // dir, event stream, audit records, and approvals all share one id) pass it here.
-// Structure:
 //
-//	~/.local/share/ai-agent/sessions/<runID>/
+// baseDir is the sessions root; the transcript lands in baseDir/<runID>/. An empty
+// baseDir falls back to the default (~/.local/share/ai-agent/sessions), so distinct
+// agents can keep separate transcripts by passing distinct roots. Structure:
+//
+//	<baseDir>/<runID>/
 //	  run.jsonl
 //	  artifacts/
-func NewWithID(runID string) (*Logger, error) {
-	sessionsDir, err := baseSessionsDir()
-	if err != nil {
-		return nil, err
+func NewWithID(baseDir, runID string) (*Logger, error) {
+	sessionsDir := baseDir
+	if sessionsDir == "" {
+		var err error
+		sessionsDir, err = baseSessionsDir()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	sessionDir := filepath.Join(sessionsDir, runID)

@@ -468,6 +468,31 @@ management plane build on.
 
 ---
 
+## Phase 4f — Interactive chat + persistent conversations (sessions)  *(DONE)*
+
+Added after 4e when the deployment story surfaced two needs: a Claude-Code-style REPL, and
+cross-device conversation continuity (start on SSH, continue on Telegram).
+
+- **Continuable executor.** `*agent.Agent` now retains its conversation across `Run` calls
+  (`a.messages` = the conversation *without* the system prompt, which is prepended fresh each request
+  so prompt edits apply on resume). `Restore`/`Messages`/`Reset` expose it. Single-shot callers (`run`,
+  the stateless `/runs` path) are unaffected — they build a fresh agent per task.
+- **Local REPL:** `agent chat` (`cmd/chat.go`) — multi-turn, `/reset`/`/exit`, Ctrl-C cancels a turn,
+  `--plan` toggles a per-turn planner (default off; experimental, configurable per the "don't know
+  what's better" call).
+- **Sessions over the API (disk-backed).** `internal/session` (`Store` + `FileStore`, one JSON file per
+  session under `<config-dir>/sessions/`, SQLite later). **A turn is a run whose executor is seeded with
+  the session's history**, so the entire run/hub/SSE/approval/audit machinery is reused. Engine:
+  `EnableSessions` + `StartSession`/`ListSessions`/`CloseSession`/`PostTurn` (per-session mutex; shared
+  `launch` spine). Endpoints `POST /sessions`, `GET /sessions`, `DELETE /sessions/{id}`,
+  `POST /sessions/{id}/turns`. `Client` gained the four peer methods. *Only the message history is
+  persisted; the live executor is rebuilt per turn — nothing unserializable is stored.*
+- **Telegram is now session-based:** chat→session map, `/new` / `/end` commands, a message is a turn.
+- *Deferred:* live Telegram transport (still stubbed); `agent chat --addr` to drive a *remote* session
+  (the SSH→Telegram continuity payoff); context-window trimming for long sessions.
+
+---
+
 ## Phase 5 — Reserve tier (only if isolation needs grow)
 
 Not planned work; pull from here only when a concrete need appears.

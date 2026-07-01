@@ -38,7 +38,7 @@ var runCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		log, err := logger.New()
+		log, err := logger.New(sessionsDir())
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}

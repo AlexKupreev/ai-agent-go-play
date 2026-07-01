@@ -33,6 +33,8 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   revoke it (404 if absent, audited as `tool_revoked`)
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
+- `POST /sessions` → `{session_id}`; `GET /sessions` → list; `DELETE /sessions/{id}` → terminate;
+  `POST /sessions/{id}/turns` `{text}` → `{run_id}` (stream the reply via `GET /runs/{run_id}/events`)
 
 Parked approvals are also **pushed onto the run's event stream** (`approval_requested` /
 `approval_resolved` events carrying `approval_id`), so a streaming frontend need not poll `/approvals`;
@@ -121,12 +123,32 @@ the queue also **pushes** the escalation onto the owning run's event stream
 streaming frontend need not poll `GET /approvals` (which remains as a fallback). `POST
 /approvals/{id}` still resolves.
 
+## Persistent conversations (sessions)
+
+The stateless `POST /runs` path is one-shot: a fresh executor per call. For a multi-turn
+conversation that survives restarts and is resumable from any frontend, the engine adds a
+**session layer on top of runs**: a session owns a persisted message history, and a *turn is
+a run whose executor is seeded with that history*. So turns reuse the entire run machinery —
+the same event hub/SSE stream, the same approval queue, the same audit — nothing is
+duplicated.
+
+- **State, not executors, is persisted.** The live executor is unserializable; the message
+  history is plain JSON. A turn loads the history, builds a fresh executor, `Restore`s it,
+  runs, and the engine persists the updated history. `internal/session` is the store (one
+  JSON file per session; SQLite is the eventual home behind the `session.Store` interface).
+- **Turns are serialized per session** (a per-session mutex) so history can't interleave.
+- **The system prompt is not stored** — it's re-seeded from current code each turn, so prompt
+  changes take effect on resume.
+- `Client.StartSession` / `PostTurn` / `CloseSession` / `ListSessions` are the peer methods;
+  a conversational frontend streams a turn's reply on the returned run id.
+
 ## Frontends as peer clients (Telegram)
 
 A frontend is just another `api.Client` consumer — no privileged path into the engine. The
-optional Telegram bot (`internal/frontend/telegram`, Phase 4e-6) is the reference: a `Bot` drives
-the client, turning a chat message into a run and the pushed `approval_requested` event into an
-**Approve/Deny inline keyboard** wired back to `Client.Resolve`. Its chat backend sits behind a
+optional Telegram bot (`internal/frontend/telegram`, Phase 4e-6) is the reference: a `Bot` maps each
+chat to an engine **session**, turning a chat message into a *turn* (`PostTurn`) and the pushed
+`approval_requested` event into an **Approve/Deny inline keyboard** wired back to `Client.Resolve`.
+`/new` starts a fresh session, `/end` terminates it. Its chat backend sits behind a
 `Transport` interface so the bot logic is tested with a fake and no network; the live Bot API
 transport (`NewHTTPTransport`) is the one deferred seam. The bot is **optional and
 token-activated** (config/env), **auth lives in the frontend** (a fail-closed Telegram user-id

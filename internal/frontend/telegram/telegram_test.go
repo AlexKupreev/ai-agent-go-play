@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -65,22 +66,40 @@ func (f *fakeTransport) waitForSend(t *testing.T, pred func(sentMessage) bool) s
 }
 
 type fakeClient struct {
-	mu          sync.Mutex
-	startCalls  int
-	startedTask string
-	resolveID   string
-	resolveOK   bool
-	resolved    chan bool
+	mu            sync.Mutex
+	sessionCalls  int
+	turnCalls     int
+	lastTurnText  string
+	lastSessionID string
+	closedID      string
+	resolveID     string
+	resolveOK     bool
+	resolved      chan bool
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{resolved: make(chan bool, 1)} }
 
-func (c *fakeClient) StartRun(_ context.Context, task string) (string, error) {
+func (c *fakeClient) StartSession(context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.startCalls++
-	c.startedTask = task
+	c.sessionCalls++
+	return "sess1", nil
+}
+
+func (c *fakeClient) PostTurn(_ context.Context, sessionID, text string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.turnCalls++
+	c.lastSessionID = sessionID
+	c.lastTurnText = text
 	return "run1", nil
+}
+
+func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closedID = sessionID
+	return nil
 }
 
 // StreamEvents scripts a run that parks an approval, waits for the decision (via
@@ -135,8 +154,11 @@ func TestBot_ApprovalFlow(t *testing.T) {
 	if kb.chatID != 100 || kb.buttons[0].Data != "approve:a1" || kb.buttons[1].Data != "deny:a1" {
 		t.Fatalf("unexpected approval keyboard: %+v", kb)
 	}
-	if cl.startedTask != "clean up" {
-		t.Fatalf("run task = %q, want %q", cl.startedTask, "clean up")
+	if cl.lastTurnText != "clean up" {
+		t.Fatalf("turn text = %q, want %q", cl.lastTurnText, "clean up")
+	}
+	if cl.sessionCalls != 1 || cl.lastSessionID != "sess1" {
+		t.Fatalf("expected one session created and used, got calls=%d id=%q", cl.sessionCalls, cl.lastSessionID)
 	}
 
 	// User presses Approve.
@@ -164,12 +186,43 @@ func TestBot_RejectsUnauthorizedMessage(t *testing.T) {
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 99, Text: "do something"}}
 
 	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "not authorized" })
-	// Give the bot a moment; it must not have started a run.
+	// Give the bot a moment; it must not have started a session or run a turn.
 	time.Sleep(20 * time.Millisecond)
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	if cl.startCalls != 0 {
-		t.Fatalf("StartRun called %d times for unauthorized user, want 0", cl.startCalls)
+	if cl.sessionCalls != 0 || cl.turnCalls != 0 {
+		t.Fatalf("unauthorized user reached engine: sessions=%d turns=%d", cl.sessionCalls, cl.turnCalls)
+	}
+}
+
+// TestBot_NewAndEndCommands covers the session control commands: /new creates a
+// session, /end terminates it.
+func TestBot_NewAndEndCommands(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	// /new starts a session.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	cl.mu.Lock()
+	if cl.sessionCalls != 1 {
+		cl.mu.Unlock()
+		t.Fatalf("StartSession calls = %d, want 1", cl.sessionCalls)
+	}
+	cl.mu.Unlock()
+
+	// /end terminates it (the session the bot created).
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/end"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "session ended" })
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.closedID != "sess1" {
+		t.Fatalf("closed session = %q, want sess1", cl.closedID)
 	}
 }
 
