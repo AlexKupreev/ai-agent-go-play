@@ -16,8 +16,9 @@ import (
 // approvals and catalog may each be nil; their endpoints are registered only when
 // the corresponding dependency is supplied (run/stream is always available). rec is
 // the management-plane audit sink (used when a tool is revoked over the API); it may
-// be nil, in which case revokes are not audited.
-func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec audit.Recorder) http.Handler {
+// be nil, in which case revokes are not audited. auditLog is the query side of the
+// audit log for GET /audit; it may be nil, in which case that endpoint is absent.
+func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec audit.Recorder, auditLog audit.Reader) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /runs", handleStartRun(e))
 	mux.HandleFunc("GET /runs", handleListRuns(e))
@@ -35,6 +36,9 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 		mux.HandleFunc("GET /tools/search", handleSearchTools(catalog))
 		mux.HandleFunc("GET /tools/{name}", handleToolDetail(catalog))
 		mux.HandleFunc("DELETE /tools/{name}", handleRevokeTool(catalog, rec))
+	}
+	if auditLog != nil {
+		mux.HandleFunc("GET /audit", handleAudit(auditLog))
 	}
 	return mux
 }

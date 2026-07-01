@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+
+	"ai-agent-go-play/internal/audit"
 )
 
 // Client is the peer-side of the HTTP+SSE transport: it drives a remote engine the
@@ -168,6 +172,42 @@ func (c *Client) RevokeTool(ctx context.Context, name string) error {
 		return fmt.Errorf("revoke tool %s: %s", name, resp.Status)
 	}
 	return nil
+}
+
+// Audit returns audit events from the remote engine's process-wide log, oldest
+// first. run and typ filter (empty = wildcard); limit caps to the last N (<=0 = all).
+func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit.Event, error) {
+	q := url.Values{}
+	if run != "" {
+		q.Set("run", run)
+	}
+	if typ != "" {
+		q.Set("type", typ)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	path := "/audit"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	req, err := c.newRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("audit: %s", resp.Status)
+	}
+	var out []audit.Event
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ListRuns returns this client's runs, newest first.

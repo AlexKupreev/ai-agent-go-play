@@ -334,8 +334,8 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     is resolved by an API call ✅; the tool catalog is listable/searchable over the API ✅; the CLI
     drives a run on a separate engine process ✅.
 
-**4c, 4d, 4e-1, and 4e-3 are complete.** Next: **4e-4** (central audit log + browse over the API).
-*(4e-2, per-user data ownership, was dropped — the engine stays single-user; see the multi-user
+**4c, 4d, 4e-1, 4e-3, and 4e-4 are complete.** Next: **4e-5** (approval events on the stream, poll →
+push). *(4e-2, per-user data ownership, was dropped — the engine stays single-user; see the multi-user
 decision above.)*
 
 ### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
@@ -395,18 +395,25 @@ approvals; that was removed — the engine is single-user, see the multi-user de
 - *Acceptance:* a tool revoked over the API drops from `List`/the live set and the revoke is audited ✅.
     Tests: `TestHTTP_RevokeTool`, `TestHTTP_ToolDetail`, `TestClient_RevokeTool`.
 
-#### 4e-4 — Central audit log + browse over the API
+#### 4e-4 — Central audit log + browse over the API  *(DONE)*
 
-- [ ] Today `serve` opens a *per-run* `JSONLRecorder` inside `newServeRunner` — no queryable history.
-    Add an `audit.Reader` (`Tail(n, filter)`) and a single **process-wide** recorder for `serve` (e.g.
-    `~/.config/ai-agent/audit.jsonl`) shared across runs (same "one shared instance" pattern as the
-    registry/memory store); per-session logs stay for the transcript.
-- [ ] `GET /audit?run=&type=&limit=`; `Client.Audit`; `agent audit --addr`. This makes the audit log the
-    single review surface for everything effectful (capability use, `tool_authored`, `tool_revoked`,
-    `memory_write`).
-- *Acceptance:* effects from a run are browsable over the API.
+- [x] `audit.Reader` (`Tail(n, Filter{Run,Type})`, oldest-first, n≤0 ⇒ all) implemented by both
+    `MemoryRecorder` (in-memory) and `JSONLRecorder` (re-reads its file; `path` tracked). `audit.Filter`
+    + shared `tailMatching`. `audit.Recorders` fans one event to several sinks.
+- [x] `serve` now shares the **process-wide** `~/.config/ai-agent/audit.jsonl` across runs: each run's
+    events fan out (`audit.Recorders{sessionRec, central}`) to both the session transcript **and** the
+    central log (`newServeRunner` gained a `central` param). The 4e-3 process-wide recorder is now the
+    read side of `GET /audit` too.
+- [x] `GET /audit?run=&type=&limit=` (`internal/api/audit.go`, empty ⇒ [] not null); `Client.Audit`;
+    `agent audit --addr` (`cmd/audit.go`). `NewServer` gained a nil-able `audit.Reader` param. This makes
+    the audit log the single review surface for everything effectful (capability use, `tool_authored`,
+    `tool_revoked`, `memory_write`).
+- *Acceptance:* effects from a run are browsable over the API ✅ (live-verified end-to-end: revoke →
+    central log → `/audit` + `agent audit`). Tests: `audit_test.go` (`Tail`/`Filter`/`Recorders`, both
+    backings), `TestHTTP_Audit`, `TestHTTP_AuditAbsentWithoutReader`, `TestClient_Audit`.
 - *Note:* run metadata + central audit is the likely **SQLite tipping point** (design §9) — swap the
-    JSON/JSONL backings behind their existing interfaces when it bites, not before.
+    JSON/JSONL backings behind their existing interfaces when it bites, not before. `JSONLRecorder.Tail`
+    re-reads the whole file per call, which is the natural pressure point for that swap.
 
 #### 4e-5 — Approval events on the stream (poll → push)
 

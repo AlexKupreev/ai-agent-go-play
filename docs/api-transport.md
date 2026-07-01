@@ -31,6 +31,8 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - `GET /tools`, `GET /tools/search?q=&k=` → list / search the tool catalog
 - `GET /tools/{name}` → one tool's detail (adds impl source + smoke test); `DELETE /tools/{name}` →
   revoke it (404 if absent, audited as `tool_revoked`)
+- `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
+  authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
 
 **No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
 approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an

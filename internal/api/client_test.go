@@ -28,7 +28,7 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 		return "did it", nil
 	})
 
-	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 	ctx := context.Background()
@@ -75,7 +75,7 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 // real server sharing a catalog.
 func TestClient_RevokeTool(t *testing.T) {
 	cat := catalogWith(t, scriptSpec("reverse_string", "reverse the characters in a string"))
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 	ctx := context.Background()
@@ -102,7 +102,7 @@ func TestClient_RevokeTool(t *testing.T) {
 }
 
 func TestClient_StartRunErrorsOnBadStatus(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil, nil))
 	defer srv.Close()
 	c := NewClient(srv.URL)
 

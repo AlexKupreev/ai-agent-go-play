@@ -54,7 +54,7 @@ func TestHTTP_ListTools(t *testing.T) {
 		scriptSpec("reverse_string", "reverse the characters in a string"),
 		scriptSpec("sum_numbers", "add a list of numbers"),
 	)
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil, nil))
 	defer srv.Close()
 
 	views := getToolViews(t, srv.URL+"/tools")
@@ -75,7 +75,7 @@ func TestHTTP_SearchTools(t *testing.T) {
 		scriptSpec("reverse_string", "reverse the characters in a string"),
 		scriptSpec("sum_numbers", "add a list of numbers"),
 	)
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil, nil))
 	defer srv.Close()
 
 	views := getToolViews(t, srv.URL+"/tools/search?q=reverse+string")
@@ -101,7 +101,7 @@ func TestHTTP_SearchTools(t *testing.T) {
 
 func TestHTTP_ToolDetail(t *testing.T) {
 	cat := catalogWith(t, scriptSpec("reverse_string", "reverse the characters in a string"))
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/tools/reverse_string")
@@ -135,7 +135,7 @@ func TestHTTP_ToolDetail(t *testing.T) {
 func TestHTTP_RevokeTool(t *testing.T) {
 	cat := catalogWith(t, scriptSpec("reverse_string", "reverse the characters in a string"))
 	rec := &audit.MemoryRecorder{}
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, rec))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, cat, rec, nil))
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tools/reverse_string", nil)
@@ -178,7 +178,7 @@ func TestHTTP_RevokeTool(t *testing.T) {
 }
 
 func TestHTTP_ToolsEndpointsAbsentWithoutCatalog(t *testing.T) {
-	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil))
+	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), nil, nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/tools")

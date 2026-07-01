@@ -6,7 +6,25 @@ _Last session: 2026-07-01._
 
 ---
 
-## Latest session (2026-07-01): Phase 4e-3 — tool review / revoke over the API
+## Latest session (2026-07-01): Phase 4e-4 — central audit log + browse over the API
+
+- **4e-4 DONE.** `audit.Reader` (`Tail(n, Filter{Run,Type})`, oldest-first, n≤0 ⇒ all) on both
+  `MemoryRecorder` and `JSONLRecorder` (the latter re-reads its file; `path` now tracked). `audit.Filter`
+  + shared `tailMatching`; `audit.Recorders` fans one event to several sinks. `serve` shares the
+  **process-wide** `~/.config/ai-agent/audit.jsonl` across runs — each run fans out
+  (`audit.Recorders{sessionRec, central}`) to both the session transcript and the central log
+  (`newServeRunner` gained a `central` param). `GET /audit?run=&type=&limit=` (`internal/api/audit.go`,
+  empty ⇒ `[]`), `Client.Audit`, `agent audit --addr` (`cmd/audit.go`). `NewServer` gained a nil-able
+  `audit.Reader` param (now `NewServer(e, approvals, catalog, rec, reader)`). Live-verified end-to-end
+  (revoke → central log → `/audit` + `agent audit`). Tests: `internal/audit/audit_test.go`,
+  `internal/api/audit_test.go`. Build/vet/test green. **Next: 4e-5** (approval events on the stream,
+  poll → push) — give `ApprovalQueue.Approve` an observer hook so parking/resolving emits
+  `approval_requested`/`approval_resolved` into the run's hub. *SQLite tipping point:*
+  `JSONLRecorder.Tail` re-reads the whole file per call — the natural pressure point for the swap.
+
+---
+
+## Session (2026-07-01): Phase 4e-3 — tool review / revoke over the API
 
 - **4e-3 DONE.** `DELETE /tools/{name}` → `Registry.Revoke` (404 if absent) emitting a new
   `audit.EventToolRevoked` (`tool_revoked`: name, code_hash, scope, version). `GET /tools/{name}`

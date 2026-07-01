@@ -28,4 +28,5 @@ func init() {
 	rootCmd.AddCommand(clientCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(toolCmd)
+	rootCmd.AddCommand(auditCmd)
 }

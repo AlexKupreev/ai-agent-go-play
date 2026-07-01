@@ -60,8 +60,10 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
-		// One process-wide audit sink for management-plane effects (e.g. a tool
-		// revoked over the API); per-run transcripts keep their own audit file.
+		// One process-wide audit log, shared across runs and exposed at GET /audit:
+		// every run's effects (plus management-plane effects like a tool revoked over
+		// the API) land here so the log is a single queryable review surface. Per-run
+		// transcripts keep their own audit file as well.
 		auditFile, err := auditPath()
 		if err != nil {
 			return err
@@ -79,12 +81,12 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		runner, err := newServeRunner(cfg, resolveModel(modelFlag, cfg), tier, approvals, registry, mem)
+		runner, err := newServeRunner(cfg, resolveModel(modelFlag, cfg), tier, approvals, registry, mem, rec)
 		if err != nil {
 			return err
 		}
 
-		srv := api.NewServer(api.NewEngine(runner), approvals, registry, rec)
+		srv := api.NewServer(api.NewEngine(runner), approvals, registry, rec, rec)
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
@@ -93,9 +95,11 @@ var serveCmd = &cobra.Command{
 }
 
 // newServeRunner builds the Runner the engine drives: each run gets its own disk
-// log and audit recorder, but shares the process-wide tool catalog and approver, so
-// authored tools and parked approvals are consistent across runs and with the API.
-func newServeRunner(cfg Config, model string, tier capability.Tier, approver tools.Approver, registry tools.Registry, mem memory.Store) (api.Runner, error) {
+// log and per-session audit recorder, but shares the process-wide tool catalog,
+// approver, and audit log, so authored tools, parked approvals, and effect history
+// are consistent across runs and with the API. central is the process-wide audit
+// sink; each run's events fan out to both it and the session transcript.
+func newServeRunner(cfg Config, model string, tier capability.Tier, approver tools.Approver, registry tools.Registry, mem memory.Store, central audit.Recorder) (api.Runner, error) {
 	prov := openaiprovider.New(cfg.OpenAIKey)
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -109,11 +113,15 @@ func newServeRunner(cfg Config, model string, tier capability.Tier, approver too
 		}
 		defer log.Close()
 
-		rec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
+		sessionRec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
 		if err != nil {
 			return "", fmt.Errorf("failed to open audit log: %w", err)
 		}
-		defer rec.Close()
+		defer sessionRec.Close()
+
+		// Effects are recorded to both the session transcript and the process-wide
+		// log (which GET /audit reads).
+		rec := audit.Recorders{sessionRec, central}
 
 		// Engine event stream + disk log see the same events.
 		obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}

@@ -5,6 +5,7 @@
 package audit
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,6 +35,43 @@ type Recorder interface {
 	Record(Event)
 }
 
+// Filter narrows a Tail query. A zero field is a wildcard: an empty Run matches
+// every run (including management-plane events with no run), an empty Type matches
+// every type.
+type Filter struct {
+	Run  string
+	Type string
+}
+
+func (f Filter) matches(e Event) bool {
+	if f.Run != "" && e.Run != f.Run {
+		return false
+	}
+	if f.Type != "" && e.Type != f.Type {
+		return false
+	}
+	return true
+}
+
+// Reader reads back recorded events. It is the query side of the audit log, so a
+// management plane can browse everything effectful (capability use, tool authoring
+// and revocation, memory writes) without knowing the backing store.
+type Reader interface {
+	// Tail returns up to the last n events matching filter, oldest first. n <= 0
+	// returns all matches.
+	Tail(n int, filter Filter) ([]Event, error)
+}
+
+// Recorders fans one event out to several recorders (e.g. a per-run session log and
+// the process-wide log). Safe for concurrent use if its members are.
+type Recorders []Recorder
+
+func (rs Recorders) Record(e Event) {
+	for _, r := range rs {
+		r.Record(e)
+	}
+}
+
 // MemoryRecorder keeps events in memory; useful for tests and inspection.
 type MemoryRecorder struct {
 	mu     sync.Mutex
@@ -58,10 +96,34 @@ func (m *MemoryRecorder) Snapshot() []Event {
 	return out
 }
 
-// JSONLRecorder appends one JSON object per line to a file.
+// Tail returns up to the last n events matching filter, oldest first.
+func (m *MemoryRecorder) Tail(n int, filter Filter) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return tailMatching(m.Events, n, filter), nil
+}
+
+// tailMatching returns the last n events (oldest first) that pass filter. n <= 0
+// returns all matches.
+func tailMatching(events []Event, n int, filter Filter) []Event {
+	matched := make([]Event, 0, len(events))
+	for _, e := range events {
+		if filter.matches(e) {
+			matched = append(matched, e)
+		}
+	}
+	if n > 0 && len(matched) > n {
+		matched = matched[len(matched)-n:]
+	}
+	return matched
+}
+
+// JSONLRecorder appends one JSON object per line to a file. It is both the write
+// side (Record) and, via Tail, the read side of the log at that path.
 type JSONLRecorder struct {
-	mu sync.Mutex
-	f  *os.File
+	mu   sync.Mutex
+	f    *os.File
+	path string
 }
 
 // NewJSONLRecorder opens (creating if needed) an append-only JSONL file.
@@ -70,7 +132,45 @@ func NewJSONLRecorder(path string) (*JSONLRecorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &JSONLRecorder{f: f}, nil
+	return &JSONLRecorder{f: f, path: path}, nil
+}
+
+// Tail reads the log file and returns up to the last n events matching filter,
+// oldest first. It re-reads the file each call (fine for a human-scale audit log; a
+// SQLite backing is the stated upgrade path when this bites — design §9). The write
+// lock is held so a concurrent Record cannot interleave a partial line.
+func (r *JSONLRecorder) Tail(n int, filter Filter) ([]Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	f, err := os.Open(r.path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var events []Event
+	sc := bufio.NewScanner(f)
+	// Audit records embed tool output; lift the line cap above the 64 KiB default.
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue // skip a corrupt line rather than fail the whole read
+		}
+		events = append(events, e)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return tailMatching(events, n, filter), nil
 }
 
 func (r *JSONLRecorder) Record(e Event) {

@@ -110,17 +110,22 @@ reserved for Phase 5, pulled only if a concrete need arises.
 Every capability a tool exercises **or is denied** is recorded, making self-extension reviewable.
 
 - `Recorder` interface; `MemoryRecorder` (tests/inspection) and `JSONLRecorder` (one JSON object
-  per line, append-only, mode `0600`). A richer store (SQLite) can implement `Recorder` later
-  without touching callers.
-- Event types: `capability_exercised`, `capability_denied`, `tool_authored`.
+  per line, append-only, mode `0600`). `Recorders` fans one event to several sinks. A richer store
+  (SQLite) can implement `Recorder`/`Reader` later without touching callers.
+- Event types: `capability_exercised`, `capability_denied`, `tool_authored`, `tool_revoked`,
+  `memory_write`.
 - **Audit-write failures are surfaced** to stderr, never dropped silently — an unserializable or
   unwritable audit record is treated as a bug, because the log *is* the security record.
+- **Reviewable over the API (Phase 4e-4):** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
+  back; `serve` keeps one **process-wide** `~/.config/ai-agent/audit.jsonl` shared across all runs
+  (each run also keeps its own session transcript), browsable via `GET /audit?run=&type=&limit=` and
+  `agent audit --addr`. This is the single review surface for everything effectful.
 
 **Defends against:** undetectable misbehavior — provides the after-the-fact review/revoke backstop
 that works even unattended.
 
-**Status:** built and unit-tested. Live wiring of a per-run `JSONLRecorder` + `Broker` into the run
-flow lands with Phase 3b; until then the broker/audit path is exercised by tests, not the live loop.
+**Status:** built, unit-tested, and live-wired — the run loop records through the `Broker` (Phase 3b)
+and `serve` exposes the process-wide log for browsing (4e-4).
 
 ---
 
