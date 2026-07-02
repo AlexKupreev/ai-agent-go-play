@@ -1,7 +1,7 @@
 # Long-term memory — architecture, solutions, and trade-offs
 
 How the agent's cross-run memory is modelled, stored, and surfaced, with the **benefit / drawback**
-of each design choice. Implements [`plan.md`](plan.md) Phase 4d. Complements
+of each design choice. Implements [`plan.md`](planning/plan.md) Phase 4d. Complements
 [`tools.md`](tools.md) (the tool system it plugs into) and [`security.md`](security.md) (the trust
 tier it lives in).
 

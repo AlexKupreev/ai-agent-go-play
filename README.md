@@ -8,7 +8,7 @@ low-resource box.
 
 - **[`docs/usage.md`](docs/usage.md) — how to run and operate the agent (start here to use it).**
 - [`docs/design.md`](docs/design.md) — the concrete, Go-grounded design (decisions, current state, target architecture).
-- [`docs/plan.md`](docs/plan.md) — the phased implementation plan and next steps.
+- [`docs/planning/plan.md`](docs/planning/plan.md) — the phased implementation plan and next steps.
 - [`docs/security.md`](docs/security.md) — the threat→control map (capabilities, sandbox, audit, approvals).
 - [`self-extending-agent-design.md`](self-extending-agent-design.md) — the implementation-agnostic vision and trade-off analysis.
 
@@ -91,6 +91,7 @@ internal/
   capability/              capability broker + trust tiers
   sandbox/                 gopher-lua sandbox for authored tools
   memory/                  long-term memory store
+  selfdocs/                the agent's own docs, embedded for read_self_docs
   provider/                LLM provider port (OpenAI adapter under provider/openai)
   audit/                   append-only audit log (+ reader)
   api/                     headless engine: HTTP+SSE transport, run lifecycle, approval queue, client

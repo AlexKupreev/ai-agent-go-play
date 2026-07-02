@@ -161,7 +161,7 @@ func (d serveDeps) buildExecutor(runID string, obs agent.Observer) (*agent.Agent
 	// Effects fan out to the session transcript and the process-wide log (GET /audit).
 	rec := audit.Recorders{sessionRec, d.central}
 	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, rec, d.tier, d.approver)
+	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver)
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil
 }

@@ -102,7 +102,7 @@ var chatCmd = &cobra.Command{
 		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
 
 		// One executor for the whole session: its conversation persists across turns.
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, rec, tier, tools.StdinApprover{})
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{})
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))
 		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /exit or Ctrl-D to quit)\n", log.RunID)

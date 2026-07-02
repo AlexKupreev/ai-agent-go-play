@@ -45,9 +45,18 @@ report its own status.
   wired in `serve`). CLI/chat print a stderr line via `cmd/usage.go` `formatUsage`; `agent client` /
   `chat --addr` print it from `RunStatus`. **Tokens only, cost deferred.** Tests + live-verified
   (`GET /runs/{id}` usage, `GET /audit?type=run_usage`). No `turn_usage` event — a turn is a run.
-- **6b:** self-documentation — `go:embed` README + `docs/*.md`, a **`read_self_docs`** built-in
-  (named to disambiguate from a working-dir's project docs), + a system-prompt self-summary.
-- **6c:** introspection tools (`status`/`whoami`, `usage`, read own audit, catalog introspection).
+- **6b — DONE.** Self-documentation. Embedded **reference docs + the vision doc** (not planning
+  docs) via `//go:embed README.md docs/*.md self-extending-agent-design.md` in `main.go`; the
+  flat glob excludes `docs/planning/`, where **`plan.md` + `resume.md` were moved** (4 links fixed).
+  `internal/selfdocs` (`Docs`: List/Get/Search, `Kind` reference/vision, `vision` alias) +
+  `internal/tools/selfdocs.go` `read_self_docs` (trusted, not sandbox-exposed, omitted when nil);
+  `cmd.SetSelfDocs` threads it from main → every executor; `selfDocsPromptNote` appended to the
+  prompt (reference = current truth, vision = not-yet). Tests + binary-grep verified the embed set.
+  *Corpus decision:* include vision "to align agent+tools philosophy"; exclude planning so the
+  agent doesn't mistake roadmap for current behavior.
+- **6c (next):** introspection tools — `status`/`whoami` **now also host resources (CPU/RAM/disk/
+  uptime)** per this session's discussion (separate axis from read_self_docs; not a new capability
+  since shell can already df/free); `usage`; read own audit; catalog introspection.
 - **6d (later):** token budget dial + context-window awareness (subsumes the deferred context-trim).
 
 ---

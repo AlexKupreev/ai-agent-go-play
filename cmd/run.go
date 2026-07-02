@@ -120,7 +120,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, rec, tier, tools.StdinApprover{})
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{})
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err

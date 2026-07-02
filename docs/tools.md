@@ -1,7 +1,7 @@
 # Tool system — architecture, solutions, and trade-offs
 
 How tools are modelled, stored, and surfaced to the model, with the **benefit / drawback** of each
-design choice. Complements [`plan.md`](plan.md) Phase 3 (the staged build) and
+design choice. Complements [`plan.md`](planning/plan.md) Phase 3 (the staged build) and
 [`security.md`](security.md) (the boundary authored tools run behind). Update this as the design
 moves through stages 3a–3e.
 

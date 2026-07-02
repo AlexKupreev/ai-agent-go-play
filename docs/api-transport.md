@@ -1,7 +1,7 @@
 # API transport (Phase 4c)
 
 How the headless engine is exposed to frontends (CLI, web, Telegram as peer clients).
-Decision record for the transport fork flagged in [`plan.md`](plan.md) §4c.
+Decision record for the transport fork flagged in [`plan.md`](planning/plan.md) §4c.
 
 _Decided: 2026-06-29._
 

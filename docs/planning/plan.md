@@ -560,24 +560,42 @@ carries input/output/**cached** tokens, so the cached-discount data is there if 
     Live-verified over `serve`: `GET /runs/{id}` carries `usage`, `GET /audit?type=run_usage`
     lists the event.
 
-### 6b — Self-documentation (the agent can read its own docs)
+### 6b — Self-documentation (the agent can read its own docs)  *(DONE)*
 
-- [ ] `go:embed` `README.md` + `docs/*.md` into the binary so they're available regardless
-    of cwd (and on Fly.io, where the repo isn't present).
-- [ ] A `read_self_docs` built-in — named to disambiguate from any *project* docs in the
-    agent's working directory (which it reaches via `shell`): `read_self_docs(topic)` returns
-    a doc/section, a `list` enumerates topics, searchable via the existing token-overlap
-    `Search`. Trusted, read-only, **not** sandbox-exposed (like `remember`/`recall`).
-- [ ] A short self-summary (capabilities, tiers, key commands) in the system prompt so the
-    agent has baseline self-knowledge without a tool call; the tool is for depth. Keep it a
-    pointer/generated so it can't drift from the docs.
-- [ ] *Acceptance:* asked "how do I run two agents?" the agent reads `usage.md` and answers
-    from it rather than guessing.
+**Corpus decision (2026-07-02):** embed **reference docs + the vision doc**, not planning docs.
+Rather than exclude-by-omission, the risk being managed is the agent mistaking *planned* for
+*implemented*; the vision doc is included (tagged) so it can align tool-authoring with the
+intended philosophy. Planning/scratchpad docs (`plan.md`, `resume.md`) were **moved to
+`docs/planning/`** so a flat `docs/*.md` embed glob excludes them structurally (and separates
+planning from reference docs). Kinds: `reference` (authoritative about current behavior) and
+`vision` (design intent, may include not-yet-built ideas).
 
-### 6c — Introspection tools (expose 6a/6b + history to the model)
+- [x] `go:embed README.md docs/*.md self-extending-agent-design.md` in `main.go` (the flat
+    glob does **not** descend into `docs/planning/`); passed to `cmd` via `SetSelfDocs`, then
+    into every executor. Available regardless of cwd / on Fly.io.
+- [x] `internal/selfdocs`: `Docs` reads the embedded FS, deriving a topic per file, a `Kind`
+    (reference/vision), and a title from the first heading; `List`/`Get`/`Search` (token
+    overlap), a `vision` alias for the long filename. `internal/tools/selfdocs.go`
+    `read_self_docs` built-in (topic → body, query → ranked list, none → listing tagged by
+    kind). Trusted, read-only, **not** sandbox-exposed. Omitted when no doc set is wired.
+- [x] System-prompt note (`selfDocsPromptNote`) appended when docs are present: consult
+    `read_self_docs` for self-questions; `[reference]` is current truth, `[vision]` is not-yet.
+- [x] *Acceptance:* met. `internal/selfdocs` + `internal/tools` unit tests, and
+    `internal/agent/selfdocs_e2e_test.go` (a scripted run reads a doc and the body reaches the
+    model; the tool is omitted when nil). Live-verified the embed set by grepping the binary
+    (reference + vision present; `plan.md`/`resume.md` bodies absent).
+
+### 6c — Introspection tools (expose 6a/6b + live state to the model)
 
 - [ ] `status`/`whoami`: model, tier, config-dir, #tools, #memories, current run id, build
-    version (embed git sha via `-ldflags`).
+    version (embed git sha via `-ldflags`) **and host resources** (CPU count + load, RAM
+    used/free, disk free, process RSS, uptime). Host status is a distinct self-awareness axis
+    from `read_self_docs` (live runtime state vs documentation), so it lives here, not in the
+    docs tool. Apt given the low-resource-box target (design §11, "~2 GB budget") — knowing its
+    headroom lets it avoid OOM / decide whether to spawn heavy work. Read via `/proc` +
+    `runtime`/`syscall.Statfs` in Go (Linux deploy); graceful fallback elsewhere. *Note:* not a
+    new capability — the agent can already `shell` out to `df`/`free`/`uptime`; the tool is a
+    convenience + reliability win (structured, no command-recall, survives shell restriction).
 - [ ] `usage`: the model queries its own token spend this run/session (reads 6a's totals) —
     turns accounting into self-awareness rather than just reporting.
 - [ ] Read its own audit log (reuse `audit.Reader` / `GET /audit`) — "what did I change
@@ -616,10 +634,10 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Phase 6b — self-documentation.** `go:embed` `README.md` + `docs/*.md` into the binary and
-add a `read_self_docs` built-in (trusted, read-only, not sandbox-exposed) plus a short
-system-prompt self-summary, so the agent can answer questions about its own operation from
-the docs instead of guessing. (**6a — token accounting — is DONE.**)
+**Phase 6c — introspection tools.** Expose 6a/6b + live state to the model: a `status`/`whoami`
+tool (identity + build version + **host resources**: CPU/RAM/disk/uptime), a `usage` tool over
+6a's totals, read-own-audit, and authored-catalog introspection. (**6a token accounting and 6b
+self-documentation are DONE.**)
 
-*(Phases 0–4f and 6a are complete; the historical "start at Phase 0" note that once lived
+*(Phases 0–4f, 6a and 6b are complete; the historical "start at Phase 0" note that once lived
 here is superseded.)*

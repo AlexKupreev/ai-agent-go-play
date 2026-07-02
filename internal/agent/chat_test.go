@@ -30,7 +30,7 @@ func (p *recordingProvider) Step(_ context.Context, req provider.StepRequest) (p
 func TestExecutor_RetainsConversationAcrossTurns(t *testing.T) {
 	prov := &recordingProvider{answers: []string{"first answer", "second answer"}}
 	ex := NewExecutor(prov, t.TempDir(), "test-model", "run1", nil,
-		tools.NewMemoryRegistry(), nil, &audit.MemoryRecorder{}, capability.TierSafe, nil)
+		tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierSafe, nil)
 
 	out1, err := ex.Run(context.Background(), "hello")
 	if err != nil {

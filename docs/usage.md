@@ -11,6 +11,7 @@ the *how*.
 - [Approvals — how risky actions are gated](#approvals--how-risky-actions-are-gated)
 - [Self-authored tools](#self-authored-tools)
 - [Long-term memory](#long-term-memory)
+- [Self-documentation](#self-documentation)
 - [Audit log](#audit-log)
 - [Token usage](#token-usage)
 - [Conversations over the API (sessions)](#conversations-over-the-api-sessions)
@@ -256,6 +257,26 @@ The agent has `remember` / `recall` built-ins backed by a persistent store at
 `~/.config/ai-agent/memory.json`. A fact remembered in one run is recallable by later
 runs. Every write is audited (`memory_write`). There is no CLI surface for it yet — it is
 driven by the agent during a run.
+
+---
+
+## Self-documentation
+
+The agent can read its **own** documentation to answer questions about how it works — its
+tools, trust tiers, approvals, memory, and APIs — instead of guessing. The docs are
+**embedded in the binary** (`go:embed`), so this works regardless of the working directory
+and on a deployed box where the repo isn't present, via a `read_self_docs` built-in.
+
+The embedded set is the **reference docs** (README + `docs/*.md`: usage, design, security,
+tools, memory, api-transport — how it works *now*) plus the **vision doc**
+(`self-extending-agent-design.md` — design intent and trade-offs). Docs are tagged: the agent
+treats `[reference]` as authoritative about current behavior and `[vision]` as design intent
+that may include not-yet-built ideas. **Planning/scratchpad docs** (`docs/planning/`) are
+deliberately *not* embedded, so the agent never mistakes the roadmap for a current capability.
+
+There's no separate CLI for it — it's a tool the agent uses during a run (e.g. ask it "how do
+your trust tiers work?" and it reads `usage.md` rather than guessing). `read_self_docs` is
+read-only, trusted, and not exposed to sandboxed authored tools.
 
 ---
 
