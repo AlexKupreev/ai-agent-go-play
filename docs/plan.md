@@ -519,6 +519,77 @@ Not planned work; pull from here only when a concrete need appears.
 
 ---
 
+## Phase 6 — Self-awareness (token accounting, self-documentation, introspection)
+
+**Goal:** the agent knows things about *itself* — what it's spending, what it can do, and
+what it has done — so it can report accurately, reason under limits, and answer questions
+about its own operation instead of guessing. Grew out of a 2026-07-02 discussion.
+
+**Current state (the seams to build on):**
+
+- `provider.Usage` (input/output/cached tokens) is captured per step and flows into
+  `EvResponse` events + the run transcript (`internal/agent/observer.go`), but is **not**
+  aggregated, surfaced, audited, or fed back to the model.
+- The agent has **no** access to its own docs and **no** self-status tool; asked about its
+  tier/config/capabilities it hallucinates.
+
+### 6a — Token accounting  *(planned — do first)*
+
+**Tokens only for now; cost is deliberately out of scope.** A price table goes stale and is
+maintenance the project doesn't want yet — add it later behind a config `model_prices` map,
+computing from the same totals. `provider.Usage` already carries input/output/**cached**
+tokens, so the cached-discount data is there if cost is ever added.
+
+- [ ] **Aggregate** per turn/run: sum input/output/cached `Usage` across the loop's steps
+    (an accumulating `Observer`, or a tally in `internal/agent/agent.go`); roll turn totals
+    into a session total.
+- [ ] **Surface** through the three existing seams (no new transport):
+    - CLI/chat end-of-turn line, e.g. `· 12,431 in / 3,210 out (1,024 cached) · 4 steps · 6.2s`.
+    - `api.RunInfo` gains a `Usage` total, so `agent client`, `GET /runs/{id}`, and
+      `ListRuns` show it.
+    - A `run_usage` audit event (and `turn_usage` for sessions) so token spend is reviewable
+      historically through the one audit surface.
+- [ ] *Acceptance:* a run reports its token totals at the end and via `GET /runs/{id}`; the
+    totals equal the sum of per-step `Usage`; a `run_usage` event lands in the audit log.
+
+### 6b — Self-documentation (the agent can read its own docs)
+
+- [ ] `go:embed` `README.md` + `docs/*.md` into the binary so they're available regardless
+    of cwd (and on Fly.io, where the repo isn't present).
+- [ ] A `read_self_docs` built-in — named to disambiguate from any *project* docs in the
+    agent's working directory (which it reaches via `shell`): `read_self_docs(topic)` returns
+    a doc/section, a `list` enumerates topics, searchable via the existing token-overlap
+    `Search`. Trusted, read-only, **not** sandbox-exposed (like `remember`/`recall`).
+- [ ] A short self-summary (capabilities, tiers, key commands) in the system prompt so the
+    agent has baseline self-knowledge without a tool call; the tool is for depth. Keep it a
+    pointer/generated so it can't drift from the docs.
+- [ ] *Acceptance:* asked "how do I run two agents?" the agent reads `usage.md` and answers
+    from it rather than guessing.
+
+### 6c — Introspection tools (expose 6a/6b + history to the model)
+
+- [ ] `status`/`whoami`: model, tier, config-dir, #tools, #memories, current run id, build
+    version (embed git sha via `-ldflags`).
+- [ ] `usage`: the model queries its own token spend this run/session (reads 6a's totals) —
+    turns accounting into self-awareness rather than just reporting.
+- [ ] Read its own audit log (reuse `audit.Reader` / `GET /audit`) — "what did I change
+    today?" self-reflection over its own history.
+- [ ] Introspect the authored-tool catalog (names + caps) so it reuses rather than re-authors.
+
+### 6d — Budget + context-window awareness (later)
+
+- [ ] Token **budget** per run/session: soft warning fed into context at ~80%, optional hard
+    stop — a dial alongside the trust tier. Builds on 6a's totals.
+- [ ] Context-window awareness: know the model's context limit + current fill so the agent
+    can summarize under pressure. This is the deferred **context-window trimming** item
+    (Phase 4f), upgraded from blind truncation to the agent noticing and acting.
+
+**Risks/notes:** keep the model-facing self-tools read-only and un-sandboxed (introspection,
+not effect). Token totals are cheap and always-on; cost/budget are opt-in extras. Don't let a
+system-prompt self-summary drift from the docs — generate it or keep it a pointer.
+
+---
+
 ## Cross-cutting (carry through every phase)
 
 - **Tests:** table tests for the provider adapter mapping (Phase 0), the broker allow/deny
@@ -537,6 +608,11 @@ Not planned work; pull from here only when a concrete need appears.
 
 ## Immediate next step
 
-**Phase 0, task 1:** create `internal/provider` with the neutral types and the `Provider`
-interface, then move OpenAI behind `internal/provider/openai`. Everything else unblocks from
-there.
+**Phase 6a — token accounting.** Aggregate per-run `provider.Usage` and surface it: an
+end-of-turn CLI/chat line, a `Usage` total on `api.RunInfo` (`GET /runs/{id}`), and a
+`run_usage` audit event. **Tokens only — cost is deferred.** See Phase 6 above for the full
+self-awareness plan (self-docs `read_self_docs`, introspection tools, budget/context
+awareness).
+
+*(Phases 0–4f are complete; the historical "start at Phase 0" note that lived here is
+superseded.)*

@@ -31,7 +31,21 @@ _Last session: 2026-07-02._
   "Engine aliases" section, sessions section points at `chat --addr`, config reference + files-on-disk),
   `docs/plan.md` (Phase 4f).
 - **Still deferred:** context-window trimming for long sessions. Housekeeping from earlier sessions
-  (commit timestamps, markdownlint) still outstanding; nothing committed this session yet.
+  (commit timestamps, markdownlint) still outstanding.
+
+## Planned next: Phase 6 — self-awareness (staged in `plan.md`)
+
+Discussed 2026-07-02, written up as **Phase 6** in `plan.md`. Motivation: `provider.Usage` is
+captured per step but never aggregated/surfaced/fed back, and the agent can't read its own docs or
+report its own status.
+
+- **6a (do first):** token accounting — aggregate per-run `Usage` → end-of-turn line + `RunInfo`
+  total + `run_usage` audit event. **Decision: tokens only, cost deferred** (price tables go stale;
+  add later behind a `model_prices` config map).
+- **6b:** self-documentation — `go:embed` README + `docs/*.md`, a **`read_self_docs`** built-in
+  (named to disambiguate from a working-dir's project docs), + a system-prompt self-summary.
+- **6c:** introspection tools (`status`/`whoami`, `usage`, read own audit, catalog introspection).
+- **6d (later):** token budget dial + context-window awareness (subsumes the deferred context-trim).
 
 ---
 
