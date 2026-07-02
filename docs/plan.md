@@ -533,24 +533,32 @@ about its own operation instead of guessing. Grew out of a 2026-07-02 discussion
 - The agent has **no** access to its own docs and **no** self-status tool; asked about its
   tier/config/capabilities it hallucinates.
 
-### 6a — Token accounting  *(planned — do first)*
+### 6a — Token accounting  *(DONE)*
 
-**Tokens only for now; cost is deliberately out of scope.** A price table goes stale and is
-maintenance the project doesn't want yet — add it later behind a config `model_prices` map,
-computing from the same totals. `provider.Usage` already carries input/output/**cached**
-tokens, so the cached-discount data is there if cost is ever added.
+**Tokens only; cost deliberately out of scope.** A price table goes stale — add it later
+behind a config `model_prices` map, computing from the same totals. `provider.Usage` already
+carries input/output/**cached** tokens, so the cached-discount data is there if cost is added.
 
-- [ ] **Aggregate** per turn/run: sum input/output/cached `Usage` across the loop's steps
-    (an accumulating `Observer`, or a tally in `internal/agent/agent.go`); roll turn totals
-    into a session total.
-- [ ] **Surface** through the three existing seams (no new transport):
-    - CLI/chat end-of-turn line, e.g. `· 12,431 in / 3,210 out (1,024 cached) · 4 steps · 6.2s`.
-    - `api.RunInfo` gains a `Usage` total, so `agent client`, `GET /runs/{id}`, and
-      `ListRuns` show it.
-    - A `run_usage` audit event (and `turn_usage` for sessions) so token spend is reviewable
-      historically through the one audit surface.
-- [ ] *Acceptance:* a run reports its token totals at the end and via `GET /runs/{id}`; the
-    totals equal the sum of per-step `Usage`; a `run_usage` event lands in the audit log.
+- [x] **Aggregate** per run/turn: `agent.UsageObserver` (`internal/agent/observer.go`) sums
+    input/output/cached `Usage` and counts steps from `EvResponse` events. The API `Engine`
+    fans one alongside the run's hub in `launch`, so every Runner/TurnRunner is covered; the
+    CLI adds one to its observer list. (Chat gets the per-turn delta by snapshotting the
+    session-wide accumulator; a turn is a run, so session turns aggregate too.)
+- [x] **Surface** through the three existing seams (no new transport):
+    - CLI/chat end-of-turn stderr line via `cmd/usage.go` `formatUsage`, e.g.
+      `· 12,431 in / 3,210 out (1,024 cached) · 4 steps · 6.2s`. `agent client` and
+      `agent chat --addr` print the same line from `RunStatus`.
+    - `api.RunInfo` gained `Usage` + `Steps`, set when the run ends → `GET /runs/{id}`,
+      `ListRuns`, `agent client`.
+    - `run_usage` audit event per completed run/turn (`audit.EventRunUsage`), recorded by the
+      engine via `SetAuditRecorder` (wired in `serve` to the process-wide log) → `GET /audit`,
+      `agent audit --type run_usage`. *(A distinct `turn_usage` / session-cumulative event was
+      not added — a turn is already a run, so it emits `run_usage`; session-cumulative can come
+      with 6c/6d.)*
+- [x] *Acceptance:* met. `TestUsageObserver_Accumulates`, `TestRunUsage_AggregatedIntoInfoAndAudit`
+    (RunInfo totals + `run_usage` event equal the summed per-step usage), `cmd` formatting tests.
+    Live-verified over `serve`: `GET /runs/{id}` carries `usage`, `GET /audit?type=run_usage`
+    lists the event.
 
 ### 6b — Self-documentation (the agent can read its own docs)
 
@@ -608,11 +616,10 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Phase 6a — token accounting.** Aggregate per-run `provider.Usage` and surface it: an
-end-of-turn CLI/chat line, a `Usage` total on `api.RunInfo` (`GET /runs/{id}`), and a
-`run_usage` audit event. **Tokens only — cost is deferred.** See Phase 6 above for the full
-self-awareness plan (self-docs `read_self_docs`, introspection tools, budget/context
-awareness).
+**Phase 6b — self-documentation.** `go:embed` `README.md` + `docs/*.md` into the binary and
+add a `read_self_docs` built-in (trusted, read-only, not sandbox-exposed) plus a short
+system-prompt self-summary, so the agent can answer questions about its own operation from
+the docs instead of guessing. (**6a — token accounting — is DONE.**)
 
-*(Phases 0–4f are complete; the historical "start at Phase 0" note that lived here is
-superseded.)*
+*(Phases 0–4f and 6a are complete; the historical "start at Phase 0" note that once lived
+here is superseded.)*

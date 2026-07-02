@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/audit"
@@ -61,11 +62,14 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		// Run events fan out to the disk log always, and to the CLI when verbose.
-		obs := agent.Observers{agent.NewLoggerObserver(log)}
+		// Run events fan out to the disk log always, and to the CLI when verbose. A
+		// usage accumulator sums tokens across the planner + executor for a summary.
+		usage := agent.NewUsageObserver()
+		obs := agent.Observers{agent.NewLoggerObserver(log), usage}
 		if verboseFlag {
 			obs = append(obs, agent.NewCLIObserver(os.Stderr))
 		}
+		runStart := time.Now()
 
 		planner := agent.NewPlanner(prov, model, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
@@ -122,6 +126,7 @@ var runCmd = &cobra.Command{
 			return err
 		}
 		fmt.Println(result)
+		fmt.Fprintln(os.Stderr, formatUsage(usage.Total(), usage.Steps(), time.Since(runStart)))
 		return nil
 	},
 }

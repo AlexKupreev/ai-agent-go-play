@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"io"
+	"sync"
 
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/provider"
@@ -72,6 +73,44 @@ func (l *LoggerObserver) Emit(e Event) {
 	case EvToolResult:
 		l.log.LogToolResult(e.Call.Name, e.Call.ID, string(e.Call.Input), e.Result)
 	}
+}
+
+// UsageObserver accumulates token usage across a run's model responses so a caller
+// can report a per-run (or, snapshotted, a per-turn) total. Every model reply carries
+// its step Usage on an EvResponse event; this sums them. Safe for concurrent use.
+type UsageObserver struct {
+	mu    sync.Mutex
+	total provider.Usage
+	steps int
+}
+
+// NewUsageObserver returns a zeroed accumulator.
+func NewUsageObserver() *UsageObserver { return &UsageObserver{} }
+
+func (u *UsageObserver) Emit(e Event) {
+	if e.Kind != EvResponse {
+		return
+	}
+	u.mu.Lock()
+	u.total.InputTokens += e.Usage.InputTokens
+	u.total.OutputTokens += e.Usage.OutputTokens
+	u.total.CachedTokens += e.Usage.CachedTokens
+	u.steps++
+	u.mu.Unlock()
+}
+
+// Total returns the token usage accumulated so far.
+func (u *UsageObserver) Total() provider.Usage {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.total
+}
+
+// Steps returns the number of model responses seen (one per loop iteration).
+func (u *UsageObserver) Steps() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.steps
 }
 
 // CLIObserver prints the human-facing trace (the old verbose output) to a writer.

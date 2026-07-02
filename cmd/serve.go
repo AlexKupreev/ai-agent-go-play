@@ -110,6 +110,9 @@ var serveCmd = &cobra.Command{
 
 		engine := api.NewEngine(deps.runner())
 		engine.EnableSessions(sessions, deps.turnRunner())
+		// Record a run_usage event per completed run/turn into the process-wide log,
+		// so token spend is browsable over GET /audit alongside every other effect.
+		engine.SetAuditRecorder(rec)
 		// Push parked escalations (and their resolutions) onto the owning run's event
 		// stream, so a streaming frontend learns of them without polling /approvals.
 		approvals.SetEmitter(engine.PublishToRun)

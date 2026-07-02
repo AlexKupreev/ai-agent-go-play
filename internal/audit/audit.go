@@ -20,6 +20,7 @@ const (
 	EventToolAuthored        = "tool_authored"
 	EventToolRevoked         = "tool_revoked"
 	EventMemoryWrite         = "memory_write"
+	EventRunUsage            = "run_usage"
 )
 
 // Event is one append-only record.

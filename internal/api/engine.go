@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/session"
 )
@@ -70,6 +71,11 @@ type RunInfo struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 	Result    string     `json:"result,omitempty"`
 	Error     string     `json:"error,omitempty"`
+
+	// Token usage accumulated by the run's model calls, and the number of model
+	// steps. Populated when the run ends (zero while running).
+	Usage provider.Usage `json:"usage"`
+	Steps int            `json:"steps,omitempty"`
 }
 
 // run is the engine's live record of one run: its event hub, cancel handle (the
@@ -104,6 +110,10 @@ type Engine struct {
 	turns       TurnRunner
 	sessLocksMu sync.Mutex
 	sessLocks   map[string]*sync.Mutex
+
+	// auditRec, when set, receives a run_usage event per completed run/turn so token
+	// spend is reviewable through the same log as every other effect. Optional.
+	auditRec audit.Recorder
 }
 
 // NewEngine builds an engine over the given Runner.
@@ -122,6 +132,10 @@ func (e *Engine) EnableSessions(store session.Store, turns TurnRunner) {
 // SessionsEnabled reports whether the conversation layer is wired.
 func (e *Engine) SessionsEnabled() bool { return e.sessions != nil && e.turns != nil }
 
+// SetAuditRecorder wires a recorder that receives a run_usage event when each run (or
+// session turn) completes. Optional — nil leaves usage in RunInfo only.
+func (e *Engine) SetAuditRecorder(rec audit.Recorder) { e.auditRec = rec }
+
 // StartRun begins a run in the background and returns its id. Events flow to the
 // run's Hub, which callers reach via Subscribe; the hub closes when the run ends.
 //
@@ -130,15 +144,15 @@ func (e *Engine) SessionsEnabled() bool { return e.sessions != nil && e.turns !=
 // returns, which would abort the run mid-flight — e.g. while it waits for an
 // approval). The stored cancel is the per-run kill switch (StopRun).
 func (e *Engine) StartRun(task string) string {
-	return e.launch(task, func(ctx context.Context, id string, hub *Hub) (string, error) {
-		return e.runner.Run(ctx, id, task, hub)
+	return e.launch(task, func(ctx context.Context, id string, obs agent.Observer) (string, error) {
+		return e.runner.Run(ctx, id, task, obs)
 	})
 }
 
 // launch registers a run, executes work in the background, records the terminal state,
 // and emits the terminal done/error event before closing the hub. It is the shared
 // spine of both a plain run (StartRun) and a session turn (PostTurn).
-func (e *Engine) launch(task string, work func(ctx context.Context, runID string, hub *Hub) (string, error)) string {
+func (e *Engine) launch(task string, work func(ctx context.Context, runID string, obs agent.Observer) (string, error)) string {
 	id := newRunID()
 	hub := newHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -160,11 +174,19 @@ func (e *Engine) launch(task string, work func(ctx context.Context, runID string
 
 	go func() {
 		defer cancel() // release the run context once the run finishes
-		result, err := work(ctx, id, hub)
 
+		// A per-run usage accumulator fanned alongside the hub, so token totals are
+		// captured no matter which Runner/TurnRunner does the work.
+		usageObs := agent.NewUsageObserver()
+		result, err := work(ctx, id, agent.Observers{hub, usageObs})
+
+		usage := usageObs.Total()
+		steps := usageObs.Steps()
 		ended := time.Now().UTC()
 		r.mu.Lock()
 		r.info.EndedAt = &ended
+		r.info.Usage = usage
+		r.info.Steps = steps
 		if err != nil {
 			r.info.State = StateError
 			r.info.Error = err.Error()
@@ -173,6 +195,19 @@ func (e *Engine) launch(task string, work func(ctx context.Context, runID string
 			r.info.Result = result
 		}
 		r.mu.Unlock()
+
+		if e.auditRec != nil {
+			e.auditRec.Record(audit.Event{
+				Type: audit.EventRunUsage,
+				Run:  id,
+				Fields: map[string]any{
+					"input_tokens":  usage.InputTokens,
+					"output_tokens": usage.OutputTokens,
+					"cached_tokens": usage.CachedTokens,
+					"steps":         steps,
+				},
+			})
+		}
 
 		if err != nil {
 			hub.publish(Event{Kind: KindError, Text: err.Error()})
@@ -226,7 +261,7 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		return "", err
 	}
 	lock := e.sessionLock(sessionID)
-	id := e.launch(text, func(ctx context.Context, runID string, hub *Hub) (string, error) {
+	id := e.launch(text, func(ctx context.Context, runID string, obs agent.Observer) (string, error) {
 		lock.Lock()
 		defer lock.Unlock()
 
@@ -234,7 +269,7 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		if err != nil {
 			return "", err // closed between accept and execution
 		}
-		answer, updated, err := e.turns.RunTurn(ctx, runID, sess.Messages, text, hub)
+		answer, updated, err := e.turns.RunTurn(ctx, runID, sess.Messages, text, obs)
 		if err != nil {
 			return "", err
 		}

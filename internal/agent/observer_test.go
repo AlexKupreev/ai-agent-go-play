@@ -23,6 +23,24 @@ func (c *captureObserver) kinds() []EventKind {
 	return out
 }
 
+// TestUsageObserver_Accumulates checks that only EvResponse events contribute to the
+// running token total and step count.
+func TestUsageObserver_Accumulates(t *testing.T) {
+	u := NewUsageObserver()
+	u.Emit(Event{Kind: EvStart}) // ignored
+	u.Emit(Event{Kind: EvResponse, Usage: provider.Usage{InputTokens: 100, OutputTokens: 20, CachedTokens: 10}})
+	u.Emit(Event{Kind: EvToolResult}) // ignored
+	u.Emit(Event{Kind: EvResponse, Usage: provider.Usage{InputTokens: 5, OutputTokens: 3}})
+
+	got := u.Total()
+	if got.InputTokens != 105 || got.OutputTokens != 23 || got.CachedTokens != 10 {
+		t.Fatalf("Total() = %+v, want {105 23 10}", got)
+	}
+	if u.Steps() != 2 {
+		t.Fatalf("Steps() = %d, want 2 (one per EvResponse)", u.Steps())
+	}
+}
+
 // A run that makes one tool call then answers emits the full event sequence
 // through the observer — no direct stdout/stderr from the loop.
 func TestRun_EmitsEventSequence(t *testing.T) {

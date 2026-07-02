@@ -171,5 +171,10 @@ func runRemoteTurn(sigCh <-chan os.Signal, c *api.Client, sessionID, line string
 	if ctx.Err() != nil {
 		return nil // the turn was cancelled by Ctrl-C — expected, not an error
 	}
+	if err == nil {
+		if info, statusErr := c.RunStatus(context.Background(), runID); statusErr == nil {
+			printRunUsage(info)
+		}
+	}
 	return err
 }

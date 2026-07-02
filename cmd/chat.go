@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/audit"
@@ -95,8 +96,10 @@ var chatCmd = &cobra.Command{
 		}
 
 		// Interactive: stream the agent's activity (tool calls/results) to stderr, and
-		// keep the transcript on disk. The final answer of each turn goes to stdout.
-		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr)}
+		// keep the transcript on disk. The final answer of each turn goes to stdout. A
+		// usage accumulator runs for the whole session; per-turn cost is its delta.
+		usage := agent.NewUsageObserver()
+		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
 
 		// One executor for the whole session: its conversation persists across turns.
 		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, rec, tier, tools.StdinApprover{})
@@ -130,9 +133,16 @@ var chatCmd = &cobra.Command{
 				continue
 			}
 
+			before, beforeSteps := usage.Total(), usage.Steps()
+			turnStart := time.Now()
 			if err := runTurn(sigCh, executor, prov, model, obs, line); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
+			// Per-turn usage is the accumulator's delta; also show the session total.
+			turn := subUsage(before, usage.Total())
+			fmt.Fprintf(os.Stderr, "%s   (session: %s in / %s out)\n",
+				formatUsage(turn, usage.Steps()-beforeSteps, time.Since(turnStart)),
+				humanInt(usage.Total().InputTokens), humanInt(usage.Total().OutputTokens))
 		}
 		return nil
 	},

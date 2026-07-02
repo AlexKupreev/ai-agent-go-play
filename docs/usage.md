@@ -12,6 +12,7 @@ the *how*.
 - [Self-authored tools](#self-authored-tools)
 - [Long-term memory](#long-term-memory)
 - [Audit log](#audit-log)
+- [Token usage](#token-usage)
 - [Conversations over the API (sessions)](#conversations-over-the-api-sessions)
 - [Telegram frontend (optional)](#telegram-frontend-optional)
 - [Running multiple independent agents](#running-multiple-independent-agents)
@@ -262,7 +263,8 @@ driven by the agent during a run.
 
 Everything effectful is recorded to an append-only audit log: capability use
 (`capability_exercised` / `capability_denied`), tool authoring/revocation
-(`tool_authored` / `tool_revoked`), and memory writes (`memory_write`).
+(`tool_authored` / `tool_revoked`), memory writes (`memory_write`), and per-run token
+usage (`run_usage` — see [Token usage](#token-usage)).
 
 Under `agent serve` there is **one process-wide log** at
 `~/.config/ai-agent/audit.jsonl`, browsable over the API:
@@ -275,6 +277,37 @@ Under `agent serve` there is **one process-wide log** at
 
 Flags: `--addr`, `--run`, `--type`, `--limit` (0 = all). Each `agent run` / `serve` run
 also keeps its own transcript under `~/.local/share/ai-agent/sessions/<run-id>/`.
+
+---
+
+## Token usage
+
+Every run reports how many tokens it spent. **Tokens only — no cost** (a price table would
+go stale; compute cost externally from these counts if you need it).
+
+- **`agent run`** and **`agent chat`** print a summary line to stderr at the end of each
+  run/turn:
+
+  ```text
+  · 12,431 in / 3,210 out (1,024 cached) · 4 steps · 6.2s
+  ```
+
+  In chat it's the turn's usage, followed by the running session total. `in`/`out` are
+  input/output tokens; `cached` (shown only when non-zero) is the cached-input portion of
+  `in`; `steps` is the number of model calls.
+- **`agent client`** and **`agent chat --addr`** print the same line after a run/turn,
+  read from the engine.
+- **Over the API:** `GET /runs/{id}` (and `agent client`'s underlying `RunStatus`) include
+  a `usage` object and `steps` count, populated when the run ends.
+- **In the audit log:** each completed run (and session turn — a turn is a run) records a
+  `run_usage` event, so token spend is reviewable historically:
+
+  ```bash
+  ./agent audit --type run_usage --addr 127.0.0.1:8080
+  ```
+
+Totals are the sum of the per-step usage the model reports; the per-step numbers are also
+in each run's transcript (`run.jsonl`).
 
 ---
 

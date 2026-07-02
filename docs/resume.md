@@ -39,9 +39,12 @@ Discussed 2026-07-02, written up as **Phase 6** in `plan.md`. Motivation: `provi
 captured per step but never aggregated/surfaced/fed back, and the agent can't read its own docs or
 report its own status.
 
-- **6a (do first):** token accounting — aggregate per-run `Usage` → end-of-turn line + `RunInfo`
-  total + `run_usage` audit event. **Decision: tokens only, cost deferred** (price tables go stale;
-  add later behind a `model_prices` config map).
+- **6a — DONE.** Token accounting. `agent.UsageObserver` sums input/output/cached tokens + steps
+  from `EvResponse`; the API `Engine` fans one in `launch` (covers runs *and* session turns) and
+  stores it on `RunInfo` (`Usage`+`Steps`) + emits a `run_usage` audit event (`SetAuditRecorder`,
+  wired in `serve`). CLI/chat print a stderr line via `cmd/usage.go` `formatUsage`; `agent client` /
+  `chat --addr` print it from `RunStatus`. **Tokens only, cost deferred.** Tests + live-verified
+  (`GET /runs/{id}` usage, `GET /audit?type=run_usage`). No `turn_usage` event — a turn is a run.
 - **6b:** self-documentation — `go:embed` README + `docs/*.md`, a **`read_self_docs`** built-in
   (named to disambiguate from a working-dir's project docs), + a system-prompt self-summary.
 - **6c:** introspection tools (`status`/`whoami`, `usage`, read own audit, catalog introspection).

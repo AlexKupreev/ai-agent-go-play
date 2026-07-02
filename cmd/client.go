@@ -56,8 +56,26 @@ var clientCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "\ncancelled remote run")
 			return nil
 		}
+		if printErr == nil {
+			if info, err := c.RunStatus(context.Background(), runID); err == nil {
+				printRunUsage(info)
+			}
+		}
 		return printErr
 	},
+}
+
+// printRunUsage prints a run's token-usage summary from its RunInfo (populated by the
+// engine when the run ends). No-op when there's nothing to report.
+func printRunUsage(info api.RunInfo) {
+	if info.Steps == 0 && info.Usage.InputTokens == 0 && info.Usage.OutputTokens == 0 {
+		return
+	}
+	var elapsed time.Duration
+	if info.EndedAt != nil {
+		elapsed = info.EndedAt.Sub(info.StartedAt)
+	}
+	fmt.Fprintln(os.Stderr, formatUsage(info.Usage, info.Steps, elapsed))
 }
 
 var stopCmd = &cobra.Command{
