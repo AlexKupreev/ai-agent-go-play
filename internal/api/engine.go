@@ -13,6 +13,7 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/usage"
 )
 
 // ErrUnknownRun is returned when a run id is not found.
@@ -51,14 +52,14 @@ func (f RunnerFunc) Run(ctx context.Context, runID, task string, obs agent.Obser
 // answer plus the updated history for the session layer to persist. It is the session
 // analogue of Runner (a run whose executor carries prior context).
 type TurnRunner interface {
-	RunTurn(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (answer string, updated []provider.Message, err error)
+	RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (answer string, updated []provider.Message, err error)
 }
 
 // TurnRunnerFunc adapts a plain function to TurnRunner.
-type TurnRunnerFunc func(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error)
+type TurnRunnerFunc func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error)
 
-func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
-	return f(ctx, runID, prior, text, obs)
+func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+	return f(ctx, runID, sessionID, prior, text, obs)
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -144,7 +145,7 @@ func (e *Engine) SetAuditRecorder(rec audit.Recorder) { e.auditRec = rec }
 // returns, which would abort the run mid-flight — e.g. while it waits for an
 // approval). The stored cancel is the per-run kill switch (StopRun).
 func (e *Engine) StartRun(task string) string {
-	return e.launch(task, func(ctx context.Context, id string, obs agent.Observer) (string, error) {
+	return e.launch(task, "", func(ctx context.Context, id string, obs agent.Observer) (string, error) {
 		return e.runner.Run(ctx, id, task, obs)
 	})
 }
@@ -152,7 +153,7 @@ func (e *Engine) StartRun(task string) string {
 // launch registers a run, executes work in the background, records the terminal state,
 // and emits the terminal done/error event before closing the hub. It is the shared
 // spine of both a plain run (StartRun) and a session turn (PostTurn).
-func (e *Engine) launch(task string, work func(ctx context.Context, runID string, obs agent.Observer) (string, error)) string {
+func (e *Engine) launch(task, sessionID string, work func(ctx context.Context, runID string, obs agent.Observer) (string, error)) string {
 	id := newRunID()
 	hub := newHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,12 +181,12 @@ func (e *Engine) launch(task string, work func(ctx context.Context, runID string
 		usageObs := agent.NewUsageObserver()
 		result, err := work(ctx, id, agent.Observers{hub, usageObs})
 
-		usage := usageObs.Total()
+		total := usageObs.Total()
 		steps := usageObs.Steps()
 		ended := time.Now().UTC()
 		r.mu.Lock()
 		r.info.EndedAt = &ended
-		r.info.Usage = usage
+		r.info.Usage = total
 		r.info.Steps = steps
 		if err != nil {
 			r.info.State = StateError
@@ -196,18 +197,7 @@ func (e *Engine) launch(task string, work func(ctx context.Context, runID string
 		}
 		r.mu.Unlock()
 
-		if e.auditRec != nil {
-			e.auditRec.Record(audit.Event{
-				Type: audit.EventRunUsage,
-				Run:  id,
-				Fields: map[string]any{
-					"input_tokens":  usage.InputTokens,
-					"output_tokens": usage.OutputTokens,
-					"cached_tokens": usage.CachedTokens,
-					"steps":         steps,
-				},
-			})
-		}
+		usage.Record(e.auditRec, id, sessionID, total, steps)
 
 		if err != nil {
 			hub.publish(Event{Kind: KindError, Text: err.Error()})
@@ -261,7 +251,7 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		return "", err
 	}
 	lock := e.sessionLock(sessionID)
-	id := e.launch(text, func(ctx context.Context, runID string, obs agent.Observer) (string, error) {
+	id := e.launch(text, sessionID, func(ctx context.Context, runID string, obs agent.Observer) (string, error) {
 		lock.Lock()
 		defer lock.Unlock()
 
@@ -269,7 +259,7 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		if err != nil {
 			return "", err // closed between accept and execution
 		}
-		answer, updated, err := e.turns.RunTurn(ctx, runID, sess.Messages, text, obs)
+		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, obs)
 		if err != nil {
 			return "", err
 		}

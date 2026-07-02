@@ -54,9 +54,19 @@ report its own status.
   prompt (reference = current truth, vision = not-yet). Tests + binary-grep verified the embed set.
   *Corpus decision:* include vision "to align agent+tools philosophy"; exclude planning so the
   agent doesn't mistake roadmap for current behavior.
-- **6c (next):** introspection tools — `status`/`whoami` **now also host resources (CPU/RAM/disk/
-  uptime)** per this session's discussion (separate axis from read_self_docs; not a new capability
-  since shell can already df/free); `usage`; read own audit; catalog introspection.
+- **6c — IN PROGRESS.** `status` tool **DONE**: identity (model/tier/run/build) + counts (#tools,
+  #memory) + **host resources** (CPU+load, RAM, disk, RSS, Go heap/goroutines, uptime).
+  `internal/hoststat` (best-effort `/proc` + `runtime` + `syscall.Statfs`), `internal/buildinfo`
+  (`Version`, ldflags-overridable), `internal/tools/status.go`; wired unconditionally in
+  `NewExecutor` (no signature change). Read-only, not sandbox-exposed. Tests + live-verified on
+  this box. **`usage` tool DONE**: reports **this session** + **today**, **derived from the audit
+  log** (not live accumulators) — every run/turn emits `run_usage`, so aggregates are sums over
+  persisted events (restart-safe, cross-session). Enabling change: `run_usage` now tagged with the
+  session id (threaded `sessionID` through `Engine.launch` + `TurnRunner.RunTurn`). `agent run`
+  also writes `run_usage` centrally so **today** includes CLI runs. `internal/usage` (`Ledger`,
+  `Record`), `internal/tools/usage.go`. Human surface: **`agent usage`** / `--session <id>` + a
+  `today:` line after `agent run`. Tests + live-verified. *Remaining 6c:* read-own-audit tool,
+  authored-catalog introspection.
 - **6d (later):** token budget dial + context-window awareness (subsumes the deferred context-trim).
 
 ---

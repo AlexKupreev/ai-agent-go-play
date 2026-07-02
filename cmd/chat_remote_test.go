@@ -19,7 +19,7 @@ func newSessionTestClient(t *testing.T) *api.Client {
 		return "ok", nil
 	}))
 	e.EnableSessions(session.NewFileStore(t.TempDir()),
-		api.TurnRunnerFunc(func(_ context.Context, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
+		api.TurnRunnerFunc(func(_ context.Context, _, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
 			return "ok", append(prior, provider.UserText(text)), nil
 		}))
 	srv := httptest.NewServer(api.NewServer(e, nil, nil, nil, nil))

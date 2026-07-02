@@ -120,13 +120,34 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{})
+		// Also append run_usage to the process-wide audit log so day-wide token totals
+		// (the usage tool / `agent usage`) include one-shot CLI runs, not just serve.
+		central, ledger, err := openCentralLedger()
+		if err != nil {
+			return err
+		}
+		if central != nil {
+			defer central.Close()
+		}
+
+		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{},
+			tools.UsageContext{Ledger: ledger})
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err
 		}
 		fmt.Println(result)
-		fmt.Fprintln(os.Stderr, formatUsage(usage.Total(), usage.Steps(), time.Since(runStart)))
+
+		total, steps := usage.Total(), usage.Steps()
+		if central != nil {
+			recordRunUsage(central, log.RunID, "", total, steps)
+		}
+		fmt.Fprintln(os.Stderr, formatUsage(total, steps, time.Since(runStart)))
+		if ledger != nil {
+			if today, runs := ledger.Today(); runs > 0 {
+				fmt.Fprintf(os.Stderr, "today: %s across %d run(s)\n", formatTokens(today), runs)
+			}
+		}
 		return nil
 	},
 }

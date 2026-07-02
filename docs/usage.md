@@ -12,6 +12,7 @@ the *how*.
 - [Self-authored tools](#self-authored-tools)
 - [Long-term memory](#long-term-memory)
 - [Self-documentation](#self-documentation)
+- [Self-status](#self-status)
 - [Audit log](#audit-log)
 - [Token usage](#token-usage)
 - [Conversations over the API (sessions)](#conversations-over-the-api-sessions)
@@ -91,6 +92,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the engine's audit log. |
+| `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
 | `agent config set-key\|set-model\|set-tier` | Save API key / default model / default tier. |
@@ -280,6 +282,27 @@ read-only, trusted, and not exposed to sandboxed authored tools.
 
 ---
 
+## Self-status
+
+The agent has a `status` tool that reports its own live state, so it can answer "how am I
+configured?" or "how much headroom does this machine have?" accurately. It returns:
+
+- **Identity:** model, trust tier, current run id, and build version.
+- **Counts:** how many authored tools and memory entries it has.
+- **Host resources:** CPU count and load average, RAM free/total, disk free/total, the
+  process's RSS, Go heap/goroutines, and host uptime.
+
+Host figures are read live (Linux `/proc` + Go runtime; fields it can't read are omitted).
+This isn't a new capability — the agent can already `shell` out to `df`/`free`/`uptime` — but
+a structured, reliable convenience, and it matters most on a small box where knowing the
+headroom before starting heavy work is useful. Like the other introspection tools, `status`
+is a tool the agent invokes during a run (no separate CLI), read-only and not sandbox-exposed.
+
+The build version defaults to `dev`; stamp a real one at build time with
+`-ldflags "-X ai-agent-go-play/internal/buildinfo.Version=$(git describe --tags --always)"`.
+
+---
+
 ## Audit log
 
 Everything effectful is recorded to an append-only audit log: capability use
@@ -329,6 +352,28 @@ go stale; compute cost externally from these counts if you need it).
 
 Totals are the sum of the per-step usage the model reports; the per-step numbers are also
 in each run's transcript (`run.jsonl`).
+
+### Session-wide and day-wide totals
+
+Because every run/turn writes a `run_usage` event (tagged with the session id for session
+turns), **session-wide** and **day-wide** totals are just sums over those persisted events —
+restart-safe and spanning every run, with no separate accumulators. Both `agent serve` and
+`agent run` append to the one process-wide `audit.jsonl`, so "today" covers CLI runs too.
+
+- **For you:** `agent usage` reports today's total across all runs; `agent usage --session <id>`
+  reports one conversation's total across its turns.
+
+  ```bash
+  ./agent usage                       # today: 118,900 in / 27,400 out across 14 run(s)
+  ./agent usage --session <id>        # session <id>: 22,180 in / 5,340 out across 6 turn(s)
+  ```
+
+  (`agent usage` reads the local `audit.jsonl` under `--config-dir`.) `agent run` also prints a
+  `today:` line after each run.
+- **For the agent:** a `usage` tool lets it query its own spend this session and today, so it
+  can reason about how much it's using. The in-flight run is included only once it finishes
+  (it's summed from the log). The `usage` tool is available on `agent serve` runs; local
+  `agent chat` shows its own per-turn and session totals instead.
 
 ---
 

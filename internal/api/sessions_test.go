@@ -14,7 +14,7 @@ import (
 // echoTurns is a TurnRunner that appends the user turn to the prior history and
 // returns it, so a test can prove prior context is threaded and persisted.
 func echoTurns() TurnRunnerFunc {
-	return func(_ context.Context, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
+	return func(_ context.Context, _, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
 		updated := append(append([]provider.Message{}, prior...), provider.UserText(text))
 		return "ok:" + text, updated, nil
 	}

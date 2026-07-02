@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/buildinfo"
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
@@ -144,7 +145,7 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 // mem is the long-term memory store backing the remember/recall built-ins; when
 // nil those tools are omitted (e.g. tests that don't exercise memory).
 //
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, docs *selfdocs.Docs, rec audit.Recorder, tier capability.Tier, approver tools.Approver) *Agent {
+func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, docs *selfdocs.Docs, rec audit.Recorder, tier capability.Tier, approver tools.Approver, usage tools.UsageContext) *Agent {
 	if approver == nil {
 		approver = tools.StdinApprover{}
 	}
@@ -169,6 +170,16 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		authorTool,
+		// Self-status: identity + host resources. Read-only, trusted, not sandbox-exposed.
+		tools.NewStatusTool(tools.StatusDeps{
+			Model:    model,
+			Tier:     string(tier),
+			RunID:    runID,
+			Version:  buildinfo.Version,
+			WorkDir:  workDir,
+			Registry: registry,
+			Memory:   mem,
+		}),
 	}
 	// Long-term memory is a trusted built-in (not exposed to the sandbox). Omit it
 	// when no store is wired so memory-free runs/tests offer no dangling tools.
@@ -184,6 +195,11 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 	if docs != nil && docs.Len() > 0 {
 		builtins = append(builtins, tools.NewReadSelfDocsTool(docs))
 		prompt += selfDocsPromptNote
+	}
+	// Self-usage: the agent can report its own session/day token spend (from the audit
+	// log). Omitted when no ledger is wired.
+	if usage.Ledger != nil {
+		builtins = append(builtins, tools.NewUsageTool(usage))
 	}
 
 	a := newAgent(p, model, prompt, builtins, obs)

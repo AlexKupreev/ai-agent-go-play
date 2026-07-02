@@ -92,6 +92,8 @@ internal/
   sandbox/                 gopher-lua sandbox for authored tools
   memory/                  long-term memory store
   selfdocs/                the agent's own docs, embedded for read_self_docs
+  hoststat/                best-effort host resource snapshot (for the status tool)
+  buildinfo/               build version (ldflags-stampable), for self-reporting
   provider/                LLM provider port (OpenAI adapter under provider/openai)
   audit/                   append-only audit log (+ reader)
   api/                     headless engine: HTTP+SSE transport, run lifecycle, approval queue, client

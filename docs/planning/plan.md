@@ -585,19 +585,36 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     model; the tool is omitted when nil). Live-verified the embed set by grepping the binary
     (reference + vision present; `plan.md`/`resume.md` bodies absent).
 
-### 6c — Introspection tools (expose 6a/6b + live state to the model)
+### 6c — Introspection tools (expose 6a/6b + live state to the model)  *(IN PROGRESS)*
 
-- [ ] `status`/`whoami`: model, tier, config-dir, #tools, #memories, current run id, build
-    version (embed git sha via `-ldflags`) **and host resources** (CPU count + load, RAM
-    used/free, disk free, process RSS, uptime). Host status is a distinct self-awareness axis
-    from `read_self_docs` (live runtime state vs documentation), so it lives here, not in the
-    docs tool. Apt given the low-resource-box target (design §11, "~2 GB budget") — knowing its
-    headroom lets it avoid OOM / decide whether to spawn heavy work. Read via `/proc` +
-    `runtime`/`syscall.Statfs` in Go (Linux deploy); graceful fallback elsewhere. *Note:* not a
-    new capability — the agent can already `shell` out to `df`/`free`/`uptime`; the tool is a
-    convenience + reliability win (structured, no command-recall, survives shell restriction).
-- [ ] `usage`: the model queries its own token spend this run/session (reads 6a's totals) —
-    turns accounting into self-awareness rather than just reporting.
+- [x] **`status` tool — DONE.** Reports identity (model, tier, run id, build version), counts
+    (#authored tools, #memory entries), **and host resources** (CPU count + load, RAM free/total,
+    disk free/total, process RSS, Go heap + goroutines, host uptime). `internal/hoststat`
+    (`Read(path)` — best-effort via Linux `/proc` + `runtime` + `syscall.Statfs`, zero fields
+    where unavailable), `internal/buildinfo` (`Version`, `-ldflags`-overridable),
+    `internal/tools/status.go` (`NewStatusTool`). Wired unconditionally in `NewExecutor` from
+    existing params (no signature change); read-only, trusted, not sandbox-exposed. Host status
+    is a distinct self-awareness axis from `read_self_docs` (live state vs docs); apt for the
+    low-resource-box target (design §11). *Not a new capability* — the agent can already `shell`
+    out to `df`/`free`; this is the structured, reliable convenience. Tests:
+    `internal/hoststat`, `internal/tools/status_test.go`, `internal/agent/status_e2e_test.go`
+    (offered + returns a live report). Live-verified on this box (8 cores, load, RAM/disk, RSS,
+    uptime). *(config-dir dropped from v1 — a cmd concept the executor doesn't hold; add via a
+    param if a real need appears.)*
+- [x] **`usage` tool — DONE.** Reports token spend **this session** (across turns) and **today**
+    (across all runs). **Design decision (2026-07-02): derive from the audit log, not live
+    accumulators** — every run/turn already emits `run_usage`, so session/day totals are sums over
+    those persisted events: restart-safe, cross-session, no accumulator state to keep in sync (only
+    the in-flight run isn't counted until it ends). `internal/usage` (`Ledger.Session`/`Today` over
+    an `audit.Reader`; `Record` — the single writer of the event shape, used by both engine and
+    CLI); `internal/tools/usage.go` (`NewUsageTool`, `UsageContext{SessionID, Ledger}`). Enabling
+    change: `run_usage` is now **tagged with the session id** (threaded `sessionID` through
+    `Engine.launch` + `TurnRunner.RunTurn`). `agent run` now also appends `run_usage` to the
+    process-wide log so **today** includes CLI runs. **Human surface:** `agent usage` /
+    `agent usage --session <id>`, and a `today:` line after `agent run`. Tests
+    (`internal/usage`, `internal/tools`, agent wiring e2e) + live-verified (session-tagged events,
+    `agent usage` today/session counts). *(Local `agent chat` keeps its in-process per-turn/session
+    line; the model-facing tool is wired on `serve`/`run` where the ledger is.)*
 - [ ] Read its own audit log (reuse `audit.Reader` / `GET /audit`) — "what did I change
     today?" self-reflection over its own history.
 - [ ] Introspect the authored-tool catalog (names + caps) so it reuses rather than re-authors.
@@ -634,10 +651,9 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Phase 6c — introspection tools.** Expose 6a/6b + live state to the model: a `status`/`whoami`
-tool (identity + build version + **host resources**: CPU/RAM/disk/uptime), a `usage` tool over
-6a's totals, read-own-audit, and authored-catalog introspection. (**6a token accounting and 6b
-self-documentation are DONE.**)
+**Phase 6c (continued).** The `status` and `usage` tools are DONE. Remaining 6c introspection
+tools: read-own-audit (a model tool over `audit.Reader` — "what did I change today?") and
+authored-catalog introspection (names + caps, so it reuses rather than re-authors).
 
-*(Phases 0–4f, 6a and 6b are complete; the historical "start at Phase 0" note that once lived
-here is superseded.)*
+*(Phases 0–4f, 6a, 6b, and 6c's `status` + `usage` tools are complete; the historical "start at
+Phase 0" note that once lived here is superseded.)*

@@ -18,6 +18,7 @@ import (
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/session"
 	"ai-agent-go-play/internal/tools"
+	"ai-agent-go-play/internal/usage"
 
 	"github.com/spf13/cobra"
 )
@@ -106,6 +107,7 @@ var serveCmd = &cobra.Command{
 			registry: registry,
 			mem:      mem,
 			central:  rec,
+			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -143,12 +145,13 @@ type serveDeps struct {
 	registry tools.Registry
 	mem      memory.Store
 	central  audit.Recorder
+	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
 // runID (so the transcript, audit Run field, and parked approvals share one id). It
 // returns a cleanup to defer. Shared by the plain runner and the session turn runner.
-func (d serveDeps) buildExecutor(runID string, obs agent.Observer) (*agent.Agent, func(), error) {
+func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*agent.Agent, func(), error) {
 	log, err := logger.NewWithID(sessionsDir(), runID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create logger: %w", err)
@@ -161,7 +164,8 @@ func (d serveDeps) buildExecutor(runID string, obs agent.Observer) (*agent.Agent
 	// Effects fan out to the session transcript and the process-wide log (GET /audit).
 	rec := audit.Recorders{sessionRec, d.central}
 	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
-	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver)
+	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
+	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver, usageCtx)
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil
 }
@@ -169,7 +173,7 @@ func (d serveDeps) buildExecutor(runID string, obs agent.Observer) (*agent.Agent
 // runner drives a single-shot run: a fresh executor with no prior context.
 func (d serveDeps) runner() api.Runner {
 	return api.RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
-		ex, cleanup, err := d.buildExecutor(runID, obs)
+		ex, cleanup, err := d.buildExecutor(runID, "", obs)
 		if err != nil {
 			return "", err
 		}
@@ -181,8 +185,8 @@ func (d serveDeps) runner() api.Runner {
 // turnRunner drives one session turn: a fresh executor seeded with the session's
 // prior history, returning the updated history for the engine to persist.
 func (d serveDeps) turnRunner() api.TurnRunner {
-	return api.TurnRunnerFunc(func(ctx context.Context, runID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
-		ex, cleanup, err := d.buildExecutor(runID, obs)
+	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+		ex, cleanup, err := d.buildExecutor(runID, sessionID, obs)
 		if err != nil {
 			return "", nil, err
 		}
