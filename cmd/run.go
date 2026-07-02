@@ -131,7 +131,7 @@ var runCmd = &cobra.Command{
 		}
 
 		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{},
-			tools.UsageContext{Ledger: ledger})
+			tools.UsageContext{Ledger: ledger}, rec)
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err

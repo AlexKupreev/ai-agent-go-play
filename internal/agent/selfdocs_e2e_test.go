@@ -28,7 +28,7 @@ func TestSelfDocs_EndToEnd(t *testing.T) {
 		textStep("The tier is the autonomy dial."),
 	}}
 	obs := &captureObserver{}
-	exec := NewExecutor(prov, t.TempDir(), "", "", obs, tools.NewMemoryRegistry(), nil, docs, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{})
+	exec := NewExecutor(prov, t.TempDir(), "", "", obs, tools.NewMemoryRegistry(), nil, docs, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, nil)
 
 	if _, err := exec.Run(context.Background(), "how does the tier work?"); err != nil {
 		t.Fatalf("run: %v", err)
@@ -62,7 +62,7 @@ func TestSelfDocs_EndToEnd(t *testing.T) {
 // Without a doc set the tool is omitted (nil docs ⇒ no dangling tool).
 func TestSelfDocs_OmittedWhenNil(t *testing.T) {
 	prov := &scriptedProvider{steps: []provider.StepResponse{textStep("done")}}
-	exec := NewExecutor(prov, t.TempDir(), "", "", nil, tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{})
+	exec := NewExecutor(prov, t.TempDir(), "", "", nil, tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, nil)
 	if _, err := exec.Run(context.Background(), "hi"); err != nil {
 		t.Fatalf("run: %v", err)
 	}

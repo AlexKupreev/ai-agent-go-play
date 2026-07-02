@@ -585,7 +585,7 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     model; the tool is omitted when nil). Live-verified the embed set by grepping the binary
     (reference + vision present; `plan.md`/`resume.md` bodies absent).
 
-### 6c — Introspection tools (expose 6a/6b + live state to the model)  *(IN PROGRESS)*
+### 6c — Introspection tools (expose 6a/6b + live state to the model)  *(DONE)*
 
 - [x] **`status` tool — DONE.** Reports identity (model, tier, run id, build version), counts
     (#authored tools, #memory entries), **and host resources** (CPU count + load, RAM free/total,
@@ -615,9 +615,17 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     (`internal/usage`, `internal/tools`, agent wiring e2e) + live-verified (session-tagged events,
     `agent usage` today/session counts). *(Local `agent chat` keeps its in-process per-turn/session
     line; the model-facing tool is wired on `serve`/`run` where the ledger is.)*
-- [ ] Read its own audit log (reuse `audit.Reader` / `GET /audit`) — "what did I change
-    today?" self-reflection over its own history.
-- [ ] Introspect the authored-tool catalog (names + caps) so it reuses rather than re-authors.
+- [x] **`recent_activity` tool — DONE.** The agent reviews its own recorded activity from the
+    audit log (capabilities used, tools authored/revoked, memory saved, token usage), filterable
+    by `type`/`run` — "what have I done?". Over an `audit.Reader` (`NewExecutor` gained an
+    `auditReader` param): serve passes the process-wide log (cross-run); `run`/`chat` pass their
+    per-run recorder. Omitted when nil. `internal/tools/introspect.go`.
+- [x] **`tool_catalog` tool — DONE.** Lists the agent's authored tools with capabilities + scope
+    (optionally searched) so it reuses an existing tool rather than re-authoring a duplicate. Built
+    unconditionally from the registry `NewExecutor` already has. `internal/tools/introspect.go`.
+- All read-only, trusted, not sandbox-exposed. Tests: `internal/tools/introspect_test.go` +
+    `internal/agent/introspect_e2e_test.go` (catalog always offered; recent_activity gated on a
+    reader).
 
 ### 6d — Budget + context-window awareness (later)
 
@@ -651,9 +659,15 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Phase 6c (continued).** The `status` and `usage` tools are DONE. Remaining 6c introspection
-tools: read-own-audit (a model tool over `audit.Reader` — "what did I change today?") and
-authored-catalog introspection (names + caps, so it reuses rather than re-authors).
+**Phase 6d — budget + context-window awareness.** 6a–6c are complete. Next: a token **budget**
+dial (soft warning fed into context at ~80% of a per-run/session limit, optional hard stop — reads
+6a/`usage` totals), and **context-window awareness** (the agent knows its model's context limit +
+current fill and summarizes under pressure — the deferred Phase 4f context-window-trimming item,
+upgraded from blind truncation).
 
-*(Phases 0–4f, 6a, 6b, and 6c's `status` + `usage` tools are complete; the historical "start at
-Phase 0" note that once lived here is superseded.)*
+*Note:* `NewExecutor` now takes 14 positional args (several optional self-awareness deps). Before
+adding 6d's budget dep, **refactor it to a config struct** (`ExecutorConfig`) so further additions
+are field additions, not positional churn across ~10 callers.
+
+*(Phases 0–4f and 6a–6c are complete; the historical "start at Phase 0" note that once lived here
+is superseded.)*

@@ -19,7 +19,7 @@ func TestStatus_EndToEnd(t *testing.T) {
 		textStep("reported"),
 	}}
 	obs := &captureObserver{}
-	exec := NewExecutor(prov, t.TempDir(), "gpt-4o-mini", "run-abc12345", obs, tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{})
+	exec := NewExecutor(prov, t.TempDir(), "gpt-4o-mini", "run-abc12345", obs, tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, nil)
 
 	if _, err := exec.Run(context.Background(), "what's your status?"); err != nil {
 		t.Fatalf("run: %v", err)

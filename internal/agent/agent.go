@@ -38,7 +38,7 @@ const executorPrompt = `You are a helpful AI agent with access to a shell and th
 
 When given a task:
 1. Think through what steps are needed
-2. Use tools to execute each step — shell for local operations, run_code for calculations and data shaping (sandboxed Lua), web_search to find information, web_fetch to read a specific page
+2. Use tools to execute each step — shell for local operations, run_code for calculations and data shaping (sandboxed Lua — pure compute: no clock, filesystem, or network; use shell for those), web_search to find information, web_fetch to read a specific page
 3. If you find yourself repeating the same multi-step work, use author_tool to create a reusable, tested tool for it (request only the capabilities it needs); you can call the new tool immediately
 4. Observe the output and adjust if something fails
 5. Once done, provide a concise summary of what you did and the result
@@ -145,7 +145,7 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 // mem is the long-term memory store backing the remember/recall built-ins; when
 // nil those tools are omitted (e.g. tests that don't exercise memory).
 //
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, docs *selfdocs.Docs, rec audit.Recorder, tier capability.Tier, approver tools.Approver, usage tools.UsageContext) *Agent {
+func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, docs *selfdocs.Docs, rec audit.Recorder, tier capability.Tier, approver tools.Approver, usage tools.UsageContext, auditReader audit.Reader) *Agent {
 	if approver == nil {
 		approver = tools.StdinApprover{}
 	}
@@ -201,6 +201,15 @@ func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer
 	if usage.Ledger != nil {
 		builtins = append(builtins, tools.NewUsageTool(usage))
 	}
+	// Catalog introspection: list authored tools + caps, so the agent reuses an existing
+	// tool rather than re-authoring a duplicate.
+	if registry != nil {
+		builtins = append(builtins, tools.NewCatalogTool(registry))
+	}
+	// Self-audit: review its own recorded activity. Omitted when no reader is wired.
+	if auditReader != nil {
+		builtins = append(builtins, tools.NewRecentActivityTool(auditReader))
+	}
 
 	a := newAgent(p, model, prompt, builtins, obs)
 	a.registry = registry
@@ -250,6 +259,15 @@ func (a *Agent) Messages() []provider.Message {
 // display.
 func (a *Agent) Model() string { return a.model }
 
+// systemMessage builds the system message for a request: the base prompt plus the
+// current date, so the agent always knows "today" without a tool call (it can't get the
+// clock from run_code — the Lua sandbox strips os). Day granularity keeps the prompt
+// prefix stable within a day so prompt caching stays warm; the agent shells out to `date`
+// if it needs the precise time.
+func (a *Agent) systemMessage() provider.Message {
+	return provider.SystemText(a.systemPrompt + "\n\nToday's date is " + time.Now().Format("2006-01-02 (Monday)") + ".")
+}
+
 // emit sends a run event to the observer (no-op if none is attached).
 func (a *Agent) emit(e Event) {
 	if a.obs != nil {
@@ -274,7 +292,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		// prefix is unchanged until a tool is added — cache stays warm.
 		toolDefs := a.buildToolDefs()
 		// Prepend the current system prompt at request time (not stored in history).
-		reqMessages := append([]provider.Message{provider.SystemText(a.systemPrompt)}, a.messages...)
+		reqMessages := append([]provider.Message{a.systemMessage()}, a.messages...)
 		a.emit(Event{Kind: EvRequest, Iteration: i, Messages: reqMessages})
 
 		start := time.Now()

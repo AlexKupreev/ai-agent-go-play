@@ -65,8 +65,26 @@ report its own status.
   session id (threaded `sessionID` through `Engine.launch` + `TurnRunner.RunTurn`). `agent run`
   also writes `run_usage` centrally so **today** includes CLI runs. `internal/usage` (`Ledger`,
   `Record`), `internal/tools/usage.go`. Human surface: **`agent usage`** / `--session <id>` + a
-  `today:` line after `agent run`. Tests + live-verified. *Remaining 6c:* read-own-audit tool,
-  authored-catalog introspection.
+  `today:` line after `agent run`. Tests + live-verified.
+- **6c COMPLETE.** Added the last two introspection tools (`internal/tools/introspect.go`):
+  **`recent_activity`** (reviews its own audit-log activity — capabilities, authoring, memory,
+  usage — filterable by type/run; over an `audit.Reader` — `NewExecutor` gained an `auditReader`
+  param, serve passes the process-wide log, run/chat their per-run recorder) and **`tool_catalog`**
+  (lists authored tools + caps/scope so it reuses rather than re-authors; built from the registry).
+  Both read-only, not sandbox-exposed. Tests + wiring e2e.
+- **Heads-up for 6d:** `NewExecutor` is now 14 positional args — **refactor to an `ExecutorConfig`
+  struct** before adding the budget dep, to stop the per-addition caller/test churn.
+- **Next: 6d** — token budget dial (soft warn ~80% + optional hard stop) + context-window awareness
+  (subsumes the deferred context-window trimming).
+
+## Fix (2026-07-02): agent now knows the current date
+
+Surfaced by a live run: asked the year, the agent guessed wrong (anchored to its training cutoff),
+then fumbled — `run_code` can't get the clock (the Lua sandbox strips `os`), so it finally shelled
+`date`. Fix: `Agent.systemMessage()` appends `Today's date is <YYYY-MM-DD (Weekday)>` to the system
+prompt, rebuilt each request (**day granularity** to keep prompt-cache prefix stable). Also tightened
+the `run_code` prompt line to note it's pure compute (no clock/fs/network — use shell). Applies to
+executor + planner (shared loop). Test: `systemdate_test.go`.
 - **6d (later):** token budget dial + context-window awareness (subsumes the deferred context-trim).
 
 ---

@@ -301,6 +301,12 @@ is a tool the agent invokes during a run (no separate CLI), read-only and not sa
 The build version defaults to `dev`; stamp a real one at build time with
 `-ldflags "-X ai-agent-go-play/internal/buildinfo.Version=$(git describe --tags --always)"`.
 
+The agent has two more introspection tools in the same vein (model-facing, read-only, no CLI):
+`recent_activity` lets it review its own recorded activity from the audit log (capabilities used,
+tools authored/revoked, memory saved, token usage — "what have I done recently?"), and
+`tool_catalog` lists the tools it has authored with their capabilities, so it reuses an existing
+one instead of writing a duplicate.
+
 ---
 
 ## Audit log

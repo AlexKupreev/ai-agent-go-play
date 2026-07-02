@@ -108,6 +108,7 @@ var serveCmd = &cobra.Command{
 			mem:      mem,
 			central:  rec,
 			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
+			reader:   rec,                  // same log, read side, for recent_activity
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -146,6 +147,7 @@ type serveDeps struct {
 	mem      memory.Store
 	central  audit.Recorder
 	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
+	reader   audit.Reader      // process-wide log, for the recent_activity tool
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
@@ -165,7 +167,7 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 	rec := audit.Recorders{sessionRec, d.central}
 	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
-	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver, usageCtx)
+	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver, usageCtx, d.reader)
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil
 }
