@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+// TestResolveAddr checks that --addr resolves a configured engine alias to its address
+// and passes any other value (a literal host:port) through unchanged.
+func TestResolveAddr(t *testing.T) {
+	orig := configDirFlag
+	t.Cleanup(func() { configDirFlag = orig })
+	configDirFlag = t.TempDir()
+	t.Setenv(envConfigDir, "")
+
+	if err := saveConfig(Config{Engines: map[string]string{"alex": "127.0.0.1:9001"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := resolveAddr("alex"); got != "127.0.0.1:9001" {
+		t.Fatalf("resolveAddr(alias) = %q, want 127.0.0.1:9001", got)
+	}
+	if got := resolveAddr("127.0.0.1:8080"); got != "127.0.0.1:8080" {
+		t.Fatalf("resolveAddr(literal) = %q, want it passed through unchanged", got)
+	}
+	if got := resolveAddr("unknown"); got != "unknown" {
+		t.Fatalf("resolveAddr(unknown alias) = %q, want it passed through unchanged", got)
+	}
+}
+
 // TestConfigDirPrecedence checks the resolution order: --config-dir flag beats the
 // AI_AGENT_CONFIG_DIR env, which beats the ~/.config/ai-agent default.
 func TestConfigDirPrecedence(t *testing.T) {

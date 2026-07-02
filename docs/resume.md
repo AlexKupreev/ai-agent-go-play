@@ -2,7 +2,36 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-07-01._
+_Last session: 2026-07-02._
+
+---
+
+## Latest session (2026-07-02): `agent chat --addr` (remote sessions) + engine aliases
+
+- **`agent chat --addr` — DONE.** The chat REPL grew a remote mode. Without `--addr` it's the
+  in-process executor as before; **with `--addr` it drives a running `agent serve` engine's persistent
+  session** as a peer client — the conversation lives server-side, so it survives quitting and is
+  resumable here or from another client (Telegram). Flags: `--addr` (host:port or alias), `--list`
+  (show resumable sessions, exit), `--session <id>` (resume). Commands in remote mode: `/reset` = new
+  session (closes old), `/end` = close, `/exit`/Ctrl-D = detach (prints the resume command). Ctrl-C
+  cancels the current turn and stops the remote run. `cmd/chat_remote.go` (`runRemoteChat`,
+  `attachSession`, `listRemoteSessions`, `runRemoteTurn`); reuses `printEvent` + a refactored
+  `watchApprovalsScan` (shares the REPL's stdin scanner so the prompt and approval answers don't race
+  two bufio readers).
+- **Engine aliases — DONE.** `--addr` accepts a `host:port` **or** an alias. `agent config set-engine
+  <alias> <host:port>` / `rm-engine` / `engines` manage `Config.Engines`; `resolveAddr(addr)` resolves
+  a known alias, else passes the value through. Wired into **every** engine-facing command
+  (`chat`/`client`/`stop`/`audit`/`tool revoke`).
+- **Tests:** `TestResolveAddr` (alias vs literal passthrough), `TestAttachSession` (new / resume /
+  unknown-id error, against a real httptest engine), `TestListRemoteSessions_Empty`. Build/vet/test
+  green, race-clean. **Live-verified** end-to-end against a real `serve`: `config set-engine` →
+  `chat --addr <alias>` (header shows the resolved address) → new session → `--list` → resume (header
+  shows "resumed") → `/end` → list empty.
+- Docs updated: `README.md` (ways to run + alias note), `docs/usage.md` (chat remote mode, new
+  "Engine aliases" section, sessions section points at `chat --addr`, config reference + files-on-disk),
+  `docs/plan.md` (Phase 4f).
+- **Still deferred:** context-window trimming for long sessions. Housekeeping from earlier sessions
+  (commit timestamps, markdownlint) still outstanding; nothing committed this session yet.
 
 ---
 

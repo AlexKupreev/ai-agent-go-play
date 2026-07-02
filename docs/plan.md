@@ -491,8 +491,19 @@ cross-device conversation continuity (start on SSH, continue on Telegram).
   `POST /sessions/{id}/turns`. `Client` gained the four peer methods. *Only the message history is
   persisted; the live executor is rebuilt per turn — nothing unserializable is stored.*
 - **Telegram is now session-based:** chat→session map, `/new` / `/end` commands, a message is a turn.
-- *Deferred:* `agent chat --addr` to drive a *remote* session
-  (the SSH→Telegram continuity payoff); context-window trimming for long sessions.
+- **`agent chat --addr` — DONE.** The REPL now has a remote mode: with `--addr` it drives a running
+  engine's persistent session (`StartSession`/`PostTurn`/`StreamEvents`/`CloseSession`) instead of an
+  in-process executor, so the conversation is server-side and resumable (`--list`, `--session <id>`) —
+  the SSH→Telegram continuity payoff. `/reset` starts a fresh session, `/end` closes, `/exit` detaches.
+  Ctrl-C cancels the current turn (stops the remote run). Approval prompts reuse the engine's shared
+  queue via a stdin scanner shared with the REPL (no dual-reader race). `cmd/chat_remote.go`.
+- **Engine aliases — DONE.** `--addr` now accepts a `host:port` **or** an alias saved with
+  `agent config set-engine <alias> <host:port>` (`rm-engine`/`engines` to manage; stored as
+  `Config.Engines`). `resolveAddr` resolves aliases and passes literals through; wired into every
+  engine-facing command (`chat`/`client`/`stop`/`audit`/`tool revoke`). Tests: `TestResolveAddr`,
+  `TestAttachSession`, `TestListRemoteSessions_Empty`. Live-verified end-to-end (alias → new session →
+  list → resume → `/end`).
+- *Deferred:* context-window trimming for long sessions.
 
 ---
 

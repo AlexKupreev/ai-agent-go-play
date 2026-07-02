@@ -26,7 +26,7 @@ var clientCmd = &cobra.Command{
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		task := strings.Join(args, " ")
-		c := api.NewClient("http://" + clientAddrFlag)
+		c := api.NewClient("http://" + resolveAddr(clientAddrFlag))
 
 		// First Ctrl+C cancels the *remote* run and detaches; a second is no longer
 		// caught and force-quits the client.
@@ -65,7 +65,7 @@ var stopCmd = &cobra.Command{
 	Short: "Cancel a run on a running engine",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := api.NewClient("http://" + clientAddrFlag)
+		c := api.NewClient("http://" + resolveAddr(clientAddrFlag))
 		if err := c.StopRun(cmd.Context(), args[0]); err != nil {
 			return err
 		}
@@ -106,8 +106,15 @@ func printEvent(e api.Event) {
 // resolve each one, until ctx is cancelled. Handled ids are remembered so a request
 // is not prompted twice while a poll overlaps its resolution.
 func watchApprovals(ctx context.Context, c *api.Client) {
+	watchApprovalsScan(ctx, c, bufio.NewScanner(os.Stdin))
+}
+
+// watchApprovalsScan is watchApprovals reading operator answers from a caller-supplied
+// scanner. The remote chat REPL passes its own stdin scanner so approval prompts and
+// the "> " prompt share one buffer (they never read concurrently — a turn is either
+// streaming or awaiting the next line), avoiding two bufio readers racing on stdin.
+func watchApprovalsScan(ctx context.Context, c *api.Client, stdin *bufio.Scanner) {
 	handled := map[string]bool{}
-	stdin := bufio.NewScanner(os.Stdin)
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	for {

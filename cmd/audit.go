@@ -24,7 +24,7 @@ var auditCmd = &cobra.Command{
 		"--type; --limit caps to the last N matches.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := api.NewClient("http://" + auditAddrFlag)
+		c := api.NewClient("http://" + resolveAddr(auditAddrFlag))
 		events, err := c.Audit(context.Background(), auditRunFlag, auditTypeFlag, auditLimitFlag)
 		if err != nil {
 			return err

@@ -49,11 +49,12 @@ var toolRevokeCmd = &cobra.Command{
 		if toolRevokeAddr != "" {
 			// Route to a running engine so the live set (and its audit log) reflect
 			// the revoke, not just the on-disk catalog.
-			client := api.NewClient("http://" + toolRevokeAddr)
+			addr := resolveAddr(toolRevokeAddr)
+			client := api.NewClient("http://" + addr)
 			if err := client.RevokeTool(context.Background(), args[0]); err != nil {
 				return err
 			}
-			fmt.Printf("revoked %q on %s\n", args[0], toolRevokeAddr)
+			fmt.Printf("revoked %q on %s\n", args[0], addr)
 			return nil
 		}
 		reg, err := openCatalog()

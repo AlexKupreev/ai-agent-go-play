@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,11 @@ type Config struct {
 	// runs unchanged. Both may be supplied via env vars (see resolveTelegram*).
 	TelegramToken        string  `json:"telegram_token,omitempty"`
 	TelegramAllowedUsers []int64 `json:"telegram_allowed_users,omitempty"`
+
+	// Engines maps a short alias to an engine address (host:port), so remote
+	// commands can say `--addr alex` instead of `--addr 127.0.0.1:8081`. An --addr
+	// value that is not a known alias is used verbatim (see resolveAddr).
+	Engines map[string]string `json:"engines,omitempty"`
 }
 
 var configCmd = &cobra.Command{
@@ -66,10 +72,67 @@ var setTierCmd = &cobra.Command{
 	},
 }
 
+var setEngineCmd = &cobra.Command{
+	Use:   "set-engine <alias> <host:port>",
+	Short: "Name an engine address so `--addr <alias>` connects to it",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		alias, addr := args[0], args[1]
+		if strings.TrimSpace(alias) == "" || strings.TrimSpace(addr) == "" {
+			return fmt.Errorf("both an alias and a host:port are required")
+		}
+		cfg := loadConfigOrEmpty()
+		if cfg.Engines == nil {
+			cfg.Engines = map[string]string{}
+		}
+		cfg.Engines[alias] = addr
+		return saveConfig(cfg)
+	},
+}
+
+var rmEngineCmd = &cobra.Command{
+	Use:   "rm-engine <alias>",
+	Short: "Remove a named engine alias",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		if _, ok := cfg.Engines[args[0]]; !ok {
+			return fmt.Errorf("no engine alias %q", args[0])
+		}
+		delete(cfg.Engines, args[0])
+		return saveConfig(cfg)
+	},
+}
+
+var enginesCmd = &cobra.Command{
+	Use:   "engines",
+	Short: "List named engine aliases",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		if len(cfg.Engines) == 0 {
+			fmt.Println("no engine aliases (add one with: agent config set-engine <alias> <host:port>)")
+			return nil
+		}
+		aliases := make([]string, 0, len(cfg.Engines))
+		for a := range cfg.Engines {
+			aliases = append(aliases, a)
+		}
+		sort.Strings(aliases)
+		for _, a := range aliases {
+			fmt.Printf("%-16s %s\n", a, cfg.Engines[a])
+		}
+		return nil
+	},
+}
+
 func init() {
 	configCmd.AddCommand(setKeyCmd)
 	configCmd.AddCommand(setModelCmd)
 	configCmd.AddCommand(setTierCmd)
+	configCmd.AddCommand(setEngineCmd)
+	configCmd.AddCommand(rmEngineCmd)
+	configCmd.AddCommand(enginesCmd)
 }
 
 // configDirFlag is bound to the persistent --config-dir flag (see cmd/root.go).
@@ -228,6 +291,18 @@ func loadConfigOrEmpty() Config {
 		return Config{}
 	}
 	return cfg
+}
+
+// resolveAddr turns an --addr value into an engine host:port. If the value matches a
+// configured engine alias (agent config set-engine <alias> <host:port>) it resolves to
+// that alias's address; otherwise it is used verbatim, so a literal host:port always
+// works and aliases are a pure convenience. A missing/unreadable config just means no
+// aliases are known — the value passes through unchanged.
+func resolveAddr(addr string) string {
+	if a, ok := loadConfigOrEmpty().Engines[addr]; ok {
+		return a
+	}
+	return addr
 }
 
 // resolveModel applies model precedence: the --model flag wins, then the saved

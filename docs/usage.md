@@ -15,6 +15,7 @@ the *how*.
 - [Conversations over the API (sessions)](#conversations-over-the-api-sessions)
 - [Telegram frontend (optional)](#telegram-frontend-optional)
 - [Running multiple independent agents](#running-multiple-independent-agents)
+  - [Engine aliases](#engine-aliases)
 - [Configuration & environment reference](#configuration--environment-reference)
 - [Files on disk](#files-on-disk)
 
@@ -83,7 +84,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | Command | What it does |
 | --- | --- |
 | `agent run <task>` | One-shot run in this process (planner + executor), stdin approvals. |
-| `agent chat` | Interactive multi-turn REPL with retained conversation context. |
+| `agent chat` | Interactive multi-turn REPL, retained context. Local by default; `--addr` drives a `serve` engine's persistent session. |
 | `agent serve` | Start the headless HTTP+SSE engine. |
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
@@ -91,6 +92,11 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
 | `agent config set-key\|set-model\|set-tier` | Save API key / default model / default tier. |
+| `agent config set-engine\|rm-engine\|engines` | Name an engine address as an alias for `--addr` (and list/remove them). |
+
+Every command that talks to a running engine takes `--addr`, which accepts a literal
+`host:port` **or** an alias saved with `agent config set-engine` (see [engine
+aliases](#engine-aliases)).
 
 ### `agent run <task>`
 
@@ -104,7 +110,10 @@ Flags: `--model`, `--tier` (override config for this run), `--verbose`.
 ### `agent chat`
 
 An interactive REPL — type a message, get a reply, keep going, with the **conversation
-history retained across turns** (like a chat CLI). The tool catalog and long-term memory are
+history retained across turns** (like a chat CLI). It has two modes: **local** (the default)
+and **remote** (`--addr`).
+
+**Local mode** runs the executor in *this* process. The tool catalog and long-term memory are
 shared with the rest of this agent (scoped by `--config-dir`). Its audit trail, though, goes
 to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the process-wide
 `audit.jsonl` that only `agent serve` writes and `agent audit` reads — see [Audit log](#audit-log).
@@ -122,9 +131,28 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   for one-shot-style tasks, heavier for back-and-forth chat. It's experimental; try both.
 - The agent's tool activity is streamed to stderr; each turn's final answer goes to stdout.
 
-This is the local-first version of a conversation. Making the *same* conversation
-resumable from another device (SSH → Telegram) is a later "sessions over the API" step;
-the executor already carries per-turn history, which is the seam that would build on.
+**Remote mode (`--addr`)** drives a running `agent serve` engine as a peer client instead of
+an in-process executor. The conversation is now a **persistent, server-side [session](#conversations-over-the-api-sessions)**:
+it survives quitting and can be resumed here (`--session`) or from another client — this is
+the SSH → Telegram continuity the local mode can't give (local history lives in one process).
+Each line is a turn on the engine; commands run where the engine runs. `--addr` takes a
+`host:port` or an [alias](#engine-aliases).
+
+```bash
+./agent chat --addr 127.0.0.1:8080          # start a new session on the engine
+./agent chat --addr home                    # same, addressing the engine by alias
+./agent chat --addr home --list             # list resumable sessions, then exit
+./agent chat --addr home --session <id>     # resume an existing conversation
+```
+
+- **Commands (remote):** `/reset` starts a fresh session (closing the old one); `/end`
+  closes the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable
+  (the resume command is printed on exit). **Ctrl-C** cancels the current turn (stopping the
+  remote run) and returns you to the prompt.
+- Approvals are the engine's **shared** queue: an escalation you don't answer here is the
+  same one visible to `agent audit`, other clients, and Telegram — not a local stdin gate.
+- `--model` / `--tier` / `--plan` are **local-mode only**; in remote mode those are fixed by
+  how `serve` was started.
 
 ### `agent serve`
 
@@ -258,6 +286,10 @@ any frontend — the engine exposes *sessions*. A session is a persisted convers
 *turn* is a run whose executor is seeded with the session's history, so it streams and
 parks approvals exactly like any run.
 
+The ergonomic way to drive a session from the terminal is **[`agent chat --addr`](#agent-chat)**
+(start / `--list` / `--session <id>` to resume). The raw HTTP surface below is what it (and
+the Telegram bot) sit on:
+
 ```bash
 # create a session
 curl -s -XPOST http://127.0.0.1:8080/sessions            # → {"session_id":"…"}
@@ -351,6 +383,31 @@ transcripts separate too, give each its own `--sessions-dir` (or `AI_AGENT_SESSI
 They run as separate OS processes, so they're isolated at every level (state *and* crash
 domain) and you can restart one without touching the other.
 
+### Engine aliases
+
+Once you have more than one engine (or just don't want to type `127.0.0.1:8081`), name
+each address so `--addr` can take the name instead:
+
+```bash
+./agent config set-engine work 127.0.0.1:8080
+./agent config set-engine home 127.0.0.1:8081
+./agent config engines                 # list them
+./agent config rm-engine work          # remove one
+```
+
+Then any engine-facing command accepts the alias:
+
+```bash
+./agent chat  --addr home "…"
+./agent client --addr work "run the tests"
+./agent audit --addr home
+./agent tool revoke reverse_string --addr work
+```
+
+An `--addr` value that isn't a known alias is used verbatim, so literal `host:port` always
+works. Aliases live in `config.json` under the resolving `--config-dir`, so each config dir
+keeps its own alias book.
+
 ## Configuration & environment reference
 
 Config file: `<config-dir>/config.json` (created by `config set-*`; default config dir
@@ -363,6 +420,7 @@ Config file: `<config-dir>/config.json` (created by `config set-*`; default conf
 | `openai_key` | — | OpenAI API key. |
 | `model` | `--model` flag | Default model (built-in default `gpt-4o-mini`). |
 | `tier` | `--tier` flag | Default trust tier (built-in default `balanced`). |
+| `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
 | `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
 | `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
 
@@ -378,7 +436,7 @@ with `--config-dir` / `AI_AGENT_CONFIG_DIR`):
 
 | Path | What |
 | --- | --- |
-| `<config-dir>/config.json` | API key, default model/tier, Telegram settings. |
+| `<config-dir>/config.json` | API key, default model/tier, engine aliases, Telegram settings. |
 | `<config-dir>/tools.json` | Persisted agent-authored tool catalog. |
 | `<config-dir>/memory.json` | Long-term memory store. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |

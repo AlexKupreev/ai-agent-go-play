@@ -21,19 +21,33 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var chatPlanFlag bool
+var (
+	chatPlanFlag    bool
+	chatAddrFlag    string
+	chatSessionFlag string
+	chatListFlag    bool
+)
 
 var chatCmd = &cobra.Command{
 	Use:   "chat",
 	Short: "Interactive multi-turn chat (REPL) with retained context",
 	Long: "Start an interactive session: type a message, get a reply, and keep going — " +
-		"the conversation history is retained across turns (like a chat CLI). The tool catalog " +
-		"and memory are shared with the rest of this agent (see --config-dir); the audit trail " +
-		"goes to this run's transcript, not the process-wide log that `agent serve` exposes.\n\n" +
-		"Commands: /reset clears the conversation, /exit (or Ctrl-D) quits. Ctrl-C cancels the " +
-		"current turn.",
+		"the conversation history is retained across turns (like a chat CLI).\n\n" +
+		"By default the executor runs in THIS process (the tool catalog and memory are shared " +
+		"with the rest of this agent — see --config-dir; the audit trail goes to this run's " +
+		"transcript). With --addr the REPL instead drives a running `agent serve` engine as a " +
+		"peer client: the conversation is a persistent, server-side session that survives quitting " +
+		"and can be resumed here or from another client (e.g. Telegram). --addr accepts a host:port " +
+		"or an alias from `agent config set-engine`. Use --list to see resumable sessions and " +
+		"--session <id> to resume one.\n\n" +
+		"Commands (local): /reset clears the conversation, /exit (or Ctrl-D) quits.\n" +
+		"Commands (--addr): /reset starts a fresh session, /end closes the session, /exit (or " +
+		"Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if chatAddrFlag != "" {
+			return runRemoteChat(resolveAddr(chatAddrFlag))
+		}
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
@@ -181,4 +195,7 @@ func init() {
 	chatCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
 	chatCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	chatCmd.Flags().BoolVar(&chatPlanFlag, "plan", false, "refine each message through the planner before executing (experimental)")
+	chatCmd.Flags().StringVar(&chatAddrFlag, "addr", "", "drive a running engine's persistent session instead of an in-process executor (host:port or an alias from `agent config set-engine`)")
+	chatCmd.Flags().StringVar(&chatSessionFlag, "session", "", "with --addr: resume this session id instead of starting a new one")
+	chatCmd.Flags().BoolVar(&chatListFlag, "list", false, "with --addr: list resumable sessions on the engine and exit")
 }
