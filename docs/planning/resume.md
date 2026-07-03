@@ -33,11 +33,18 @@ _Last session: 2026-07-03._
     the load then restoring (variants run sequentially — no concurrent reader). Tests `eval_test.go`
     (YAML parse, merge+auto-name, empty errors, report). Live-smoked end-to-end (both variants build,
     run, capture the API error, render the comparison).
-- **NEXT:** the A–F track is complete. Candidates: **Stage G** (docs consolidation — surface
-  `reload`/`eval` + workspace-vs-config-dir in `usage.md`/`README.md`, deferred `environment.md`);
-  the **UX & plumbing** cluster (verbosity default, transcript location, unified human-in-the-loop);
-  or **Phase 6d** (budget dial + context-window awareness). `usage.md`/`README.md` do not yet mention
-  `agent reload` or `agent eval`.
+- **Stage G — docs consolidation — DONE** (this session, commit `5b089b3`). New
+  **`docs/environment.md`** is the single runtime-environment reference (config-dir vs workspace,
+  tier + its workspace gate, prompt customization, agent types, full config/env + files tables);
+  auto-embedded via `//go:embed docs/*.md` so `read_self_docs` includes it. `usage.md` config/env +
+  files sections → pointer, plus new operational sections (prompt/agent-type customization, hot-reload,
+  `agent eval`); `README.md` links it + surfaces the new commands; `design.md` §1 "Two anchors" +
+  `tools.md` catalog-scoping note. All doc anchors (same-file + cross-file) verified clean.
+- **NEXT:** the A–G track is complete. Candidates: the **UX & plumbing** cluster (verbosity default,
+  transcript-location share-nothing, unified human-in-the-loop across clients — see `plan.md`); or
+  **Phase 6d** (token budget dial + context-window awareness). Also outstanding housekeeping from
+  older sessions: commit timestamps, push, markdownlint. **Nothing is pushed** — all A–G commits are
+  local on `main`.
 
 ## Prior (2026-07-03): stage C — workspace prompt tier — DONE → sub-agent track (D) is next
 
