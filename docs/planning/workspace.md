@@ -7,6 +7,9 @@ engine pi-compatible. Companion to [`prompts.md`](prompts.md) (the first consume
 [`subagents.md`](subagents.md) (scouts / worktree isolation). **Built** (stages B–C): a first-class,
 overridable workspace (`resolveWorkspace`/`--workspace`) that anchors the shell `workDir` and the
 tier-gated project prompt tier (§5). Sub-agent targets / worktree isolation (§4) remain roadmap.
+[`projects.md`](projects.md) builds on this concept: a **project** is a *named, recallable*
+workspace (`<home>/projects/<slug>-<uid>/`), and it resolves §6's mid-session-switch and
+"who-vouches" open questions.
 
 ---
 
@@ -104,10 +107,14 @@ into a `safe`-tier agent.
 
 ## 6. Open questions
 
-- **`serve` multi-project** — the shape of a per-run `workspace` field, and how trust attaches to a
-  workspace that arrives over the wire (who vouches for it?).
+- **`serve` multi-project / mid-session switch / who-vouches** — **resolved in
+  [`projects.md`](projects.md):** named projects live under `<home>/projects/<slug>-<uid>/` (the
+  filesystem *is* the registry), a per-session active project is switchable via a tier-gated
+  `switch_project`, and trust is supplied by **containment** (the project sits under an
+  already-authorized home workspace) plus the §5 gate on switch. See that doc's §5/§7.
 - **Parent-walk bound** — stop the upward walk at a git root? a filesystem root? a `.agent`/marker
-  file? (pi walks to the home/root; bounding at a VCS root is safer.)
+  file? (pi walks to the home/root; bounding at a VCS root is safer.) *(Still open — orthogonal to
+  projects: this governs how far the CLI cwd tier collects *files*, not how a project is found.)*
 - **Ever scope memory/tools?** — v1 says no (§4). Revisit only if one running agent must keep
   genuinely separate per-project memory that config-dir separation can't serve.
 

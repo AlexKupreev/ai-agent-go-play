@@ -667,7 +667,9 @@ tried by editing agent-type files, and prompt/model/organization variants can be
 **Next candidates** (pick per priority): **Stage G — docs consolidation** (surface workspace vs
 config-dir + the new `reload`/`eval` commands in `usage.md`/`README.md`, and the deferred
 `docs/environment.md`); the **UX & plumbing** cluster below (verbosity default, transcript location,
-unified human-in-the-loop); or pulling in **Phase 6d** (token budget dial + context-window awareness).
+unified human-in-the-loop); the **Projects** track ([`projects.md`](projects.md) — named, recallable
+workspaces for local chat: P1 marker + `list_projects` first); or pulling in **Phase 6d** (token
+budget dial + context-window awareness).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -703,6 +705,25 @@ is superseded.)*
   exists. CLI resolves the workspace as cwd + parent walk; `serve` uses the process cwd in v1 with a
   per-run `workspace` field as the designed-for extension. Workspace prompt files are **tier-gated**
   (an untrusted checkout can't inject into a `safe` agent). First consumer is prompt composition.
+
+- **Projects** (named, recallable workspaces — the conversational counterpart to the cwd model):
+  design in [`projects.md`](projects.md). A project is a workspace with a name + home so a local chat
+  can recall it by *intent* (*"the articles from last time"*) and switch into it mid-session. Lives at
+  `<home>/projects/<slug>-<uid>/` with a `.agent/project.md` marker — **the filesystem is the
+  registry** (no separate index), the UID is stable identity (title is mutable metadata), trust comes
+  from **containment** + the tier gate on switch. Loop: **scratch → promote → recall → switch** via
+  `list_projects` / `create_project` / `switch_project`; CLI-in-a-repo opts out with `--no-project`.
+  Resolves `workspace.md` §6's mid-session-switch / who-vouches questions. Nothing built; buildable
+  slice is **P1** (marker schema + `list_projects`).
+
+- **Scheduling** (recurring, unattended jobs on a clock — *"store the best news every morning at 9"*):
+  design and roadmap in [`scheduling.md`](scheduling.md). A scheduled run is a normal engine run with a
+  **trigger** in front (a `serve` ticker over a persisted schedule store) and a **delivery** behind
+  (Telegram / email / store) — the agent authors entries from NL via a `schedule_task` built-in.
+  Reuses detached `StartRun` + run lifecycle + tiers + audit; the canonical **unattended** case
+  (conservative default tier, escalations reject, fully audited). Nothing built yet; buildable slice is
+  **S1** (schedule store + `schedule_task` tool, no trigger). Non-interactive by design — distinct from
+  the human-in-the-loop gate.
 
 ### Sequenced backlog
 
