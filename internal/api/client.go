@@ -211,6 +211,31 @@ func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit
 	return out, nil
 }
 
+// Reload tells the engine to re-read its prompt files (SYSTEM.md/AGENTS.md) and
+// agent-type catalog (agents/*.md) from disk, so edits take effect on subsequent runs
+// without restarting the engine. A malformed file leaves the current config intact and
+// returns an error.
+func (c *Client) Reload(ctx context.Context) error {
+	req, err := c.newRequest(ctx, http.MethodPost, "/reload", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("reload: %s", msg)
+	}
+	return nil
+}
+
 // StartSession creates a persistent conversation on the engine and returns its id.
 func (c *Client) StartSession(ctx context.Context) (string, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, "/sessions", nil)

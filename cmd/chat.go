@@ -101,30 +101,40 @@ var chatCmd = &cobra.Command{
 		usage := agent.NewUsageObserver()
 		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
 
-		prompts, err := loadPrompts(workDir, tier)
-		if err != nil {
-			return err
-		}
-
-		catalog, err := loadAgentCatalog(workDir, tier)
-		if err != nil {
-			return err
+		// buildExecutor reads the prompt files + agent-type catalog from disk and builds a
+		// fresh executor over the shared, session-stable deps (provider, transcript, catalog,
+		// memory, observers). It runs once at startup and again on /reload, so file edits to
+		// SYSTEM.md/AGENTS.md/agents/*.md take effect without restarting the REPL.
+		//
+		// Local chat shows per-turn + session token totals itself (below); it doesn't wire the
+		// audit-log ledger, so the model-facing usage tool is omitted here.
+		buildExecutor := func() (*agent.Agent, error) {
+			prompts, err := loadPrompts(workDir, tier)
+			if err != nil {
+				return nil, err
+			}
+			catalog, err := loadAgentCatalog(workDir, tier)
+			if err != nil {
+				return nil, err
+			}
+			return agent.NewExecutor(agent.ExecutorConfig{
+				Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
+				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
+				Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+				Usage: tools.UsageContext{}, AuditReader: rec,
+				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+				AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+			}), nil
 		}
 
 		// One executor for the whole session: its conversation persists across turns.
-		// Local chat shows per-turn + session token totals itself (below); it doesn't
-		// wire the audit-log ledger, so the model-facing usage tool is omitted here.
-		executor := agent.NewExecutor(agent.ExecutorConfig{
-			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
-			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
-			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
-			Usage: tools.UsageContext{}, AuditReader: rec,
-			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-		})
+		executor, err := buildExecutor()
+		if err != nil {
+			return err
+		}
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))
-		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /exit or Ctrl-D to quit)\n", log.RunID)
+		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /reload to re-read prompts+agents, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -149,6 +159,19 @@ var chatCmd = &cobra.Command{
 			case "/reset":
 				executor.Reset()
 				fmt.Fprintln(os.Stderr, "(conversation cleared)")
+				continue
+			case "/reload":
+				// Re-read prompt files + agent-type catalog and rebuild the executor,
+				// carrying the conversation forward. On failure (e.g. a malformed
+				// agents/*.md) keep the current executor so the session survives a typo.
+				next, err := buildExecutor()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "reload failed (keeping current prompts+agents): %v\n", err)
+					continue
+				}
+				next.Restore(executor.Messages())
+				executor = next
+				fmt.Fprintln(os.Stderr, "(reloaded prompts and agent types)")
 				continue
 			}
 

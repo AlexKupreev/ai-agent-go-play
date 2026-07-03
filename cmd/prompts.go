@@ -5,9 +5,59 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/capability"
 )
+
+// promptState is a reloadable snapshot of the operator's prompt customization (SYSTEM.md /
+// AGENTS.md) and the spawnable agent-type catalog (agents/*.md), keyed to a fixed workspace
+// and tier. A long-lived `serve` reads the current snapshot when building each run's executor
+// and re-reads the files on demand (POST /reload) so edits take effect without a restart. The
+// lock lets a reload swap both values atomically while runs read them concurrently.
+type promptState struct {
+	workDir string
+	tier    capability.Tier
+
+	mu      sync.RWMutex
+	prompts promptFiles
+	catalog *agent.AgentCatalog
+}
+
+// newPromptState reads the files once; a load error (e.g. a malformed agents/*.md) fails
+// startup rather than serving with a half-built catalog.
+func newPromptState(workDir string, tier capability.Tier) (*promptState, error) {
+	s := &promptState{workDir: workDir, tier: tier}
+	if err := s.reload(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// reload re-reads both file tiers and swaps them in atomically. On error nothing changes,
+// so a bad edit leaves the previously loaded prompts+catalog intact.
+func (s *promptState) reload() error {
+	prompts, err := loadPrompts(s.workDir, s.tier)
+	if err != nil {
+		return err
+	}
+	catalog, err := loadAgentCatalog(s.workDir, s.tier)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.prompts, s.catalog = prompts, catalog
+	s.mu.Unlock()
+	return nil
+}
+
+// snapshot returns the current prompts + catalog for one run to hold for its lifetime.
+func (s *promptState) snapshot() (promptFiles, *agent.AgentCatalog) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.prompts, s.catalog
+}
 
 // noContextFilesFlag is bound to the persistent --no-context-files flag (see cmd/root.go).
 // When set, no SYSTEM.md/AGENTS.md is loaded and the agent runs on the built-in base prompt

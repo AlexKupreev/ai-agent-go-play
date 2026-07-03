@@ -98,13 +98,11 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// Read the operator's prompt customization once; every run's executor reuses it so
-		// the cached system-prompt prefix stays stable across runs (prompts.md §0).
-		prompts, err := loadPrompts(workDir, tier)
-		if err != nil {
-			return err
-		}
-		catalog, err := loadAgentCatalog(workDir, tier)
+		// Read the operator's prompt customization + agent-type catalog into a reloadable
+		// holder: every run's executor reads the current snapshot (so the cached
+		// system-prompt prefix stays stable within a run, prompts.md §0), and POST /reload
+		// re-reads the files so edits take effect on the next run without a restart.
+		promptSrc, err := newPromptState(workDir, tier)
 		if err != nil {
 			return err
 		}
@@ -119,8 +117,7 @@ var serveCmd = &cobra.Command{
 			central:  rec,
 			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
 			reader:   rec,                  // same log, read side, for recent_activity
-			prompts:  prompts,
-			catalog:  catalog,
+			prompts:  promptSrc,
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -134,6 +131,22 @@ var serveCmd = &cobra.Command{
 
 		srv := api.NewServer(engine, approvals, registry, rec, rec)
 
+		// Mount the engine's HTTP surface under a thin outer mux that also serves
+		// POST /reload — a management-plane trigger to re-read the prompt files +
+		// agent-type catalog from disk. The handler lives here (not in the api package)
+		// because reloading is a cmd concern: it knows the config-dir/workspace paths and
+		// the tier gate. A method+path pattern outranks the "/" catch-all, so /reload wins.
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
+			if err := promptSrc.reload(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			fmt.Fprintln(os.Stderr, "reloaded prompts and agent types")
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.Handle("/", srv)
+
 		// Optional Telegram frontend: a peer client of this same engine over localhost.
 		// Active only when a token is configured; the engine runs unchanged otherwise.
 		// Started in the background so the Bot API handshake never delays serving.
@@ -142,7 +155,8 @@ var serveCmd = &cobra.Command{
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
-		return http.ListenAndServe(addrFlag, srv)
+		fmt.Fprintf(os.Stderr, "  reload: curl -XPOST %s/reload\n", "http://"+addrFlag)
+		return http.ListenAndServe(addrFlag, mux)
 	},
 }
 
@@ -158,10 +172,9 @@ type serveDeps struct {
 	registry tools.Registry
 	mem      memory.Store
 	central  audit.Recorder
-	ledger   tools.UsageLedger   // durable session/day token totals for the usage tool
-	reader   audit.Reader        // process-wide log, for the recent_activity tool
-	prompts  promptFiles         // operator prompt customization, read once at startup
-	catalog  *agent.AgentCatalog // spawnable sub-agent types (built-ins + agents/*.md)
+	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
+	reader   audit.Reader      // process-wide log, for the recent_activity tool
+	prompts  *promptState      // reloadable prompt customization + agent-type catalog
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
@@ -181,13 +194,16 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 	rec := audit.Recorders{sessionRec, d.central}
 	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
+	// Snapshot the current prompts + catalog once for this run, so a concurrent /reload
+	// can't change the executor's prompt mid-run (prompts.md §0).
+	prompts, catalog := d.prompts.snapshot()
 	executor := agent.NewExecutor(agent.ExecutorConfig{
 		Provider: d.prov, WorkDir: d.workDir, Model: d.model, RunID: runID,
 		Observer: obsAll, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
 		Audit: rec, Tier: d.tier, Approver: d.approver,
 		Usage: usageCtx, AuditReader: d.reader,
-		SystemPromptOverride: d.prompts.Override, PromptAppends: d.prompts.Appends,
-		AgentCatalog: d.catalog, SpawnDepth: defaultSpawnDepth,
+		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
 	})
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil
