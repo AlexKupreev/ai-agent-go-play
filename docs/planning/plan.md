@@ -659,15 +659,14 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Stage E — Foreground `spawn_agent` tool** (`subagents.md` §3). Stages A–C (prompts + workspace
-track) and **D** (sub-agent types: `AgentType` + `AgentCatalog` + `newSubAgent` + `PromptMode`,
-machinery + tests only) are **done**. E turns that machinery into a live capability: the
-`agents/*.md` YAML-frontmatter loader (real parser — promote `go.yaml.in/yaml/v3` to a direct dep) +
-cmd resolution of the global/project `agents/` dirs → `ExecutorConfig.AgentCatalog` (nil ⇒ tool
-omitted); a trusted host built-in `spawn_agent(type, task)` that builds a child via `newSubAgent`,
-runs it foreground to a final answer, and returns the text; a spawn-depth budget (refuse at 0, pass
-`depth-1`; default 1); and child events labelled so the CLI/log can indent a sub-run. Then F
-(experimentation loop).
+**Stage F — Experimentation loop** (the ergonomics that make E worth it). Stages A–C (prompts +
+workspace) and **D + E** (sub-agent types + the live foreground `spawn_agent` tool, with the
+`agents/*.md` loader wired into `run`/`chat`/`serve`) are **done** — model-driven delegation works and
+new organizations can be tried by editing agent-type files. F closes the edit→run→measure loop: (1)
+prompt / agent-type **hot-reload** (`/reload` in `chat`; re-read on demand in `serve`) so file edits
+skip a restart; (2) a tiny **eval/compare harness** — run a task under N config variants (prompt / type
+set / model) and diff outputs + token usage side by side. Both build on 6a/`usage` totals and the
+Stage E catalog loader.
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -764,12 +763,12 @@ first (one impressive feature) but bakes a single topology into Go and back-load
 - [x] *Acceptance:* `agenttype_test.go` — validate matrix (parallel-write reject, inherit-all reject, prompt-mode), built-in catalog + register-override, the three `selectSubAgentTools` branches, and `newSubAgent` replace/append prompt + model inherit + no-responseFormat/registry. `go test -race` clean.
 - *Ships:* declarative agent types + foreground sub-agent construction. (No `ExecutorConfig`/cmd wiring yet — that lands with `spawn_agent` in E.)
 
-**E — Foreground `spawn_agent` tool** (the experimentation unlock) · *deps D; `PromptMode` from A* · [`subagents.md`](subagents.md) §3
-- [ ] `agents/*.md` YAML-frontmatter loader (real YAML parser — promote `go.yaml.in/yaml/v3` to a direct dep — for pi compatibility) + cmd resolution of global/project `agents/` dirs; `ExecutorConfig.AgentCatalog` (nil ⇒ `spawn_agent` omitted)
-- [ ] trusted host built-in `spawn_agent(type, task)` → builds a child via `newSubAgent` (D), runs it foreground to a final answer, returns the text; **no concurrency**
-- [ ] spawn-depth budget on the config (refuse at 0, pass `depth-1`); default depth 1
-- [ ] child events stamped/labelled so the CLI/log can indent a sub-run
-- [ ] tests: a type-restricted child sees only its tools; depth guard terminates; result threads back
+**E — Foreground `spawn_agent` tool** (the experimentation unlock) · *deps D; `PromptMode` from A* · [`subagents.md`](subagents.md) §3  *(DONE — `cmd/agents.go`, `internal/agent/agenttype.go`, `spawn_test.go`, `agents_test.go`)*
+- [x] `agents/*.md` YAML-frontmatter loader (`cmd/agents.go`: `loadAgentCatalog`/`parseAgentFile`/`splitFrontmatter`; real parser — `go.yaml.in/yaml/v3` now a **direct** dep) + cmd resolution of global (`<config-dir>/agents/`) then project (`<workspace>/agents/`) dirs, project>global>built-in override, tier-gated like the prompt tier (safe won't auto-load a checkout's agents without `--workspace`; `--no-context-files` ⇒ built-ins only). Wired into `run`/`chat`/`serve`; `ExecutorConfig.AgentCatalog` (nil ⇒ `spawn_agent` omitted).
+- [x] trusted host built-in `spawn_agent(type, task)` (`newSpawnAgentTool` in the agent pkg, so no `tools→agent` import cycle) → builds a child via `newSubAgent` (D), runs it foreground to a final answer, returns the text; **no concurrency**. In `a.byName` ⇒ broker-Trusted but never Exposed, so sandboxed `call_tool` can't start a sub-run. Description enumerates the available types.
+- [x] spawn-depth budget (`ExecutorConfig.SpawnDepth`, `Agent.spawnDepth`; cmd default `defaultSpawnDepth = 1`): `spawn_agent` refuses at ≤0, `newSubAgent` hands the child `depth-1`. In v1 children carry no spawn tool, so it only bites the coordinator, but the budget threads down for the nested case.
+- [x] child events labelled: `Event.SubAgent` + `labelSubAgent` observer wrapper; `CLIObserver` indents/labels a sub-run's lines (`  ↳ <type>`).
+- [x] *Acceptance:* `spawn_test.go` — foreground delegation (child runs as its own step between coordinator steps, result threads back), type-restricted child (`researcher` sees only `web_search`/`web_fetch`, never `shell`/`spawn_agent`/`author_tool`), depth-guard refusal, unknown-type recovery, omitted-without-catalog; `agents_test.go` — frontmatter/tools parsing, global+override, project>global + safe-tier gate, `--no-context-files`, invalid-file hard error. `go test -race` clean; live-verified via `serve` (valid file binds, invalid parallel+write fails fast).
 - *Ships:* model-driven delegation — try new subagent **organizations** (critic, debate, refine, hierarchy) via prompts + agent-type files, no Go per topology.
 
 **F — Experimentation loop** (ergonomics that make E worth it) · *deps A, E*

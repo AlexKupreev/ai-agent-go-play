@@ -104,6 +104,10 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		catalog, err := loadAgentCatalog(workDir, tier)
+		if err != nil {
+			return err
+		}
 		deps := serveDeps{
 			prov:     openaiprovider.New(cfg.OpenAIKey),
 			workDir:  workDir,
@@ -116,6 +120,7 @@ var serveCmd = &cobra.Command{
 			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
 			reader:   rec,                  // same log, read side, for recent_activity
 			prompts:  prompts,
+			catalog:  catalog,
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -153,9 +158,10 @@ type serveDeps struct {
 	registry tools.Registry
 	mem      memory.Store
 	central  audit.Recorder
-	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
-	reader   audit.Reader      // process-wide log, for the recent_activity tool
-	prompts  promptFiles       // operator prompt customization, read once at startup
+	ledger   tools.UsageLedger   // durable session/day token totals for the usage tool
+	reader   audit.Reader        // process-wide log, for the recent_activity tool
+	prompts  promptFiles         // operator prompt customization, read once at startup
+	catalog  *agent.AgentCatalog // spawnable sub-agent types (built-ins + agents/*.md)
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
@@ -181,6 +187,7 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 		Audit: rec, Tier: d.tier, Approver: d.approver,
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: d.prompts.Override, PromptAppends: d.prompts.Appends,
+		AgentCatalog: d.catalog, SpawnDepth: defaultSpawnDepth,
 	})
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil

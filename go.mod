@@ -8,6 +8,7 @@ require (
 	github.com/openai/openai-go v1.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/gopher-lua v1.1.2
+	go.yaml.in/yaml/v3 v3.0.4
 )
 
 require (

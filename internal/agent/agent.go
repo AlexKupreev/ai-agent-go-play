@@ -128,6 +128,12 @@ type Agent struct {
 	runID    string
 	task     string // the current turn's task, used as the tool-search query
 
+	// spawnDepth is the remaining sub-agent spawn budget (subagents.md §3): spawn_agent
+	// refuses at ≤0 and hands the child spawnDepth-1, so "an agent that spawns agents" is
+	// terminating by construction. In v1 children carry no spawn tool, so this only bites
+	// the coordinator — but it is threaded down for the forward-compatible nested case.
+	spawnDepth int
+
 	// messages is the running conversation, EXCLUDING the system prompt (that is
 	// prepended fresh from current code on each request, so it is never persisted and
 	// prompt changes take effect on resume). It carries across Run calls so one agent
@@ -178,6 +184,13 @@ type ExecutorConfig struct {
 
 	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
 	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
+
+	// AgentCatalog holds the spawnable sub-agent types (built-ins + agents/*.md). Nil ⇒
+	// the spawn_agent built-in is omitted, exactly like the other optional deps gate
+	// their tools. SpawnDepth is the remaining delegation budget handed to spawn_agent
+	// (0 ⇒ present but refuses; the cmd layer defaults it to 1). See subagents.md §3.
+	AgentCatalog *AgentCatalog
+	SpawnDepth   int
 
 	// Prompt composition (prompts.md §2). The cmd layer resolves and reads the operator's
 	// context files and passes their contents here; internal/agent never touches the disk.
@@ -281,6 +294,17 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	broker.Tools = a.dispatch
 	broker.Trusted = func(name string) bool { _, ok := a.byName[name]; return ok }
 	broker.Exposed = func(name string) bool { return exposedBuiltins[name] }
+
+	// Sub-agent delegation (subagents.md §3). Wired after the agent exists because the
+	// tool spawns children *from this parent*. It is trusted (in a.byName ⇒ broker.Trusted)
+	// but never Exposed, so sandboxed authored code cannot start a sub-run via call_tool.
+	// Omitted when no catalog is wired.
+	if cfg.AgentCatalog != nil {
+		a.spawnDepth = cfg.SpawnDepth
+		spawn := newSpawnAgentTool(a, cfg.AgentCatalog)
+		a.tools = append(a.tools, spawn)
+		a.byName[spawn.Name] = spawn
+	}
 	return a
 }
 

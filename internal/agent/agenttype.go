@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"ai-agent-go-play/internal/tools"
 )
@@ -204,7 +206,75 @@ func newSubAgent(parent *Agent, t AgentType, obs Observer) *Agent {
 	if model == "" {
 		model = parent.model
 	}
-	return newAgent(parent.provider, model, subAgentPrompt(parent, t), parent.selectSubAgentTools(t.Tools), obs)
+	child := newAgent(parent.provider, model, subAgentPrompt(parent, t), parent.selectSubAgentTools(t.Tools), obs)
+	// Decrement the delegation budget as we descend. In v1 the child carries no spawn
+	// tool, so this only matters if nesting is enabled later (subagents.md §3), but the
+	// budget is threaded down now so that path needs no reshape.
+	child.spawnDepth = parent.spawnDepth - 1
+	return child
+}
+
+// names returns the catalog's type names in registration order (for error messages and
+// the spawn tool's description).
+func (c *AgentCatalog) names() []string {
+	out := make([]string, 0, len(c.order))
+	out = append(out, c.order...)
+	return out
+}
+
+// newSpawnAgentTool builds the spawn_agent built-in for a coordinator: a trusted host tool
+// (not sandbox-exposed) that delegates a focused subtask to a sub-agent type and returns its
+// final answer. It builds a fresh child of the named type via newSubAgent, runs it foreground
+// to completion, and blocks until it finishes — from the model's view an ordinary tool call
+// that returns a string. The depth budget (parent.spawnDepth) makes delegation terminating.
+func newSpawnAgentTool(parent *Agent, catalog *AgentCatalog) tools.Tool {
+	return tools.Tool{
+		Name:        "spawn_agent",
+		Description: spawnToolDescription(catalog),
+		Parameters: map[string]any{
+			"type": map[string]any{
+				"type":        "string",
+				"description": "which sub-agent type to spawn (one of the available types listed in this tool's description)",
+			},
+			"task": map[string]any{
+				"type":        "string",
+				"description": "the single, self-contained subtask for the sub-agent. It does not see the broader goal or your conversation — give it everything it needs, and expect only a final answer back.",
+			},
+		},
+		Required: []string{"type", "task"},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			typeName, _ := args["type"].(string)
+			task, _ := args["task"].(string)
+			typeName = strings.TrimSpace(typeName)
+			if typeName == "" || strings.TrimSpace(task) == "" {
+				return "", fmt.Errorf("spawn_agent requires a non-empty 'type' and 'task'")
+			}
+			if parent.spawnDepth <= 0 {
+				return "", fmt.Errorf("spawn budget exhausted: this agent is not allowed to spawn a sub-agent")
+			}
+			t, ok := catalog.Get(typeName)
+			if !ok {
+				return "", fmt.Errorf("unknown agent type %q (available: %s)", typeName, strings.Join(catalog.names(), ", "))
+			}
+			child := newSubAgent(parent, t, labelSubAgent(parent.obs, t.Name))
+			return child.Run(ctx, task)
+		},
+	}
+}
+
+// spawnToolDescription renders the spawn tool's help, enumerating the available types so the
+// model can pick one without a separate discovery call.
+func spawnToolDescription(catalog *AgentCatalog) string {
+	var b strings.Builder
+	b.WriteString("Delegate one focused, self-contained subtask to a specialized sub-agent and get back its ")
+	b.WriteString("final answer. The sub-agent runs to completion before this call returns; it has its own ")
+	b.WriteString("restricted tool set and does not see your conversation. Use it to offload a well-scoped ")
+	b.WriteString("piece of work (e.g. research a question) so its intermediate steps stay out of your context.\n\n")
+	b.WriteString("Available types:\n")
+	for _, t := range catalog.List() {
+		fmt.Fprintf(&b, "  - %s: %s\n", t.Name, t.Description)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // subAgentPrompt composes the child's system prompt via the shared seam. replace ⇒ the type's

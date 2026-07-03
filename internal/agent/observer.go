@@ -35,6 +35,32 @@ type Event struct {
 	IsError    bool                // EvToolResult
 	Usage      provider.Usage      // EvResponse
 	DurationMs int64               // EvResponse
+	SubAgent   string              // non-empty ⇒ emitted by a foreground sub-run of this type
+}
+
+// subAgentLabeler forwards a sub-run's events to the parent's observer, stamping each
+// with the sub-agent type name so a consumer (CLI/log) can attribute or indent the
+// sub-run. Events already labelled are left as-is — the outermost spawn wins, which is
+// all the v1 depth-1 topology (subagents.md §3) needs.
+type subAgentLabeler struct {
+	inner Observer
+	name  string
+}
+
+// labelSubAgent wraps obs so every event it forwards is tagged with the sub-agent type.
+// Returns nil when there is no inner observer (a nil sink stays nil).
+func labelSubAgent(inner Observer, name string) Observer {
+	if inner == nil {
+		return nil
+	}
+	return &subAgentLabeler{inner: inner, name: name}
+}
+
+func (s *subAgentLabeler) Emit(e Event) {
+	if e.SubAgent == "" {
+		e.SubAgent = s.name
+	}
+	s.inner.Emit(e)
 }
 
 // Observer consumes run events. Implementations must tolerate being called from
@@ -126,11 +152,20 @@ func (c *CLIObserver) Emit(e Event) {
 		// answer, which the command prints itself — printing it here too would
 		// duplicate it.
 		if e.Text != "" && len(e.Calls) > 0 {
-			fmt.Fprintln(c.w, e.Text)
+			fmt.Fprintf(c.w, "%s%s\n", subAgentPrefix(e), e.Text)
 		}
 	case EvToolStart:
-		fmt.Fprintf(c.w, "\n[tool: %s] %s\n", e.Call.Name, string(e.Call.Input))
+		fmt.Fprintf(c.w, "\n%s[tool: %s] %s\n", subAgentPrefix(e), e.Call.Name, string(e.Call.Input))
 	case EvToolResult:
-		fmt.Fprintf(c.w, "[result] %s\n", e.Result)
+		fmt.Fprintf(c.w, "%s[result] %s\n", subAgentPrefix(e), e.Result)
 	}
+}
+
+// subAgentPrefix indents and labels a sub-run's line so a spawned agent's activity is
+// visually distinct from the coordinator's. Empty for coordinator-level events.
+func subAgentPrefix(e Event) string {
+	if e.SubAgent == "" {
+		return ""
+	}
+	return "  ↳ " + e.SubAgent + " "
 }

@@ -106,6 +106,11 @@ var chatCmd = &cobra.Command{
 			return err
 		}
 
+		catalog, err := loadAgentCatalog(workDir, tier)
+		if err != nil {
+			return err
+		}
+
 		// One executor for the whole session: its conversation persists across turns.
 		// Local chat shows per-turn + session token totals itself (below); it doesn't
 		// wire the audit-log ledger, so the model-facing usage tool is omitted here.
@@ -115,6 +120,7 @@ var chatCmd = &cobra.Command{
 			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
 			Usage: tools.UsageContext{}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
 		})
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))
