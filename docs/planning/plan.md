@@ -676,8 +676,68 @@ is superseded.)*
 
 ## Beyond the phased plan
 
-- **Multi-agent orchestration** (planner + cooperating sub-agents, e.g. research fan-out): design and
-  roadmap in [`multi-agent.md`](multi-agent.md). Decision reached: default to **in-engine goroutine
-  fan-out** (ephemeral workers of one task), keep **cross-engine delegation** (separate `serve` per
-  agent) in reserve for standing specialists / distinct trust tiers. Not multi-tenant isolation — that
-  remains a non-goal (§1/§5). Nothing built yet; the near-term buildable slice is §2 of that doc.
+- **Sub-agents** (one agent delegating to others — declarative agent *types* + a `spawn_agent` tool,
+  after the pi/Claude-Code model): design and roadmap in [`subagents.md`](subagents.md). Decision
+  reached: **in-engine child agents** are the default (foreground-sequential is safe for any type;
+  a **parallel** batch path is gated to read-only types), with **cross-engine delegation** (separate
+  `serve` per agent, via an `Isolation` field) in reserve for standing specialists / distinct trust
+  tiers. Not multi-tenant isolation — that remains a non-goal. Nothing built yet; the near-term
+  buildable slice is **parallel read-only executors** (§4 of that doc).
+
+- **Prompt composition** (operator/project customization of the system prompt, after pi's
+  `SYSTEM.md`/`AGENTS.md`): design in [`prompts.md`](prompts.md). One `composeSystemPrompt` seam feeds
+  three features — the base prompt, config-dir+workspace `AGENTS.md`/`SYSTEM.md` (two-tier, project
+  overrides global), and per-agent-type prompts (`PromptMode`). Read once at construction to preserve
+  prompt caching.
+
+- **Workspace** (the project the agent acts on, vs the config-dir = the agent's identity): concept in
+  [`workspace.md`](workspace.md). Two-tier, pi-compatible; today only a bare `workDir` (shell cwd)
+  exists. CLI resolves the workspace as cwd + parent walk; `serve` uses the process cwd in v1 with a
+  per-run `workspace` field as the designed-for extension. Workspace prompt files are **tier-gated**
+  (an untrusted checkout can't inject into a `safe` agent). First consumer is prompt composition.
+
+### Sequenced backlog
+
+The three docs above each carry a scoped task list; this is the **build order across them**, with
+dependencies. Two roughly independent tracks — **prompts + workspace** (A–C) and **sub-agents** (D–E)
+— joined only where `PromptMode` reuses the prompt seam. The `ExecutorConfig` struct refactor (the
+unblocker for every field addition below) is **done**.
+
+**A — Prompt composition core** (config-dir / global tier) · *no deps* · [`prompts.md`](prompts.md) §0–§2
+- [ ] `composeSystemPrompt` helper; call in `NewExecutor`; `ExecutorConfig` += `SystemPromptOverride`, `PromptAppends`
+- [ ] `cmd/` reads `<config-dir>/SYSTEM.md` + `AGENTS.md` (alias `CLAUDE.md`); `--no-context-files`
+- [ ] tests: override replaces, append concatenates in order, missing = no-op, caching prefix stable
+- *Ships:* operator-level global prompt customization.
+
+**B — Workspace concept** · *no deps* · [`workspace.md`](workspace.md) §2
+- [ ] `resolveWorkspace()` in `cmd/` (CLI: cwd + parent walk; `serve`: process cwd); `--workspace`, `--context-file`
+- [ ] thread the resolved workspace into the shell tool's `workDir`
+- *Ships:* first-class workspace; generalizes today's bare `workDir`.
+
+**C — Workspace prompt tier** · *deps A + B* · [`prompts.md`](prompts.md) §2, [`workspace.md`](workspace.md) §5
+- [ ] extend prompt loading to the workspace tier (project > global precedence, `AGENTS.md` concatenated)
+- [ ] apply the tier gate (`safe` doesn't auto-load workspace files; explicit `--context-file` always honored)
+- [ ] tests: two-tier precedence, tier gate
+- *Ships:* pi-compatible project `AGENTS.md` / `SYSTEM.md`.
+
+**D — Sub-agent types** · *`PromptMode` deps A; `scout` uses B when present* · [`subagents.md`](subagents.md) §2–§3
+- [ ] `agenttype.go`: `AgentType`, catalog, built-in `researcher`/`scout`, `agents/*.md` loading, `Parallel ⇒ read-only` validation at load
+- [ ] `newSubAgent(parent, AgentType, obs)` factory (tool subset from `a.byName`); mark read-only built-ins
+- [ ] `AgentType.PromptMode` (`replace`|`append`) via the compose seam (A)
+- *Ships:* declarative agent types + foreground sub-agent construction.
+
+**E — Parallel read-only executors** (the near-term slice) · *deps D* · [`subagents.md`](subagents.md) §4
+- [ ] `plan.go`: `Plan.Subtasks` + schema; `NewResearchPlanner`
+- [ ] `observer.go`: `Event.Worker` + `workerObs` (one shared mutex, index-stamped)
+- [ ] `fanout.go`: `FanOutResearch` (`errgroup` + `SetLimit`, order-preserving); add `golang.org/x/sync`
+- [ ] `RunResearchTurn` (plan → fan out → synthesize); `cmd/chat.go` `--research` flag
+- [ ] tests under `-race`: ordering, `limit`, first-error-cancels, ctx-cancel; observer race-clean
+- *Ships:* parallel research fan-out.
+
+**F — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5
+- [ ] `design.md` / `tools.md`: workspace vs config-dir (reference)
+- [ ] new `docs/environment.md`: consolidate config-dir + workspace + tier + env; `usage.md` config-dir section → pointer
+
+*Deferred (designed, unscheduled):* the model-driven `spawn_agent` / `spawn_agents` tools
+([`subagents.md`](subagents.md) §3, §5), cross-engine `Isolation: "engine"` delegation (§7), and the
+`serve` per-run `workspace` field. Also `Phase 6d` (budget dial), postponed earlier.
