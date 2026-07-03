@@ -659,14 +659,15 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Stage F — Experimentation loop** (the ergonomics that make E worth it). Stages A–C (prompts +
-workspace) and **D + E** (sub-agent types + the live foreground `spawn_agent` tool, with the
-`agents/*.md` loader wired into `run`/`chat`/`serve`) are **done** — model-driven delegation works and
-new organizations can be tried by editing agent-type files. F closes the edit→run→measure loop: (1)
-prompt / agent-type **hot-reload** (`/reload` in `chat`; re-read on demand in `serve`) so file edits
-skip a restart; (2) a tiny **eval/compare harness** — run a task under N config variants (prompt / type
-set / model) and diff outputs + token usage side by side. Both build on 6a/`usage` totals and the
-Stage E catalog loader.
+**The experimentation track A–F is DONE.** Prompts + workspace (A–C), sub-agent types + the live
+foreground `spawn_agent` tool (D + E), and the experimentation loop (F: `/reload` hot-reload +
+`agent eval` compare harness) all shipped — model-driven delegation works, new organizations can be
+tried by editing agent-type files, and prompt/model/organization variants can be measured side by side.
+
+**Next candidates** (pick per priority): **Stage G — docs consolidation** (surface workspace vs
+config-dir + the new `reload`/`eval` commands in `usage.md`/`README.md`, and the deferred
+`docs/environment.md`); the **UX & plumbing** cluster below (verbosity default, transcript location,
+unified human-in-the-loop); or pulling in **Phase 6d** (token budget dial + context-window awareness).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -771,9 +772,9 @@ first (one impressive feature) but bakes a single topology into Go and back-load
 - [x] *Acceptance:* `spawn_test.go` — foreground delegation (child runs as its own step between coordinator steps, result threads back), type-restricted child (`researcher` sees only `web_search`/`web_fetch`, never `shell`/`spawn_agent`/`author_tool`), depth-guard refusal, unknown-type recovery, omitted-without-catalog; `agents_test.go` — frontmatter/tools parsing, global+override, project>global + safe-tier gate, `--no-context-files`, invalid-file hard error. `go test -race` clean; live-verified via `serve` (valid file binds, invalid parallel+write fails fast).
 - *Ships:* model-driven delegation — try new subagent **organizations** (critic, debate, refine, hierarchy) via prompts + agent-type files, no Go per topology.
 
-**F — Experimentation loop** (ergonomics that make E worth it) · *deps A, E*
-- [ ] prompt / agent-type **hot-reload** (`/reload` in `chat`; re-read on demand in `serve`) so file edits skip a restart
-- [ ] a tiny **eval / compare harness**: run a task under N config variants (prompt / type set / model), diff outputs + token usage side by side
+**F — Experimentation loop** (ergonomics that make E worth it) · *deps A, E*  *(DONE — `cmd/reload.go`, `cmd/eval.go`, `reload_test.go`, `eval_test.go`)*
+- [x] prompt / agent-type **hot-reload** so file edits skip a restart: `chat` grows `/reload` (rebuilds the executor via a `buildExecutor` closure, carrying the conversation forward with `Messages`/`Restore`; a malformed file keeps the current executor). `serve` holds prompts+catalog behind a reloadable, lock-guarded `promptState` (each run snapshots the current values; a concurrent reload can't change a running executor's prompt) with a `POST /reload` route mounted on a thin outer mux wrapping the api server (file-path/tier logic stays in `cmd`, api package stays transport-agnostic). `Client.Reload` + `agent reload --addr` as the remote counterpart.
+- [x] a tiny **eval / compare harness**: `agent eval <task>` runs the task under N variants from a YAML file (`--variants`) and/or a quick model sweep (`--models`); each variant overrides ambient defaults (model/tier/workspace/context_files/no_context_files), builds a fresh executor (no planner, shared catalog+memory), and the report is a tabwriter table (variant, effective model, steps, tokens, duration, status) + each variant's full output. Per-variant errors are captured so the rest still report; Ctrl+C stops after the current variant.
 - *Ships:* a tight edit → run → measure loop for prompt and organization experiments.
 
 **G — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5

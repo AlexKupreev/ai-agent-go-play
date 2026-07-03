@@ -6,7 +6,45 @@ _Last session: 2026-07-03._
 
 ---
 
-## Latest (2026-07-03): stage C — workspace prompt tier — DONE → sub-agent track (D) is next
+## Latest (2026-07-03): stage F — experimentation loop — DONE → the A–F track is complete
+
+- **Stage F — DONE** (this session, commits `371c58e` hot-reload + `6381309` eval). Two parts:
+  - **F.1 hot-reload** (`cmd/reload.go`, edits to `cmd/chat.go`/`cmd/serve.go`/`cmd/prompts.go`,
+    `Client.Reload`): `chat` grows `/reload` — rebuilds the executor from a `buildExecutor` closure
+    (re-reads `loadPrompts`+`loadAgentCatalog`) and carries the conversation forward via
+    `Messages`/`Restore`; a malformed file keeps the current executor so a typo doesn't end the
+    session. `serve` now holds prompts+catalog behind a reloadable, lock-guarded **`promptState`**
+    (in `cmd/prompts.go`): each run **snapshots** the current values (a concurrent reload can't
+    mutate a running executor's prompt), and **`POST /reload`** re-reads the files atomically for
+    the next run. The route is mounted on a **thin outer mux** wrapping `api.NewServer` (the api
+    package stays transport-agnostic; the file-path + tier-gate logic stays in `cmd`).
+    `agent reload --addr` is the remote counterpart. Tests `reload_test.go` (reload picks up edits;
+    a bad file fails reload and preserves the previous config). Live-verified over `serve`: 204 on
+    valid, 400+error on malformed, other routes unaffected.
+  - **F.2 eval/compare harness** (`cmd/eval.go`): `agent eval <task>` runs the task under N variants
+    from a YAML file (`--variants`) and/or a model sweep (`--models`, one variant per model). A
+    variant overrides ambient defaults with any of model/tier/workspace/context_files/
+    no_context_files; each builds a **fresh executor** (no planner, shared catalog+memory like
+    `run`, its own transcript+audit) and reports output/usage/steps/duration. Per-variant errors are
+    captured so the rest still report; Ctrl+C stops after the current variant. Report = a tabwriter
+    table (variant, **effective** model via `executor.Model()`, steps, tokens, duration, status) +
+    each full output; `formatEvalReport` is pure + unit-tested. Per-variant prompt loading reuses
+    `loadPrompts`/`loadAgentCatalog` by installing the variant's knobs into the package flag vars for
+    the load then restoring (variants run sequentially — no concurrent reader). Tests `eval_test.go`
+    (YAML parse, merge+auto-name, empty errors, report). Live-smoked end-to-end (both variants build,
+    run, capture the API error, render the comparison).
+- **NEXT:** the A–F track is complete. Candidates: **Stage G** (docs consolidation — surface
+  `reload`/`eval` + workspace-vs-config-dir in `usage.md`/`README.md`, deferred `environment.md`);
+  the **UX & plumbing** cluster (verbosity default, transcript location, unified human-in-the-loop);
+  or **Phase 6d** (budget dial + context-window awareness). `usage.md`/`README.md` do not yet mention
+  `agent reload` or `agent eval`.
+
+## Prior (2026-07-03): stage C — workspace prompt tier — DONE → sub-agent track (D) is next
+
+_(D and E were completed after this note — see the git log and `plan.md`; this entry is retained
+for history but is superseded by the Stage F entry above.)_
+
+## (2026-07-03): stage C — workspace prompt tier — DONE (original note)
 
 - **Stage C — workspace prompt tier — DONE** (this session). `loadConfigDirPrompts()` →
   `loadPrompts(workspace, tier)` in `cmd/prompts.go`: loads the config-dir (global) tier, then the
