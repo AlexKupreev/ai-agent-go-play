@@ -101,6 +101,11 @@ var chatCmd = &cobra.Command{
 		usage := agent.NewUsageObserver()
 		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
 
+		prompts, err := loadConfigDirPrompts()
+		if err != nil {
+			return err
+		}
+
 		// One executor for the whole session: its conversation persists across turns.
 		// Local chat shows per-turn + session token totals itself (below); it doesn't
 		// wire the audit-log ledger, so the model-facing usage tool is omitted here.
@@ -109,6 +114,7 @@ var chatCmd = &cobra.Command{
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
 			Usage: tools.UsageContext{}, AuditReader: rec,
+			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		})
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))

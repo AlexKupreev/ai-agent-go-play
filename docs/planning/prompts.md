@@ -103,11 +103,13 @@ shipping the workspace resolver are the same unit of work.
 
 ## 5. Tasks (when built)
 
-- [ ] `internal/agent/agent.go` — `composeSystemPrompt` helper; call it in `NewExecutor` and the
-  sub-agent factory; `ExecutorConfig` gains `SystemPromptOverride string` + `PromptAppends []string`.
-- [ ] `cmd/` — read `SYSTEM.md` / `AGENTS.md` (alias `CLAUDE.md`) from the config-dir **and** the
-  resolved workspace (`workspace.md`), apply the §2 precedence and the tier gate, pass contents into
-  `ExecutorConfig`; add `--no-context-files`.
+- [x] `internal/agent/agent.go` — `composeSystemPrompt` helper; called in `NewExecutor`;
+  `ExecutorConfig` gains `SystemPromptOverride string` + `PromptAppends []string`. *(Sub-agent factory
+  reuse is stage D/E.)*
+- [x] **config-dir tier (stage A):** `cmd/prompts.go` reads `SYSTEM.md` / `AGENTS.md` (alias `CLAUDE.md`)
+  from the config-dir, passes contents into `ExecutorConfig`; `--no-context-files` added.
+- [ ] **workspace tier (stage C):** extend the reader to the resolved workspace (`workspace.md`), apply
+  the §2 project-over-global precedence and the tier gate.
 - [ ] `AgentType.PromptMode` (`replace` | `append`) wired through the sub-agent factory (§3).
 - [ ] Tests: override replaces; append concatenates in order; missing files are a no-op; alias
   precedence; `--no-context-files` yields the bare base prompt; caching prefix unchanged when files

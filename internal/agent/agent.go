@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"ai-agent-go-play/internal/audit"
@@ -73,6 +74,28 @@ operated, your trust tiers, approvals, memory, tools, or APIs, consult read_self
 and answer from it rather than guessing. Docs tagged [reference] describe how you work
 now (authoritative); [vision] is design intent that may include not-yet-built ideas —
 do not present it as a current capability.`
+
+// composeSystemPrompt assembles a system prompt body from a base, an optional operator
+// override, and ordered appends (prompts.md §0). If replaceWith is non-empty it stands
+// in for base entirely (operator owns the whole prompt, e.g. a SYSTEM.md). Each non-empty
+// append is concatenated after, in order, under a labelled separator so the model can tell
+// operator/project instructions from the base. Pure: no I/O — the cmd layer reads files and
+// passes their contents in. Called once at construction so the cached prefix stays stable.
+func composeSystemPrompt(base, replaceWith string, appends ...string) string {
+	if replaceWith != "" {
+		base = replaceWith
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	for _, a := range appends {
+		if strings.TrimSpace(a) == "" {
+			continue
+		}
+		b.WriteString("\n\n---\n\n")
+		b.WriteString(a)
+	}
+	return b.String()
+}
 
 const plannerPrompt = `You are a planning agent. Your job is to clarify and refine a task before any execution happens. You do NOT execute the task yourself.
 
@@ -155,6 +178,14 @@ type ExecutorConfig struct {
 
 	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
 	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
+
+	// Prompt composition (prompts.md §2). The cmd layer resolves and reads the operator's
+	// context files and passes their contents here; internal/agent never touches the disk.
+	// SystemPromptOverride (a SYSTEM.md) replaces the base executorPrompt entirely; empty ⇒
+	// the built-in base. PromptAppends (AGENTS.md/CLAUDE.md bodies) are concatenated after
+	// the base, in order. Both fold in at construction so the cached prefix stays stable.
+	SystemPromptOverride string
+	PromptAppends        []string
 }
 
 // NewExecutor creates an agent that executes tasks using shell, code, and web
@@ -209,13 +240,20 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 			tools.NewRecallTool(mem),
 		)
 	}
+	// System prompt assembly (prompts.md §2). An operator SYSTEM.md override stands in for
+	// the base; the self-docs note re-attaches after it (it advertises read_self_docs, which
+	// is orthogonal to the operator's wording); operator AGENTS.md bodies append last.
+	base := executorPrompt
+	if cfg.SystemPromptOverride != "" {
+		base = cfg.SystemPromptOverride
+	}
 	// Self-documentation: the agent can read its own embedded docs. Trusted, not
 	// exposed to the sandbox; omitted when no doc set is wired.
-	prompt := executorPrompt
 	if docs != nil && docs.Len() > 0 {
 		builtins = append(builtins, tools.NewReadSelfDocsTool(docs))
-		prompt += selfDocsPromptNote
+		base += selfDocsPromptNote
 	}
+	prompt := composeSystemPrompt(base, "", cfg.PromptAppends...)
 	// Self-usage: the agent can report its own session/day token spend (from the audit
 	// log). Omitted when no ledger is wired.
 	if usage.Ledger != nil {

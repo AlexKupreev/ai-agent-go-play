@@ -98,6 +98,12 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to get working directory: %w", err)
 		}
+		// Read the operator's prompt customization once; every run's executor reuses it so
+		// the cached system-prompt prefix stays stable across runs (prompts.md §0).
+		prompts, err := loadConfigDirPrompts()
+		if err != nil {
+			return err
+		}
 		deps := serveDeps{
 			prov:     openaiprovider.New(cfg.OpenAIKey),
 			workDir:  workDir,
@@ -109,6 +115,7 @@ var serveCmd = &cobra.Command{
 			central:  rec,
 			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
 			reader:   rec,                  // same log, read side, for recent_activity
+			prompts:  prompts,
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -148,6 +155,7 @@ type serveDeps struct {
 	central  audit.Recorder
 	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
 	reader   audit.Reader      // process-wide log, for the recent_activity tool
+	prompts  promptFiles       // operator prompt customization, read once at startup
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
@@ -172,6 +180,7 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 		Observer: obsAll, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
 		Audit: rec, Tier: d.tier, Approver: d.approver,
 		Usage: usageCtx, AuditReader: d.reader,
+		SystemPromptOverride: d.prompts.Override, PromptAppends: d.prompts.Appends,
 	})
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil

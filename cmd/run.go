@@ -130,11 +130,17 @@ var runCmd = &cobra.Command{
 			defer central.Close()
 		}
 
+		prompts, err := loadConfigDirPrompts()
+		if err != nil {
+			return err
+		}
+
 		executor := agent.NewExecutor(agent.ExecutorConfig{
 			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
+			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		})
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {

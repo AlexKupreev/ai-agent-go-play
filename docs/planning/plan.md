@@ -659,15 +659,19 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Phase 6d — budget + context-window awareness.** 6a–6c are complete. Next: a token **budget**
-dial (soft warning fed into context at ~80% of a per-run/session limit, optional hard stop — reads
-6a/`usage` totals), and **context-window awareness** (the agent knows its model's context limit +
-current fill and summarizes under pressure — the deferred Phase 4f context-window-trimming item,
-upgraded from blind truncation).
+**Stage A — Prompt composition core** (`prompts.md` §0–§2). Under the experimentation-first
+ordering (see the sequenced backlog below), A is first: it has **no dependencies** and is the
+unblocker for the whole experimentation track — `PromptMode` for sub-agent types (D) and the
+eval/compare loop (F) both build on the `composeSystemPrompt` seam it introduces. The
+`ExecutorConfig` struct refactor it needs is already done.
+
+**Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
+stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
+after the experimentation track (A–F), not before. See the *Deferred* note in the sequenced backlog.
 
 *Note:* `NewExecutor` now takes an `ExecutorConfig` struct (done — was 13 positional args across
-~16 callers). Add 6d's budget dep and any future self-awareness dep as a **field**, not a positional
-param.
+~16 callers). Add A's prompt fields, 6d's budget dep, and any future dep as a **field**, not a
+positional param.
 
 *(Phases 0–4f and 6a–6c are complete; the historical "start at Phase 0" note that once lived here
 is superseded.)*
@@ -711,11 +715,18 @@ first (one impressive feature) but bakes a single topology into Go and back-load
 **deferred fan-out** instead (see below): it's a latency optimization and a special case of a parallel
 `spawn_agents` batch, so it costs nothing to postpone.
 
-**A — Prompt composition core** (config-dir / global tier) · *no deps* · [`prompts.md`](prompts.md) §0–§2
-- [ ] `composeSystemPrompt` helper; call in `NewExecutor`; `ExecutorConfig` += `SystemPromptOverride`, `PromptAppends`
-- [ ] `cmd/` reads `<config-dir>/SYSTEM.md` + `AGENTS.md` (alias `CLAUDE.md`); `--no-context-files`
-- [ ] tests: override replaces, append concatenates in order, missing = no-op, caching prefix stable
-- *Ships:* operator-level global prompt customization.
+**A — Prompt composition core** (config-dir / global tier) · *no deps* · [`prompts.md`](prompts.md) §0–§2  *(DONE)*
+- [x] `composeSystemPrompt` helper (`internal/agent/agent.go`, pure: base + optional override + labelled
+    appends); called once in `NewExecutor`; `ExecutorConfig` += `SystemPromptOverride`, `PromptAppends`.
+    A `SYSTEM.md` override replaces the base; the self-docs note re-attaches after it; `AGENTS.md` bodies
+    append last. Folded in at construction, so the cached prefix stays stable.
+- [x] `cmd/prompts.go`: `loadConfigDirPrompts` reads `<config-dir>/SYSTEM.md` + `AGENTS.md` (alias
+    `CLAUDE.md`, AGENTS.md preferred when both present); persistent `--no-context-files` flag short-circuits
+    to the bare base. Wired into `run`, `chat`, and `serve` (read once at startup, shared across runs).
+- [x] tests: `composeSystemPrompt` table (override replaces, appends in order, blanks skipped);
+    `NewExecutor` sends the composed prompt (override + ordered appends) and the bare base when no files;
+    `cmd` file-loading (alias precedence, missing = no-op, `--no-context-files` gate).
+- *Ships:* operator-level global prompt customization. *(Workspace tier is B/C.)*
 
 **B — Workspace concept** · *no deps* · [`workspace.md`](workspace.md) §2
 - [ ] `resolveWorkspace()` in `cmd/` (CLI: cwd + parent walk; `serve`: process cwd); `--workspace`, `--context-file`
