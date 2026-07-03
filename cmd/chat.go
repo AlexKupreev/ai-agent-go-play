@@ -101,7 +101,7 @@ var chatCmd = &cobra.Command{
 		usage := agent.NewUsageObserver()
 		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
 
-		prompts, err := loadConfigDirPrompts()
+		prompts, err := loadPrompts(workDir, tier)
 		if err != nil {
 			return err
 		}

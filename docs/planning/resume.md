@@ -6,7 +6,26 @@ _Last session: 2026-07-03._
 
 ---
 
-## Latest (2026-07-03): experimentation-track stages A + B done → C is next
+## Latest (2026-07-03): stage C — workspace prompt tier — DONE → sub-agent track (D) is next
+
+- **Stage C — workspace prompt tier — DONE** (this session). `loadConfigDirPrompts()` →
+  `loadPrompts(workspace, tier)` in `cmd/prompts.go`: loads the config-dir (global) tier, then the
+  workspace (project) tier, merged **project > global** — a workspace `SYSTEM.md` wins outright,
+  `AGENTS.md` bodies concatenate global→project. Rewired into `run`/`chat`/`serve` (each already had
+  `workDir` + `tier` in scope). **Tier gate** (`loadWorkspaceTier`): `safe` doesn't auto-load
+  workspace files unless `--workspace` is explicit; a workspace resolving to the config dir isn't
+  loaded twice (`sameDir`). New persistent **`--context-file`** flag (repeatable): extra prompt
+  file(s) appended last, always honored regardless of tier; a *missing named* file errors (tier files
+  absent = no-op). **Single resolved workspace dir — no parent walk yet** (stop bound still open,
+  `workspace.md` §6). Tests rewritten around `loadPrompts` (precedence, `SYSTEM.md` project-wins,
+  safe-tier gate + explicit override, workspace==config-dir dedup, context-file append + missing
+  error, `--no-context-files` gate); build/vet/test green. The prompts+workspace track (A–C) is
+  **complete**.
+- **NEXT: Stage D — sub-agent types** (`subagents.md` §2–§3): `AgentType` + catalog + built-in
+  `researcher`/`scout`, `newSubAgent` factory, `PromptMode` (`replace`|`append`) reusing the
+  `composeSystemPrompt` seam from A. Then E (foreground `spawn_agent`) → F (experimentation loop).
+
+## Prior (2026-07-03): experimentation-track stages A + B done → C is next
 
 - **Stage A — prompt composition core — DONE** (commit `5153696`). `composeSystemPrompt` seam +
   config-dir `SYSTEM.md`/`AGENTS.md` (alias `CLAUDE.md`) loading + `--no-context-files`. See the

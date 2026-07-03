@@ -100,7 +100,7 @@ var serveCmd = &cobra.Command{
 		}
 		// Read the operator's prompt customization once; every run's executor reuses it so
 		// the cached system-prompt prefix stays stable across runs (prompts.md §0).
-		prompts, err := loadConfigDirPrompts()
+		prompts, err := loadPrompts(workDir, tier)
 		if err != nil {
 			return err
 		}

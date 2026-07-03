@@ -36,6 +36,9 @@ func init() {
 		"directory the agent acts on — the shell tool's working directory "+
 			"(default: the current directory). The project the agent works in, "+
 			"as distinct from --config-dir (the agent's own identity/state).")
+	rootCmd.PersistentFlags().StringArrayVar(&contextFileFlag, "context-file", nil,
+		"extra prompt file(s) to append as operator/project instructions "+
+			"(repeatable). Named explicitly, so always loaded regardless of tier.")
 
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)

@@ -130,7 +130,7 @@ var runCmd = &cobra.Command{
 			defer central.Close()
 		}
 
-		prompts, err := loadConfigDirPrompts()
+		prompts, err := loadPrompts(workDir, tier)
 		if err != nil {
 			return err
 		}

@@ -4,8 +4,9 @@ Defines **workspace**: the project/directory the agent is currently *acting on*,
 **config-dir**, which is *who the agent is*. This is the two-tier model that pi and Claude Code use
 (global config dir + per-project layer, project overriding global); adopting it is what makes this
 engine pi-compatible. Companion to [`prompts.md`](prompts.md) (the first consumer) and
-[`subagents.md`](subagents.md) (scouts / worktree isolation). Roadmap, **not** current behavior —
-today only a bare `workDir` exists (§1).
+[`subagents.md`](subagents.md) (scouts / worktree isolation). **Built** (stages B–C): a first-class,
+overridable workspace (`resolveWorkspace`/`--workspace`) that anchors the shell `workDir` and the
+tier-gated project prompt tier (§5). Sub-agent targets / worktree isolation (§4) remain roadmap.
 
 ---
 
@@ -119,8 +120,10 @@ into a `safe`-tier agent.
   (the walk collects project *files* — stage C — and its bound is open, §6); `--context-file` lands
   with stage C, where it gates prompt loading.
 - [x] Thread the workspace into (a) the shell tool's `workDir` (`ExecutorConfig.WorkDir`, wired in
-  `run`/`chat`/`serve`). Remaining: (b) project prompt-file loading (`prompts.md` §2) with the §5 tier
-  gate — that is **stage C**.
+  `run`/`chat`/`serve`) and (b) project prompt-file loading (`prompts.md` §2) with the §5 tier gate —
+  **stage C, done**: `loadPrompts(workspace, tier)` in `cmd/prompts.go` loads the workspace tier
+  project-over-global, gated by `loadWorkspaceTier` (`safe` skips auto-load unless `--workspace` is
+  explicit; config-dir isn't double-loaded), plus the `--context-file` escape hatch.
 - [ ] Update `design.md` / `tools.md` (reference) to describe workspace vs config-dir once shipped.
 - [ ] **Consolidate** config-dir + workspace + tier + keys/env into a new reference doc
   `docs/environment.md` (the single "runtime environment" home): who the agent is (config-dir), what it

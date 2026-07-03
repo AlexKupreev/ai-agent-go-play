@@ -659,12 +659,12 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Stage C — Workspace prompt tier** (`prompts.md` §2, `workspace.md` §5). Stages A (config-dir
-prompt tier) and B (workspace concept + `resolveWorkspace`/`--workspace`) are **done**; C is now
-unblocked (deps A + B). C extends prompt loading to the resolved workspace with project-over-global
-precedence and applies the tier gate (`safe` doesn't auto-load workspace files; an explicit
-`--context-file`/`--workspace` is always honored — and this is where the deferred `--context-file`
-flag lands). After C, the sub-agent track (D → E → F) proceeds.
+**Stage D — Sub-agent types** (`subagents.md` §2–§3). Stages A (config-dir prompt tier), B
+(workspace concept + `resolveWorkspace`/`--workspace`), and C (workspace prompt tier +
+`--context-file`) are **done** — the prompts+workspace track (A–C) is complete. D starts the
+sub-agent track: `AgentType` + catalog + built-in `researcher`/`scout`, the `newSubAgent` factory,
+and `PromptMode` (`replace`|`append`) reusing the `composeSystemPrompt` seam from A. Then E
+(foreground `spawn_agent`) → F (experimentation loop).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -740,11 +740,19 @@ first (one impressive feature) but bakes a single topology into Go and back-load
   stage C builds — adding the flag now would be a no-op, so it lands with the code that honors it.
 - *Ships:* first-class, overridable workspace; generalizes today's bare `workDir`.
 
-**C — Workspace prompt tier** · *deps A + B* · [`prompts.md`](prompts.md) §2, [`workspace.md`](workspace.md) §5
-- [ ] extend prompt loading to the workspace tier (project > global precedence, `AGENTS.md` concatenated)
-- [ ] apply the tier gate (`safe` doesn't auto-load workspace files; explicit `--context-file` always honored)
-- [ ] tests: two-tier precedence, tier gate
-- *Ships:* pi-compatible project `AGENTS.md` / `SYSTEM.md`.
+**C — Workspace prompt tier** · *deps A + B* · [`prompts.md`](prompts.md) §2, [`workspace.md`](workspace.md) §5  *(DONE)*
+- [x] `loadConfigDirPrompts` → `loadPrompts(workspace, tier)` in `cmd/prompts.go`: loads the config-dir
+    (global) tier, then the workspace (project) tier, merged project > global — a workspace `SYSTEM.md`
+    wins outright over a config-dir one, `AGENTS.md` bodies concatenate global-then-project. Rewired into
+    `run`/`chat`/`serve` (each already resolved `workDir` + `tier`). **Single resolved workspace dir, no
+    parent walk yet** (its stop bound is still open, `workspace.md` §6).
+- [x] tier gate (`loadWorkspaceTier`): `safe` does not auto-load workspace files, but an explicit
+    `--workspace` authorizes them; a workspace that resolves to the config dir isn't loaded twice.
+- [x] `--context-file` flag (persistent, repeatable): extra prompt file(s) appended last, always honored
+    regardless of tier; a missing named file is an error (unlike absent tier files, which are a no-op).
+- [x] tests: project>global precedence, `SYSTEM.md` project-wins, safe-tier gate (+ explicit override),
+    workspace==config-dir dedup, `--context-file` append + missing-file error, `--no-context-files` gate.
+- *Ships:* pi-compatible project `AGENTS.md` / `SYSTEM.md` + explicit `--context-file`.
 
 **D — Sub-agent types** · *`PromptMode` deps A; `scout` uses B when present* · [`subagents.md`](subagents.md) §2–§3
 - [ ] `agenttype.go`: `AgentType`, catalog, built-in `researcher`/`scout`, `agents/*.md` loading, `Parallel ⇒ read-only` validation at load

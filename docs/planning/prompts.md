@@ -5,8 +5,10 @@ How the agent's system prompt is assembled, and how an operator customizes it. A
 (workspace), project overriding global. The workspace tier depends on the concept defined in
 [`workspace.md`](workspace.md); this doc owns the prompt-composition mechanics. Companion to
 [`subagents.md`](subagents.md) (per-agent-type prompts share the same seam) and
-[`../usage.md`](../usage.md) (config-dir). Roadmap, **not** current behavior — nothing here is built
-yet.
+[`../usage.md`](../usage.md) (config-dir). **§0–§2 are built** (stages A–C): the `composeSystemPrompt`
+seam, config-dir + workspace `SYSTEM.md`/`AGENTS.md` (alias `CLAUDE.md`), the tier gate, and
+`--no-context-files` / `--context-file`. §3–§4 (per-agent-type prompts, sub-agent inheritance) remain
+roadmap.
 
 ---
 
