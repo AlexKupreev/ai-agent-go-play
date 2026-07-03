@@ -1,14 +1,18 @@
 # Usage — operating the agent
 
 A practical guide to running and operating the agent day-to-day. For *why* it is built
-this way, see [`design.md`](design.md) and [`security.md`](security.md); this file is
-the *how*.
+this way, see [`design.md`](design.md) and [`security.md`](security.md); for the runtime
+**environment** model — config-dir vs workspace, tiers, prompt/agent-type customization,
+and the full config/env/files reference — see [`environment.md`](environment.md). This file
+is the *how*.
 
 - [Install & configure](#install--configure)
 - [Two ways to run](#two-ways-to-run)
 - [Command reference](#command-reference)
 - [Trust tiers — the safety dial](#trust-tiers--the-safety-dial)
 - [Approvals — how risky actions are gated](#approvals--how-risky-actions-are-gated)
+- [Customizing the agent — prompts & agent types](#customizing-the-agent--prompts--agent-types)
+- [Comparing configurations — `agent eval`](#comparing-configurations--agent-eval)
 - [Self-authored tools](#self-authored-tools)
 - [Long-term memory](#long-term-memory)
 - [Self-documentation](#self-documentation)
@@ -20,7 +24,6 @@ the *how*.
 - [Running multiple independent agents](#running-multiple-independent-agents)
   - [Engine aliases](#engine-aliases)
 - [Configuration & environment reference](#configuration--environment-reference)
-- [Files on disk](#files-on-disk)
 
 ---
 
@@ -40,7 +43,7 @@ Optional defaults (both overridable per-run with `--model` / `--tier`):
 ./agent config set-tier balanced       # default trust tier (built-in default: balanced)
 ```
 
-Everything is stored under `~/.config/ai-agent/` — see [Files on disk](#files-on-disk).
+Everything is stored under `~/.config/ai-agent/` — see [`environment.md`](environment.md#files-on-disk).
 
 ---
 
@@ -87,9 +90,11 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | Command | What it does |
 | --- | --- |
 | `agent run <task>` | One-shot run in this process (planner + executor), stdin approvals. |
-| `agent chat` | Interactive multi-turn REPL, retained context. Local by default; `--addr` drives a `serve` engine's persistent session. |
+| `agent chat` | Interactive multi-turn REPL, retained context. Local by default; `--addr` drives a `serve` engine's persistent session. `/reload` re-reads prompt/agent-type files. |
 | `agent serve` | Start the headless HTTP+SSE engine. |
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
+| `agent eval <task>` | Run one task under N config variants and compare outputs + token usage. |
+| `agent reload` | Tell a running engine to re-read its prompt + agent-type files (no restart). |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the engine's audit log. |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
@@ -128,8 +133,11 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
 ./agent chat --tier safe     # per-session model/tier, same flags as `run`
 ```
 
-- **Commands:** `/reset` clears the conversation and starts fresh; `/exit` (or Ctrl-D)
-  quits. **Ctrl-C** cancels the *current* turn and returns you to the prompt.
+- **Commands:** `/reset` clears the conversation and starts fresh; `/reload` re-reads the
+  prompt files and agent-type catalog and rebuilds the executor *without losing the
+  conversation* (edit a `SYSTEM.md`/`AGENTS.md`/`agents/*.md`, `/reload`, keep going — a
+  malformed file is reported and the current setup is kept); `/exit` (or Ctrl-D) quits.
+  **Ctrl-C** cancels the *current* turn and returns you to the prompt.
 - **Planner toggle (`--plan`):** off by default (a straight conversation). When on, each
   message is refined by the planner before execution, exactly like `agent run` — useful
   for one-shot-style tasks, heavier for back-and-forth chat. It's experimental; try both.
@@ -226,6 +234,75 @@ run never executes the gated action.
 
 ---
 
+## Customizing the agent — prompts & agent types
+
+You can shape the agent's behaviour with files, read from **two directories**: the
+**config-dir** (who the agent is — global, always trusted) and the **workspace** (the project
+it's acting on — per-run, trusted only above `safe`). The full model, precedence rules, and the
+tier gate live in [`environment.md`](environment.md); the operational summary:
+
+- **System prompt / operator instructions.** `SYSTEM.md` **replaces** the built-in base prompt;
+  `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. Drop either in the config-dir
+  (global) and/or the workspace (project); project wins over global. `--context-file <path>`
+  (repeatable) appends an extra file regardless of tier; `--no-context-files` ignores them all
+  for a reproducible run on the bare base prompt.
+- **Sub-agent types.** Declare delegatable agents as `agents/<name>.md` (YAML frontmatter +
+  a body that is the sub-agent's system prompt) under the config-dir and/or workspace. The agent
+  reaches them through a `spawn_agent(type, task)` tool; built-in types `researcher` and
+  `general-purpose` are always available, and a same-named file overrides one. See
+  [`environment.md`](environment.md#sub-agent-types-agentsmd) for the frontmatter fields.
+
+```bash
+./agent --workspace ~/proj run "…"          # loads ~/proj/{SYSTEM,AGENTS}.md + ~/proj/agents/*
+./agent run --context-file ./STYLE.md "…"   # append one extra prompt file, any tier
+./agent run --no-context-files "…"          # bare built-in prompt only
+```
+
+The workspace tier is **tier-gated**: on `safe`, workspace files (a possibly-hostile checkout)
+don't auto-load unless you pass `--workspace` explicitly. Config-dir files always load.
+
+### Hot-reload — no restart
+
+After editing any of these files, pick up the changes in place:
+
+- **`agent chat`** — type **`/reload`** (rebuilds the executor, keeps the conversation).
+- **`agent serve`** — **`agent reload --addr <engine>`** (or `curl -XPOST <engine>/reload`)
+  re-reads the files so the *next* run uses them. A malformed file is rejected (HTTP 400) and
+  the engine keeps its current configuration; in-flight runs are unaffected.
+
+```bash
+./agent reload --addr 127.0.0.1:8080     # or --addr <alias>
+```
+
+## Comparing configurations — `agent eval`
+
+To decide *which* prompt, model, or agent-type set works best, run one task under several
+configurations and compare them side by side instead of guessing:
+
+```bash
+./agent eval "summarize this repo" --models gpt-4o-mini,gpt-4o     # quick model sweep
+./agent eval "summarize this repo" --variants variants.yaml        # full control
+```
+
+`--models` makes one variant per model. `--variants` points at a YAML list where each variant
+overrides the ambient defaults with any of `model`, `tier`, `workspace`, `context_files`,
+`no_context_files` — the file-backed equivalent of a set of run flags:
+
+```yaml
+- name: baseline
+- name: with-project-prompt
+  context_files: [./PROMPT.md]
+- name: bigger-model
+  model: gpt-4o
+```
+
+Each variant runs the executor directly (no planner) with a fresh context, sharing this agent's
+tool catalog and memory. The report is a table (variant, effective model, steps, tokens,
+duration, status) followed by each variant's full output; a variant that errors is captured so
+the rest still report, and **Ctrl+C** stops after the current variant.
+
+---
+
 ## Self-authored tools
 
 The agent can write new tools for itself at runtime (`author_tool`): it validates the
@@ -269,8 +346,8 @@ tools, trust tiers, approvals, memory, and APIs — instead of guessing. The doc
 **embedded in the binary** (`go:embed`), so this works regardless of the working directory
 and on a deployed box where the repo isn't present, via a `read_self_docs` built-in.
 
-The embedded set is the **reference docs** (README + `docs/*.md`: usage, design, security,
-tools, memory, api-transport — how it works *now*) plus the **vision doc**
+The embedded set is the **reference docs** (README + `docs/*.md`: usage, environment, design,
+security, tools, memory, api-transport — how it works *now*) plus the **vision doc**
 (`self-extending-agent-design.md` — design intent and trade-offs). Docs are tagged: the agent
 treats `[reference]` as authoritative about current behavior and `[vision]` as design intent
 that may include not-yet-built ideas. **Planning/scratchpad docs** (`docs/planning/`) are
@@ -515,37 +592,14 @@ keeps its own alias book.
 
 ## Configuration & environment reference
 
-Config file: `<config-dir>/config.json` (created by `config set-*`; default config dir
-`~/.config/ai-agent`).
+The full reference — the config-dir vs workspace model, the trust tier, prompt/agent-type
+customization, the complete config-key / env-var table, and every file the agent reads or
+writes on disk — lives in **[`environment.md`](environment.md)**. In brief:
 
-| Config key / flag | Env override | Meaning |
-| --- | --- | --- |
-| `--config-dir` (global flag) | `AI_AGENT_CONFIG_DIR` | Directory holding this agent's config/tools/memory/audit. Default `~/.config/ai-agent`. |
-| `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Directory for per-run transcripts (one subdir per run). Default `~/.local/share/ai-agent/sessions`. |
-| `openai_key` | — | OpenAI API key. |
-| `model` | `--model` flag | Default model (built-in default `gpt-4o-mini`). |
-| `tier` | `--tier` flag | Default trust tier (built-in default `balanced`). |
-| `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
-| `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
-| `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
+- Config lives in `<config-dir>/config.json` (created by `config set-*`; default config dir
+  `~/.config/ai-agent`, set by `--config-dir` / `AI_AGENT_CONFIG_DIR`).
+- Per-run transcripts default to `~/.local/share/ai-agent/sessions/<run-id>/` (`--sessions-dir`
+  / `AI_AGENT_SESSIONS_DIR`).
+- Precedence everywhere: **flag > env > config value > built-in default**.
 
-Precedence: `--config-dir` flag > env > default; likewise model/tier: `--flag` > config
-value > built-in default.
-
----
-
-## Files on disk
-
-The first four live under the **config dir** (default `~/.config/ai-agent`, overridable
-with `--config-dir` / `AI_AGENT_CONFIG_DIR`):
-
-| Path | What |
-| --- | --- |
-| `<config-dir>/config.json` | API key, default model/tier, engine aliases, Telegram settings. |
-| `<config-dir>/tools.json` | Persisted agent-authored tool catalog. |
-| `<config-dir>/memory.json` | Long-term memory store. |
-| `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
-| `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session). |
-| `<sessions-dir>/<run-id>/` | Per-run transcript: `run.jsonl`, `audit.jsonl`, `artifacts/`. Sessions dir defaults to `~/.local/share/ai-agent/sessions` (override with `--sessions-dir`). |
-
-All are created on first use; deleting them resets the corresponding state.
+See [`environment.md`](environment.md#configuration--environment-reference) for the tables.

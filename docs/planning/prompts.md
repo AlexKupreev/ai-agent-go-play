@@ -120,5 +120,8 @@ shipping the workspace resolver are the same unit of work.
 - [ ] Tests: override replaces; append concatenates in order; missing files are a no-op; alias
   precedence; `--no-context-files` yields the bare base prompt; caching prefix unchanged when files
   absent.
-- [ ] Docs: document the `SYSTEM.md`/`AGENTS.md` file names in reference docs once shipped — as part
+- [x] Docs: document the `SYSTEM.md`/`AGENTS.md` file names in reference docs once shipped — as part
   of the consolidated `docs/environment.md` (see `workspace.md` §7), not scattered into `usage.md`.
+  **Done (stage G):** `environment.md` "Prompt customization" section documents the file names,
+  replace-vs-append semantics, project-over-global precedence, the tier gate, and the
+  `--context-file`/`--no-context-files` escape hatches.

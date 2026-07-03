@@ -7,6 +7,7 @@ assistant** that can author its own tools at runtime, for a small trusted user b
 low-resource box.
 
 - **[`docs/usage.md`](docs/usage.md) — how to run and operate the agent (start here to use it).**
+- [`docs/environment.md`](docs/environment.md) — the runtime environment: config-dir vs workspace, trust tiers, prompt/agent-type customization, config/env/files reference.
 - [`docs/design.md`](docs/design.md) — the concrete, Go-grounded design (decisions, current state, target architecture).
 - [`docs/planning/plan.md`](docs/planning/plan.md) — the phased implementation plan and next steps.
 - [`docs/security.md`](docs/security.md) — the threat→control map (capabilities, sandbox, audit, approvals).
@@ -63,6 +64,12 @@ AI_AGENT_CONFIG_DIR=~/.config/ai-agent/home ./agent serve --addr 127.0.0.1:8081
 Name each engine so you can address it by alias instead of `host:port` (`agent config
 set-engine home 127.0.0.1:8081` → `agent client --addr home "…"`).
 
+**Customize & experiment.** Shape the agent with `SYSTEM.md` / `AGENTS.md` prompt files and
+`agents/*.md` sub-agent types, read from the config-dir (global) and workspace (project) — see
+[`docs/environment.md`](docs/environment.md). Edit them and reload in place (`/reload` in `agent
+chat`, `agent reload --addr` against a running engine), and compare configurations with `agent
+eval <task> --models …` / `--variants file.yaml`.
+
 The full command list, trust tiers, approvals, authored tools, memory, audit log, running multiple
 agents, and the optional Telegram frontend are documented in **[`docs/usage.md`](docs/usage.md)**.
 
@@ -84,7 +91,7 @@ audit log; destructive actions and escalations route through a human-approval ga
 
 ```text
 main.go                    entry point
-cmd/                       CLI commands (cobra): run, chat, serve, client, stop, config, tool, audit
+cmd/                       CLI commands (cobra): run, chat, serve, client, eval, reload, stop, config, tool, audit, usage
 internal/
   agent/                   planner + executor ReAct loop, event observers
   tools/                   built-in tools, tool registry, author_tool, sandbox contract, approvals

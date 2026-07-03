@@ -777,9 +777,9 @@ first (one impressive feature) but bakes a single topology into Go and back-load
 - [x] a tiny **eval / compare harness**: `agent eval <task>` runs the task under N variants from a YAML file (`--variants`) and/or a quick model sweep (`--models`); each variant overrides ambient defaults (model/tier/workspace/context_files/no_context_files), builds a fresh executor (no planner, shared catalog+memory), and the report is a tabwriter table (variant, effective model, steps, tokens, duration, status) + each variant's full output. Per-variant errors are captured so the rest still report; Ctrl+C stops after the current variant.
 - *Ships:* a tight edit → run → measure loop for prompt and organization experiments.
 
-**G — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5
-- [ ] `design.md` / `tools.md`: workspace vs config-dir (reference)
-- [ ] new `docs/environment.md`: consolidate config-dir + workspace + tier + env; `usage.md` config-dir section → pointer
+**G — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5  *(DONE — `docs/environment.md`, edits to `usage.md`/`README.md`/`design.md`/`tools.md`)*
+- [x] `design.md` / `tools.md`: workspace vs config-dir (reference) — `design.md` §1 "Two anchors — identity vs target"; `tools.md` notes the catalog is config-dir-scoped (vs sub-agent types, read from both tiers). Both link to `environment.md`.
+- [x] new `docs/environment.md`: consolidates config-dir vs workspace, trust tier, prompt customization (SYSTEM.md/AGENTS.md), sub-agent types (agents/*.md), and the config/env + files-on-disk reference tables. `usage.md`'s config/env + files sections shrink to a pointer; it gains operational sections for prompt/agent-type customization, hot-reload, and `agent eval`. `README.md` links `environment.md` and surfaces the new commands. `environment.md` is auto-embedded (`//go:embed docs/*.md`), so `read_self_docs` includes it.
 
 *Deferred (designed, unscheduled):* **parallel read-only executors / fan-out** — `FanOutResearch`,
 `workerObs`, `Event.Worker`, `RunResearchTurn`, `cmd/chat.go --research`, `golang.org/x/sync`

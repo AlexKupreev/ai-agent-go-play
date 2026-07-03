@@ -124,9 +124,12 @@ into a `safe`-tier agent.
   **stage C, done**: `loadPrompts(workspace, tier)` in `cmd/prompts.go` loads the workspace tier
   project-over-global, gated by `loadWorkspaceTier` (`safe` skips auto-load unless `--workspace` is
   explicit; config-dir isn't double-loaded), plus the `--context-file` escape hatch.
-- [ ] Update `design.md` / `tools.md` (reference) to describe workspace vs config-dir once shipped.
-- [ ] **Consolidate** config-dir + workspace + tier + keys/env into a new reference doc
+- [x] Update `design.md` / `tools.md` (reference) to describe workspace vs config-dir once shipped.
+  **Done (stage G):** `design.md` §1 gains a "Two anchors — identity vs target" paragraph; `tools.md`
+  notes the catalog is config-dir-scoped (vs sub-agent types read from both). Both link to
+  `environment.md`.
+- [x] **Consolidate** config-dir + workspace + tier + keys/env into a new reference doc
   `docs/environment.md` (the single "runtime environment" home): who the agent is (config-dir), what it
-  acts on (workspace), how trusted (tier), how configured (env). `usage.md`'s config-dir section shrinks
-  to a pointer; this doc graduates out of `planning/` into it. Do this **at ship time** (all axes built),
-  not before — writing it now would describe an unbuilt workspace as reference.
+  acts on (workspace), how trusted (tier), how configured (env). **Done (stage G):** `environment.md`
+  written (also covers prompt files + agent types); `usage.md`'s config/env + files-on-disk sections
+  shrink to a pointer, and it gains operational sections for prompt/agent-type customization + `eval`.
