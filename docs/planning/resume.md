@@ -6,7 +6,36 @@ _Last session: 2026-07-03._
 
 ---
 
-## Latest (2026-07-03): stage F — experimentation loop — DONE → the A–F track is complete
+## Latest (2026-07-03): UX & plumbing cluster — DONE (all three items)
+
+The three self-contained items in `plan.md` §"UX & plumbing" all shipped this session
+(build/vet/`go test -race` green; items 1–2 live-verified, item 3's serve wire live-smoked).
+
+- **1. Verbosity setting.** `Config.Verbose` + `config set-verbose <on|off>` + `--verbose`/`--quiet`
+  + `AI_AGENT_VERBOSE`, via `resolveVerbose(cmd, cfg)` (flag > env > config > default; quiet wins).
+  New **`agent.GatedObserver`** wraps `CLIObserver` so `chat` (now **quiet by default**) toggles the
+  trace live with `/verbose [on|off]` — no executor rebuild (the obs list is captured once). Disk
+  transcript always written. `cmd/config.go`, `cmd/run.go`, `cmd/chat.go`, `internal/agent/observer.go`.
+- **2. Transcript location = share-nothing.** `sessionsDir()` → **`runsDir()`**; transcript base now
+  defaults to `<config-dir>/runs` (was shared `~/.local/share/ai-agent/sessions`), so separate
+  `--config-dir` agents share nothing. `--sessions-dir`/env still override; `<config-dir>/sessions/`
+  remains the resumable session store. Rewired `run`/`chat`/`eval`/`serve`; docs in `environment.md`
+  + `usage.md`.
+- **3. Unified human-in-the-loop.** *(Design chosen with the user: Option A — add `Ask` to the
+  interface; full client scope incl. Telegram.)* `tools.Approver` → **`tools.HumanGate`** = `Approve`
+  (yes/no) + **`Ask`** (free text); `StdinApprover`→`StdinGate`; `ApprovalQueue` gained `Ask`/`Answer`
+  + a `mode` on parked items. The **executor** now has `ask_user` routed through the gate
+  (`NewAskUserTool`), so a task can ask mid-run over **any** client. Wire: `POST /approvals/{id}` takes
+  `{"approved":bool}` **or** `{"answer":"…"}`; events `question_requested`/`question_answered`;
+  `Client.Answer`; `cmd/client.go`+`chat_remote` free-text prompt; **Telegram** relays the question and
+  routes the next reply as the answer (per-chat pending state). The `ExecutorConfig.Approver` field is
+  now **`Gate`** (`AuthorToolDeps.Approver`→`Gate`, `serve` field `approver`→`gate`).
+
+**NEXT candidates:** **Phase 6d** (token budget dial + context-window awareness) is the main
+remaining roadmap item; plus the deferred fan-out / cross-engine `Isolation` items and the standing
+housekeeping (commit timestamps, push, markdownlint). **Nothing pushed** — all local on `main`.
+
+## Prior (2026-07-03): stage F — experimentation loop — DONE → the A–F track is complete
 
 - **Stage F — DONE** (this session, commits `371c58e` hot-reload + `6381309` eval). Two parts:
   - **F.1 hot-reload** (`cmd/reload.go`, edits to `cmd/chat.go`/`cmd/serve.go`/`cmd/prompts.go`,

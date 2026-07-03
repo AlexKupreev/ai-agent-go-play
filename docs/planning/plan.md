@@ -787,28 +787,35 @@ first (one impressive feature) but bakes a single topology into Go and back-load
 `spawn_agents` batch tool (§5). Also cross-engine `Isolation: "engine"` delegation (§7), the `serve`
 per-run `workspace` field, and `Phase 6d` (budget dial), postponed earlier.
 
-### UX & plumbing (current code; independent of stages A–G)
+### UX & plumbing (current code; independent of stages A–G)  *(DONE)*
 
 Small, self-contained items surfaced in review — not blocked on the sub-agent / prompt work.
+All three shipped together as the UX & plumbing cluster.
 
-- [ ] **Verbosity setting.** The intermediate trace is the `CLIObserver` (`internal/agent/observer.go`);
-  quiet mode simply doesn't attach it — `ask_user` prompts and the final answer bypass the observer, so
-  they still show. Manage like `model`/`tier`: a `Config.Verbose` field + `config set-verbose` +
-  `--verbose`/`--quiet` flag (precedence flag > env > config > default), plus a live `/verbose` toggle in
-  `chat` via a verbosity-gated observer wrapper. **`chat` becomes quiet by default** (matching `run`);
-  `--verbose` or `/verbose on` restores the trace. The full transcript is unaffected — always on disk.
-- [ ] **Transcript location = share-nothing.** The run transcript (`run.jsonl`) defaults to the shared
-  data dir (`~/.local/share/ai-agent/sessions/<runID>/`), so agents on different `--config-dir`s
-  **co-mingle** transcripts — inconsistent with "separate config dirs share nothing" (and with
-  `audit.jsonl`, already under the config-dir). Default the transcript base under the config-dir in a
-  **distinct** subfolder (`<config-dir>/runs/`), keeping `--sessions-dir`/env as the override, and keep
-  `<config-dir>/sessions/` for the resumable session store (don't overload the name). Fold into
-  `environment.md` (stage G).
-- [ ] **Unified human-in-the-loop across all clients.** Approvals (`y/N`) and `ask_user` (free text) are
-  the same primitive — pause the run, route a prompt to the frontend that owns it, block for the answer —
-  but only approvals use the async, queue-backed `Approver` seam (`internal/tools/approval.go`);
-  `ask_user` uses raw stdin and is wired to the **planner only**. Unify: generalize `Approver` into one
-  human-gate returning a structured response (bool for approve, string for ask), back it with the same
-  per-frontend impls (stdin for CLI, queue for serve/API/Telegram), and give the **executor** `ask_user`
-  through it. Gain: a running task can ask a clarifying question mid-run over *any* client, not just the
-  CLI planner.
+- [x] **Verbosity setting — DONE.** `Config.Verbose` + `config set-verbose <on|off>` +
+  `--verbose`/`--quiet` flag + `AI_AGENT_VERBOSE` env, resolved by `resolveVerbose(cmd, cfg)`
+  (precedence flag > env > config > default; quiet wins if both flags set). `chat` is now **quiet by
+  default** (matching `run`) with a live `/verbose [on|off]` toggle backed by a new
+  `agent.GatedObserver` wrapping the `CLIObserver` (the obs list is captured once by
+  `buildExecutor`, so the gate flips without rebuilding the executor). The on-disk transcript is
+  unaffected — always written. Tests: `resolveVerbose`/`parseBool` precedence, `GatedObserver`
+  forward-only-when-enabled. Live-verified (set-verbose persists, chat help/flags).
+- [x] **Transcript location = share-nothing — DONE.** `sessionsDir()` → `runsDir()` in
+  `cmd/config.go`: the transcript base now defaults to `<config-dir>/runs` (was the shared
+  `~/.local/share/ai-agent/sessions`), so separate `--config-dir` agents no longer co-mingle
+  transcripts; `--sessions-dir`/`AI_AGENT_SESSIONS_DIR` still override, and `<config-dir>/sessions/`
+  stays the resumable session **store** (distinct from the `runs/` transcript **logs**). Rewired
+  `run`/`chat`/`eval`/`serve`. Docs folded into `environment.md` + `usage.md`. Tests updated;
+  live-verified a run writes under `<config-dir>/runs/<id>/`.
+- [x] **Unified human-in-the-loop across all clients — DONE.** Generalized `tools.Approver` →
+  **`tools.HumanGate`** with two methods: `Approve` (yes/no, unchanged) + **`Ask`** (free-text
+  question). `StdinApprover` → `StdinGate` (both); the API's `ApprovalQueue` implements both (parks a
+  question, blocks on `Answer`). The **executor** now carries `ask_user` (`NewAskUserTool(gate,
+  runID)`) routed through the gate — a running task can ask a clarifying question mid-run over **any**
+  client, not just the CLI planner (the static `tools.AskUser` var is gone; the planner shares the
+  same tool over `StdinGate`). Wire: `GET /approvals` items carry a `mode` (`approval|question`);
+  `POST /approvals/{id}` takes `{"approved":bool}` **or** `{"answer":"…"}`; new stream events
+  `question_requested`/`question_answered`; `Client.Answer`; `cmd/client.go` + `chat_remote` prompt
+  free-text for questions; **Telegram** relays a question as a prompt and routes the next chat reply
+  as the answer (per-chat pending-question state). Tests across tools/api/telegram/agent (+ `-race`);
+  live-smoked the `serve` `/approvals` wire (empty list, cross-mode 404s).
