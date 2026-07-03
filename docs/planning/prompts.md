@@ -80,16 +80,20 @@ untrusted file it wasn't handed.
 `AgentType` (see [`subagents.md`](subagents.md) §2) carries the sub-agent's prompt as its file body,
 plus a `PromptMode`:
 
-- `replace` (default for specialists like `researcher` / `scout`) — the body **is** the whole prompt
-  (`composeSystemPrompt(base="", replaceWith=body)`); a clean, standalone prompt.
+- `replace` (default for specialists like `researcher`) — the body **is** the whole prompt
+  (`composeSystemPrompt(base=body, "")`); a clean, standalone prompt.
 - `append` — the body is appended to the parent/base prompt (for a `general-purpose` type that
-  inherits the executor's behavior): `composeSystemPrompt(base=parentPrompt, "", body)`.
+  inherits the executor's behavior): `composeSystemPrompt(base=parent.systemPrompt, "", body)`.
 
 Same helper, so the three features are one code path.
 
-**Open sub-question:** do sub-agents inherit the config-dir `AGENTS.md`? Proposed default: `append`
-types do (they're extensions of the main agent), `replace` specialists do **not** (they're meant to
-be narrow and self-contained) unless the type opts in. Confirm when building.
+**Resolved (Stage D):** do sub-agents inherit the config-dir/workspace `AGENTS.md`? **`append` types do,
+`replace` specialists don't** — and this falls out of the composition seam for free: `parent.systemPrompt`
+already has the operator/project `AGENTS.md` bodies folded in at `NewExecutor` construction (stage A/C),
+so an `append` sub-agent that builds on `parent.systemPrompt` inherits them automatically, while a
+`replace` sub-agent (body only) does not. No extra plumbing; the default matches the proposal. So the
+built-in `general-purpose` (`append`) inherits the operator's instructions; `researcher` (`replace`)
+stays narrow and self-contained.
 
 ---
 

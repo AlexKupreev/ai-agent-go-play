@@ -659,12 +659,15 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Stage D — Sub-agent types** (`subagents.md` §2–§3). Stages A (config-dir prompt tier), B
-(workspace concept + `resolveWorkspace`/`--workspace`), and C (workspace prompt tier +
-`--context-file`) are **done** — the prompts+workspace track (A–C) is complete. D starts the
-sub-agent track: `AgentType` + catalog + built-in `researcher`/`scout`, the `newSubAgent` factory,
-and `PromptMode` (`replace`|`append`) reusing the `composeSystemPrompt` seam from A. Then E
-(foreground `spawn_agent`) → F (experimentation loop).
+**Stage E — Foreground `spawn_agent` tool** (`subagents.md` §3). Stages A–C (prompts + workspace
+track) and **D** (sub-agent types: `AgentType` + `AgentCatalog` + `newSubAgent` + `PromptMode`,
+machinery + tests only) are **done**. E turns that machinery into a live capability: the
+`agents/*.md` YAML-frontmatter loader (real parser — promote `go.yaml.in/yaml/v3` to a direct dep) +
+cmd resolution of the global/project `agents/` dirs → `ExecutorConfig.AgentCatalog` (nil ⇒ tool
+omitted); a trusted host built-in `spawn_agent(type, task)` that builds a child via `newSubAgent`,
+runs it foreground to a final answer, and returns the text; a spawn-depth budget (refuse at 0, pass
+`depth-1`; default 1); and child events labelled so the CLI/log can indent a sub-run. Then F
+(experimentation loop).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -754,13 +757,15 @@ first (one impressive feature) but bakes a single topology into Go and back-load
     workspace==config-dir dedup, `--context-file` append + missing-file error, `--no-context-files` gate.
 - *Ships:* pi-compatible project `AGENTS.md` / `SYSTEM.md` + explicit `--context-file`.
 
-**D — Sub-agent types** · *`PromptMode` deps A; `scout` uses B when present* · [`subagents.md`](subagents.md) §2–§3
-- [ ] `agenttype.go`: `AgentType`, catalog, built-in `researcher`/`scout`, `agents/*.md` loading, `Parallel ⇒ read-only` validation at load
-- [ ] `newSubAgent(parent, AgentType, obs)` factory (tool subset from `a.byName`); mark read-only built-ins
-- [ ] `AgentType.PromptMode` (`replace`|`append`) via the compose seam (A)
-- *Ships:* declarative agent types + foreground sub-agent construction.
+**D — Sub-agent types** · *`PromptMode` deps A* · [`subagents.md`](subagents.md) §2–§3  *(DONE — `internal/agent/agenttype.go`, `agenttype_test.go`)*
+- [x] `agenttype.go`: `AgentType`, `AgentCatalog` (register/get/list, re-register overrides in place), built-in `researcher` + `general-purpose` (`scout` deferred until a read-only file/shell tool exists — see the Stage D note in `subagents.md` §2), `Parallel ⇒ read-only` validation at load (inherit-all rejected for parallel — may include writers). *(`agents/*.md` YAML-frontmatter loading → E, with its cmd wiring; use a real YAML parser for pi compatibility.)*
+- [x] `newSubAgent(parent, AgentType, obs)` factory + `selectSubAgentTools` (tool subset from `a.byName`/`a.tools`); `readOnlyBuiltins` set marks read-only built-ins. Inherited tools (`["*"]`) are a subset of the parent's built-ins minus a denylist (`subAgentExcluded` = `spawn_agent`); empty ⇒ read-only default; child gets no `responseFormat`, no registry/sandbox in v1
+- [x] `AgentType.PromptMode` (`replace`|`append`) via the compose seam (A) — `append` inherits the parent's config-dir/workspace `AGENTS.md` (baked into `parent.systemPrompt`), `replace` specialists don't
+- [x] *Acceptance:* `agenttype_test.go` — validate matrix (parallel-write reject, inherit-all reject, prompt-mode), built-in catalog + register-override, the three `selectSubAgentTools` branches, and `newSubAgent` replace/append prompt + model inherit + no-responseFormat/registry. `go test -race` clean.
+- *Ships:* declarative agent types + foreground sub-agent construction. (No `ExecutorConfig`/cmd wiring yet — that lands with `spawn_agent` in E.)
 
 **E — Foreground `spawn_agent` tool** (the experimentation unlock) · *deps D; `PromptMode` from A* · [`subagents.md`](subagents.md) §3
+- [ ] `agents/*.md` YAML-frontmatter loader (real YAML parser — promote `go.yaml.in/yaml/v3` to a direct dep — for pi compatibility) + cmd resolution of global/project `agents/` dirs; `ExecutorConfig.AgentCatalog` (nil ⇒ `spawn_agent` omitted)
 - [ ] trusted host built-in `spawn_agent(type, task)` → builds a child via `newSubAgent` (D), runs it foreground to a final answer, returns the text; **no concurrency**
 - [ ] spawn-depth budget on the config (refuse at 0, pass `depth-1`); default depth 1
 - [ ] child events stamped/labelled so the CLI/log can indent a sub-run

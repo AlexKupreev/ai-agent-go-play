@@ -64,7 +64,10 @@ type AgentType struct {
     Name        string   // spawn key, e.g. "researcher", "scout"
     Description string   // "when to use me" — surfaced to the spawning model
     Prompt      string   // system prompt (the file body)
-    Tools       []string // allow-list of built-in tool names; empty ⇒ the safe read-only default set
+    Tools       []string // allow-list of built-in tool names, a subset of the parent's.
+                         //   explicit list ⇒ exactly those (intersected with the parent — unknown names dropped)
+                         //   ["*"]         ⇒ inherit all parent built-ins minus a denylist (subAgentExcluded, e.g. spawn_agent)
+                         //   empty/nil     ⇒ the safe read-only default set (the parent's read-only built-ins)
     Model       string   // optional model override ("" ⇒ inherit the parent's model)
     Parallel    bool     // may run concurrently with siblings? (⇒ Tools must be read-only)
     PromptMode  string   // "replace" (body is the whole prompt) | "append" (body added to base) — see prompts.md §3
@@ -88,8 +91,20 @@ You are a scout. Investigate ONE narrow question about this workspace and report
 found with exact file:line references. Do not modify anything; do not attempt the broader task.
 ```
 
+*(Illustrative only — `shell_ro` is a read-only shell that does **not** ship yet, so this exact
+`scout` is not a Stage D built-in; see the Stage D scope note below. The frontmatter fields
+themselves — `description`, `tools`, `model`, `parallel`, `prompt_mode` — are the real, loadable format.)*
+
 Resolution order (mirrors pi): project `agents/<name>.md` overrides a global one, which overrides a
 built-in of the same name.
+
+**The frontmatter is YAML on purpose — for drop-in pi compatibility.** So the `agents/*.md` **loader**
+(Stage E, where it ships next to the cmd wiring that resolves the `agents/` dirs and passes an
+`AgentCatalog` into `ExecutorConfig`) must parse with a **real YAML parser**, not a hand-rolled one — a
+bespoke partial parser would silently diverge from pi's format and defeat the compatibility goal. Promote
+the already-transitive `go.yaml.in/yaml/v3` to a direct dependency at that point. **Stage D ships no
+loader:** its built-in types are plain Go values (no frontmatter, no parsing), so YAML is a Stage E
+concern only.
 
 ### The `Tools` allow-list is the load-bearing seam
 
@@ -101,11 +116,38 @@ It does **two** jobs at once:
    read-only (no writes to the shared registry / memory / audit / filesystem). This is what makes the
    fan-out in §4 safe, and it is checked when the catalog loads, not at spawn time.
 
-Built-in types to ship first: `researcher` (`web_search`, `web_fetch`; `Parallel`) and `scout`
-(read-only shell + read_self_docs; `Parallel`; operates on the workspace — see
-[`workspace.md`](workspace.md)). A `general-purpose` type (inherits the parent's full tool set,
-sequential only) can follow. A type's `Prompt`/`PromptMode` compose via the same seam as the main
-agent — see [`prompts.md`](prompts.md) §3.
+Built-in types compose their `Prompt`/`PromptMode` via the same seam as the main agent — see
+[`prompts.md`](prompts.md) §3.
+
+### Stage D scope decision (2026-07-03): ship `researcher` + `general-purpose`, defer `scout`
+
+Two built-in types ship, chosen so **neither needs a new tool** and they cover both `PromptMode`
+branches:
+
+| Type | `Tools` | `Parallel` | `PromptMode` | Notes |
+|---|---|---|---|---|
+| `researcher` | `web_search`, `web_fetch` | `true` | `replace` | standalone prompt; genuinely read-only, so `Parallel`-valid |
+| `general-purpose` | `["*"]` (inherit, minus denylist) | `false` | `append` | base prompt + a delegation note; inherits the parent's built-ins, sequential |
+
+Built-in types are **seed data, not machinery** — a user can define every type as an `agents/<name>.md`
+file, and the experimentation-first direction (`plan.md`) argues *against* baking many topologies into
+Go. So we keep built-ins minimal and push richness to files. Two is enough to make the feature work out
+of the box and to exercise both prompt modes.
+
+**`scout` is deferred.** Its point is read-only workspace investigation, which needs a read-only shell
+(`shell_ro`) that does not exist. A truly-safe read-only shell is hard (shell commands can't be reliably
+classified as non-mutating), and a `Parallel`-marked type must name only read-only tools — so a
+heuristic `shell_ro` would make the shakiest possible "Parallel-safe" claim. Since parallel fan-out is
+itself deferred (§4), nothing is lost by waiting: `scout` returns as its own small change the day a
+read-only file/shell tool lands. Until then, foreground delegation to `general-purpose` (which *can*
+name `shell`, sequentially — safe per §6) covers workspace work.
+
+**Inherited tools are a subset, not a blind copy of the parent.** `general-purpose` uses `["*"]` =
+"inherit all parent built-ins **minus** a denylist" (`subAgentExcluded`, currently just `spawn_agent`)
+so a child can't re-delegate — the depth budget (§3) is the hard guard, this is the belt-and-suspenders
+default that keeps delegation flat. Inheritance covers the parent's **built-ins** (`a.byName`) only;
+registry/authored-tool access and the sandbox are **not** shared into a sub-agent in v1 (ephemeral
+workers act through built-ins; cross-boundary authored-tool reuse is a later refinement).
 
 ---
 
@@ -189,7 +231,9 @@ researchPlanner.Run ──► Plan{ RefinedTask, Subtasks[] }     (sequential)
 ### Tasks (files they touch)
 
 - [ ] `internal/agent/agenttype.go` — the `AgentType` value, a catalog with built-in `researcher` /
-  `scout`, `agents/*.md` frontmatter loading, and a `Parallel ⇒ read-only tools` validation at load.
+  `general-purpose` (`scout` deferred — see the Stage D note in §2), and a `Parallel ⇒ read-only tools`
+  validation at load. *(`agents/*.md` YAML-frontmatter loading is **Stage E**, alongside the cmd wiring
+  that consumes it — see the note under "Frontmatter file form" above.)*
 - [ ] `internal/agent/agent.go` — a `newSubAgent(parent, AgentType, obs)` factory (a `newAgent` with a
   tool subset selected from `a.byName`); mark which built-ins are read-only.
 - [ ] `internal/agent/plan.go` — add `Subtasks []string json:"research_subtasks"` to `Plan` (+ schema
