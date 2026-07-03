@@ -659,11 +659,12 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**Stage A — Prompt composition core** (`prompts.md` §0–§2). Under the experimentation-first
-ordering (see the sequenced backlog below), A is first: it has **no dependencies** and is the
-unblocker for the whole experimentation track — `PromptMode` for sub-agent types (D) and the
-eval/compare loop (F) both build on the `composeSystemPrompt` seam it introduces. The
-`ExecutorConfig` struct refactor it needs is already done.
+**Stage C — Workspace prompt tier** (`prompts.md` §2, `workspace.md` §5). Stages A (config-dir
+prompt tier) and B (workspace concept + `resolveWorkspace`/`--workspace`) are **done**; C is now
+unblocked (deps A + B). C extends prompt loading to the resolved workspace with project-over-global
+precedence and applies the tier gate (`safe` doesn't auto-load workspace files; an explicit
+`--context-file`/`--workspace` is always honored — and this is where the deferred `--context-file`
+flag lands). After C, the sub-agent track (D → E → F) proceeds.
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
@@ -728,10 +729,16 @@ first (one impressive feature) but bakes a single topology into Go and back-load
     `cmd` file-loading (alias precedence, missing = no-op, `--no-context-files` gate).
 - *Ships:* operator-level global prompt customization. *(Workspace tier is B/C.)*
 
-**B — Workspace concept** · *no deps* · [`workspace.md`](workspace.md) §2
-- [ ] `resolveWorkspace()` in `cmd/` (CLI: cwd + parent walk; `serve`: process cwd); `--workspace`, `--context-file`
-- [ ] thread the resolved workspace into the shell tool's `workDir`
-- *Ships:* first-class workspace; generalizes today's bare `workDir`.
+**B — Workspace concept** · *no deps* · [`workspace.md`](workspace.md) §2  *(DONE)*
+- [x] `resolveWorkspace()` in `cmd/workspace.go` — persistent `--workspace` flag (validated dir, made
+    absolute) > process cwd; wired into `run`, `chat`, and `serve` (replaces the raw `os.Getwd()`).
+    **No parent walk yet:** the upward walk collects project *files* (stage C) and its stop bound is an
+    open question (`workspace.md` §6), so the resolver returns the cwd/override itself.
+- [x] the resolved workspace threads into the shell tool's `workDir` via `ExecutorConfig.WorkDir`.
+- [x] tests: `cmd/workspace_test.go` (cwd default, flag override made absolute, missing dir / a file → error).
+- **`--context-file` deferred to C:** it's the tier-gate escape hatch for *prompt-file loading* (§5), which
+  stage C builds — adding the flag now would be a no-op, so it lands with the code that honors it.
+- *Ships:* first-class, overridable workspace; generalizes today's bare `workDir`.
 
 **C — Workspace prompt tier** · *deps A + B* · [`prompts.md`](prompts.md) §2, [`workspace.md`](workspace.md) §5
 - [ ] extend prompt loading to the workspace tier (project > global precedence, `AGENTS.md` concatenated)

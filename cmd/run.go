@@ -50,9 +50,9 @@ var runCmd = &cobra.Command{
 		fmt.Fprintf(os.Stderr, "Log:    %s\n", log.Path)
 		fmt.Fprintf(os.Stderr, "Task:   %s\n\n", task)
 
-		workDir, err := os.Getwd()
+		workDir, err := resolveWorkspace()
 		if err != nil {
-			return fmt.Errorf("failed to get working directory: %w", err)
+			return err
 		}
 
 		prov := openaiprovider.New(cfg.OpenAIKey)

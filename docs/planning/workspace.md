@@ -114,10 +114,13 @@ into a `safe`-tier agent.
 
 ## 7. Tasks (when built)
 
-- [ ] `cmd/` — a `resolveWorkspace()` returning the workspace root (cwd + parent walk for CLI; process
-  cwd or a request field for serve); a `--workspace` override and `--context-file` escape hatch.
-- [ ] Thread the workspace into (a) the shell tool's `workDir` and (b) project prompt-file loading
-  (`prompts.md` §2), with the §5 tier gate applied at load.
+- [x] `cmd/workspace.go` — `resolveWorkspace()` returning the workspace root: persistent `--workspace`
+  override (validated dir, absolutized) > process cwd, for both CLI and serve. **No parent walk yet**
+  (the walk collects project *files* — stage C — and its bound is open, §6); `--context-file` lands
+  with stage C, where it gates prompt loading.
+- [x] Thread the workspace into (a) the shell tool's `workDir` (`ExecutorConfig.WorkDir`, wired in
+  `run`/`chat`/`serve`). Remaining: (b) project prompt-file loading (`prompts.md` §2) with the §5 tier
+  gate — that is **stage C**.
 - [ ] Update `design.md` / `tools.md` (reference) to describe workspace vs config-dir once shipped.
 - [ ] **Consolidate** config-dir + workspace + tier + keys/env into a new reference doc
   `docs/environment.md` (the single "runtime environment" home): who the agent is (config-dir), what it

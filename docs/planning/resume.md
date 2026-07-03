@@ -2,7 +2,28 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-07-02._
+_Last session: 2026-07-03._
+
+---
+
+## Latest (2026-07-03): experimentation-track stages A + B done → C is next
+
+- **Stage A — prompt composition core — DONE** (commit `5153696`). `composeSystemPrompt` seam +
+  config-dir `SYSTEM.md`/`AGENTS.md` (alias `CLAUDE.md`) loading + `--no-context-files`. See the
+  sequenced backlog in `plan.md` and `prompts.md` §5.
+- **Stage B — workspace concept — DONE** (this session). `cmd/workspace.go` `resolveWorkspace()`:
+  persistent `--workspace` flag (validated existing dir, absolutized) > process cwd; wired into
+  `run`/`chat`/`serve`, replacing the raw `os.Getwd()` → threads into the shell tool's `workDir`.
+  **Deliberately no parent walk** (the upward walk collects project *files* = stage C, and its stop
+  bound is an open question, `workspace.md` §6). **`--context-file` deferred to C** (it gates
+  prompt-file loading, which C builds — adding it now would be a dead flag). Tests
+  `cmd/workspace_test.go`; build/vet/test green; flag + validation live-verified (missing dir / a
+  file rejected before any API call).
+- **NEXT: Stage C — workspace prompt tier** (deps A + B, both done). Extend prompt loading to the
+  resolved workspace: project-over-global precedence (`AGENTS.md` concatenated global→project,
+  `SYSTEM.md` project wins), plus the **tier gate** (`safe` doesn't auto-load workspace files;
+  explicit `--context-file`/`--workspace` always honored → land the `--context-file` flag here).
+  `prompts.md` §2 + `workspace.md` §5. Then the sub-agent track D→E→F.
 
 ---
 

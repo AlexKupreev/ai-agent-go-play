@@ -53,9 +53,9 @@ var chatCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		workDir, err := os.Getwd()
+		workDir, err := resolveWorkspace()
 		if err != nil {
-			return fmt.Errorf("failed to get working directory: %w", err)
+			return err
 		}
 
 		prov := openaiprovider.New(cfg.OpenAIKey)

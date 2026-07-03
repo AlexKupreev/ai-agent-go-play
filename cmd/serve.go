@@ -94,9 +94,9 @@ var serveCmd = &cobra.Command{
 		}
 		sessions := session.NewFileStore(sessStoreDir)
 
-		workDir, err := os.Getwd()
+		workDir, err := resolveWorkspace()
 		if err != nil {
-			return fmt.Errorf("failed to get working directory: %w", err)
+			return err
 		}
 		// Read the operator's prompt customization once; every run's executor reuses it so
 		// the cached system-prompt prefix stays stable across runs (prompts.md §0).

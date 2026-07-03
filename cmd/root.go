@@ -32,6 +32,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noContextFilesFlag, "no-context-files", false,
 		"ignore SYSTEM.md / AGENTS.md prompt customization in the config dir "+
 			"(reproducible runs with the built-in base prompt)")
+	rootCmd.PersistentFlags().StringVar(&workspaceFlag, "workspace", "",
+		"directory the agent acts on — the shell tool's working directory "+
+			"(default: the current directory). The project the agent works in, "+
+			"as distinct from --config-dir (the agent's own identity/state).")
 
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)
