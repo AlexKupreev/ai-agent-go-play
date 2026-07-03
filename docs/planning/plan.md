@@ -665,9 +665,19 @@ dial (soft warning fed into context at ~80% of a per-run/session limit, optional
 current fill and summarizes under pressure — the deferred Phase 4f context-window-trimming item,
 upgraded from blind truncation).
 
-*Note:* `NewExecutor` now takes 14 positional args (several optional self-awareness deps). Before
-adding 6d's budget dep, **refactor it to a config struct** (`ExecutorConfig`) so further additions
-are field additions, not positional churn across ~10 callers.
+*Note:* `NewExecutor` now takes an `ExecutorConfig` struct (done — was 13 positional args across
+~16 callers). Add 6d's budget dep and any future self-awareness dep as a **field**, not a positional
+param.
 
 *(Phases 0–4f and 6a–6c are complete; the historical "start at Phase 0" note that once lived here
 is superseded.)*
+
+---
+
+## Beyond the phased plan
+
+- **Multi-agent orchestration** (planner + cooperating sub-agents, e.g. research fan-out): design and
+  roadmap in [`multi-agent.md`](multi-agent.md). Decision reached: default to **in-engine goroutine
+  fan-out** (ephemeral workers of one task), keep **cross-engine delegation** (separate `serve` per
+  agent) in reserve for standing specialists / distinct trust tiers. Not multi-tenant isolation — that
+  remains a non-goal (§1/§5). Nothing built yet; the near-term buildable slice is §2 of that doc.

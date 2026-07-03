@@ -130,8 +130,12 @@ var runCmd = &cobra.Command{
 			defer central.Close()
 		}
 
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{},
-			tools.UsageContext{Ledger: ledger}, rec)
+		executor := agent.NewExecutor(agent.ExecutorConfig{
+			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
+			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
+			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
+		})
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err

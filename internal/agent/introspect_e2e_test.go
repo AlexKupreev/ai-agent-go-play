@@ -16,8 +16,10 @@ import (
 func TestIntrospectTools_Wiring(t *testing.T) {
 	offered := func(reader audit.Reader) []string {
 		prov := &scriptedProvider{steps: []provider.StepResponse{textStep("done")}}
-		exec := NewExecutor(prov, t.TempDir(), "", "", nil, tools.NewMemoryRegistry(), nil, nil,
-			&audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, reader)
+		exec := NewExecutor(ExecutorConfig{
+			Provider: prov, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+			Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced, AuditReader: reader,
+		})
 		if _, err := exec.Run(context.Background(), "hi"); err != nil {
 			t.Fatalf("run: %v", err)
 		}

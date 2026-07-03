@@ -19,8 +19,10 @@ func (stubLedger) Today() (provider.Usage, int)         { return provider.Usage{
 func TestUsageTool_OfferedWhenLedgerWired(t *testing.T) {
 	build := func(uc tools.UsageContext) []string {
 		prov := &scriptedProvider{steps: []provider.StepResponse{textStep("done")}}
-		exec := NewExecutor(prov, t.TempDir(), "", "", nil, tools.NewMemoryRegistry(), nil, nil,
-			&audit.MemoryRecorder{}, capability.TierBalanced, nil, uc, nil)
+		exec := NewExecutor(ExecutorConfig{
+			Provider: prov, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+			Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced, Usage: uc,
+		})
 		if _, err := exec.Run(context.Background(), "hi"); err != nil {
 			t.Fatalf("run: %v", err)
 		}

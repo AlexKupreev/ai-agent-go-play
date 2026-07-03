@@ -132,20 +132,40 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 	}
 }
 
+// ExecutorConfig is the wiring for NewExecutor. Only Provider, WorkDir, Tier, and
+// Audit are load-bearing; the rest are optional and gate their built-ins when nil/zero
+// (see the field comments). It is a struct rather than a positional list so new deps are
+// field additions, not churn across every caller.
+type ExecutorConfig struct {
+	Provider provider.Provider // the model client (required)
+	WorkDir  string            // shell/status working directory
+	Model    string            // effective model id ("" ⇒ provider default)
+	RunID    string            // identifies the run for grants/audit
+	Observer Observer          // run-event sink (logging, CLI, API); may be nil
+	Registry tools.Registry    // authored-tool catalog; nil ⇒ no author_tool/tool_catalog
+	Memory   memory.Store      // long-term memory; nil ⇒ remember/recall omitted
+	Docs     *selfdocs.Docs    // embedded self-docs; nil/empty ⇒ read_self_docs omitted
+	Audit    audit.Recorder    // brokered-effect audit sink
+	Tier     capability.Tier   // trust tier governing capability auto-approval
+
+	// Approver gates risky actions (destructive shell, capability escalation); it is
+	// the seam frontends drive — pass a queue-backed approver to route approvals over
+	// the API. Nil defaults to StdinApprover (CLI behavior).
+	Approver tools.Approver
+
+	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
+	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
+}
+
 // NewExecutor creates an agent that executes tasks using shell, code, and web
 // tools, plus any agent-authored tools in the registry. It wires the live
 // capability broker + sandbox: authored Script tools run under their grant and
-// every brokered effect is audited via rec. Run events go to obs; runID
-// identifies the run for grants/audit.
-//
-// approver gates risky actions (destructive shell, capability escalation); it is
-// the seam frontends drive — pass a queue-backed approver to route approvals over
-// the API. A nil approver defaults to StdinApprover (CLI behavior).
-//
-// mem is the long-term memory store backing the remember/recall built-ins; when
-// nil those tools are omitted (e.g. tests that don't exercise memory).
-//
-func NewExecutor(p provider.Provider, workDir, model, runID string, obs Observer, registry tools.Registry, mem memory.Store, docs *selfdocs.Docs, rec audit.Recorder, tier capability.Tier, approver tools.Approver, usage tools.UsageContext, auditReader audit.Reader) *Agent {
+// every brokered effect is audited via cfg.Audit. See ExecutorConfig for the deps.
+func NewExecutor(cfg ExecutorConfig) *Agent {
+	p, workDir, model, runID := cfg.Provider, cfg.WorkDir, cfg.Model, cfg.RunID
+	obs, registry, mem, docs := cfg.Observer, cfg.Registry, cfg.Memory, cfg.Docs
+	rec, tier := cfg.Audit, cfg.Tier
+	approver, usage, auditReader := cfg.Approver, cfg.Usage, cfg.AuditReader
 	if approver == nil {
 		approver = tools.StdinApprover{}
 	}

@@ -29,8 +29,10 @@ func (p *recordingProvider) Step(_ context.Context, req provider.StepRequest) (p
 // repeatedly on one executor carries the conversation forward, and Reset clears it.
 func TestExecutor_RetainsConversationAcrossTurns(t *testing.T) {
 	prov := &recordingProvider{answers: []string{"first answer", "second answer"}}
-	ex := NewExecutor(prov, t.TempDir(), "test-model", "run1", nil,
-		tools.NewMemoryRegistry(), nil, nil, &audit.MemoryRecorder{}, capability.TierSafe, nil, tools.UsageContext{}, nil)
+	ex := NewExecutor(ExecutorConfig{
+		Provider: prov, WorkDir: t.TempDir(), Model: "test-model", RunID: "run1",
+		Registry: tools.NewMemoryRegistry(), Audit: &audit.MemoryRecorder{}, Tier: capability.TierSafe,
+	})
 
 	out1, err := ex.Run(context.Background(), "hello")
 	if err != nil {

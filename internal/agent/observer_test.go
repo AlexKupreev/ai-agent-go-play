@@ -50,7 +50,10 @@ func TestRun_EmitsEventSequence(t *testing.T) {
 	}}
 	obs := &captureObserver{}
 	reg := tools.NewMemoryRegistry()
-	exec := NewExecutor(prov, t.TempDir(), "", "", obs, reg, nil, nil, &audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, nil)
+	exec := NewExecutor(ExecutorConfig{
+		Provider: prov, WorkDir: t.TempDir(), Observer: obs, Registry: reg,
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
 
 	out, err := exec.Run(context.Background(), "compute something")
 	if err != nil {

@@ -23,7 +23,10 @@ func TestMemory_PersistsAcrossRuns(t *testing.T) {
 		toolCallStep("c1", "remember", map[string]any{"key": "user.editor", "value": "neovim", "tags": []any{"preference"}}),
 		textStep("noted your editor"),
 	}}
-	exec1 := NewExecutor(run1, t.TempDir(), "", "run-1", nil, tools.NewMemoryRegistry(), store, nil, rec, capability.TierBalanced, nil, tools.UsageContext{}, nil)
+	exec1 := NewExecutor(ExecutorConfig{
+		Provider: run1, WorkDir: t.TempDir(), RunID: "run-1", Registry: tools.NewMemoryRegistry(),
+		Memory: store, Audit: rec, Tier: capability.TierBalanced,
+	})
 	if _, err := exec1.Run(context.Background(), "remember my editor is neovim"); err != nil {
 		t.Fatalf("run 1: %v", err)
 	}
@@ -42,7 +45,10 @@ func TestMemory_PersistsAcrossRuns(t *testing.T) {
 		toolCallStep("c2", "recall", map[string]any{"key": "user.editor"}),
 		textStep("your editor is neovim"),
 	}}
-	exec2 := NewExecutor(run2, t.TempDir(), "", "run-2", obs, tools.NewMemoryRegistry(), store, nil, rec, capability.TierBalanced, nil, tools.UsageContext{}, nil)
+	exec2 := NewExecutor(ExecutorConfig{
+		Provider: run2, WorkDir: t.TempDir(), RunID: "run-2", Observer: obs,
+		Registry: tools.NewMemoryRegistry(), Memory: store, Audit: rec, Tier: capability.TierBalanced,
+	})
 	if _, err := exec2.Run(context.Background(), "what editor do I use?"); err != nil {
 		t.Fatalf("run 2: %v", err)
 	}

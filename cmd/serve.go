@@ -167,7 +167,12 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 	rec := audit.Recorders{sessionRec, d.central}
 	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
-	executor := agent.NewExecutor(d.prov, d.workDir, d.model, runID, obsAll, d.registry, d.mem, selfDocs, rec, d.tier, d.approver, usageCtx, d.reader)
+	executor := agent.NewExecutor(agent.ExecutorConfig{
+		Provider: d.prov, WorkDir: d.workDir, Model: d.model, RunID: runID,
+		Observer: obsAll, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
+		Audit: rec, Tier: d.tier, Approver: d.approver,
+		Usage: usageCtx, AuditReader: d.reader,
+	})
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil
 }

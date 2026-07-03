@@ -16,8 +16,10 @@ import (
 // "today" without a tool call (it can't get the clock from the compute-only sandbox).
 func TestSystemPrompt_CarriesCurrentDate(t *testing.T) {
 	prov := &recordingProvider{answers: []string{"ok"}}
-	exec := NewExecutor(prov, t.TempDir(), "", "", nil, tools.NewMemoryRegistry(), nil, nil,
-		&audit.MemoryRecorder{}, capability.TierBalanced, nil, tools.UsageContext{}, nil)
+	exec := NewExecutor(ExecutorConfig{
+		Provider: prov, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
 
 	if _, err := exec.Run(context.Background(), "what year is it?"); err != nil {
 		t.Fatalf("run: %v", err)

@@ -104,7 +104,12 @@ var chatCmd = &cobra.Command{
 		// One executor for the whole session: its conversation persists across turns.
 		// Local chat shows per-turn + session token totals itself (below); it doesn't
 		// wire the audit-log ledger, so the model-facing usage tool is omitted here.
-		executor := agent.NewExecutor(prov, workDir, model, log.RunID, obs, registry, mem, selfDocs, rec, tier, tools.StdinApprover{}, tools.UsageContext{}, rec)
+		executor := agent.NewExecutor(agent.ExecutorConfig{
+			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
+			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
+			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+			Usage: tools.UsageContext{}, AuditReader: rec,
+		})
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))
 		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /exit or Ctrl-D to quit)\n", log.RunID)
