@@ -699,9 +699,17 @@ is superseded.)*
 ### Sequenced backlog
 
 The three docs above each carry a scoped task list; this is the **build order across them**, with
-dependencies. Two roughly independent tracks — **prompts + workspace** (A–C) and **sub-agents** (D–E)
+dependencies. Two roughly independent tracks — **prompts + workspace** (A–C) and **sub-agents** (D–F)
 — joined only where `PromptMode` reuses the prompt seam. The `ExecutorConfig` struct refactor (the
 unblocker for every field addition below) is **done**.
+
+*Ordering — experimentation-first (chosen).* This sequence optimizes for **experimentation surface**:
+land the foreground `spawn_agent` tool (E) and the iterate/measure loop (F) early, so new subagent
+*organizations* (critic, debate, refine loops, hierarchies) and prompt variants can be tried by editing
+files — **no Go per topology**. The alternative — *ship-first* — would build parallel research fan-out
+first (one impressive feature) but bakes a single topology into Go and back-loads the flexibility. We
+**deferred fan-out** instead (see below): it's a latency optimization and a special case of a parallel
+`spawn_agents` batch, so it costs nothing to postpone.
 
 **A — Prompt composition core** (config-dir / global tier) · *no deps* · [`prompts.md`](prompts.md) §0–§2
 - [ ] `composeSystemPrompt` helper; call in `NewExecutor`; `ExecutorConfig` += `SystemPromptOverride`, `PromptAppends`
@@ -726,18 +734,50 @@ unblocker for every field addition below) is **done**.
 - [ ] `AgentType.PromptMode` (`replace`|`append`) via the compose seam (A)
 - *Ships:* declarative agent types + foreground sub-agent construction.
 
-**E — Parallel read-only executors** (the near-term slice) · *deps D* · [`subagents.md`](subagents.md) §4
-- [ ] `plan.go`: `Plan.Subtasks` + schema; `NewResearchPlanner`
-- [ ] `observer.go`: `Event.Worker` + `workerObs` (one shared mutex, index-stamped)
-- [ ] `fanout.go`: `FanOutResearch` (`errgroup` + `SetLimit`, order-preserving); add `golang.org/x/sync`
-- [ ] `RunResearchTurn` (plan → fan out → synthesize); `cmd/chat.go` `--research` flag
-- [ ] tests under `-race`: ordering, `limit`, first-error-cancels, ctx-cancel; observer race-clean
-- *Ships:* parallel research fan-out.
+**E — Foreground `spawn_agent` tool** (the experimentation unlock) · *deps D; `PromptMode` from A* · [`subagents.md`](subagents.md) §3
+- [ ] trusted host built-in `spawn_agent(type, task)` → builds a child via `newSubAgent` (D), runs it foreground to a final answer, returns the text; **no concurrency**
+- [ ] spawn-depth budget on the config (refuse at 0, pass `depth-1`); default depth 1
+- [ ] child events stamped/labelled so the CLI/log can indent a sub-run
+- [ ] tests: a type-restricted child sees only its tools; depth guard terminates; result threads back
+- *Ships:* model-driven delegation — try new subagent **organizations** (critic, debate, refine, hierarchy) via prompts + agent-type files, no Go per topology.
 
-**F — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5
+**F — Experimentation loop** (ergonomics that make E worth it) · *deps A, E*
+- [ ] prompt / agent-type **hot-reload** (`/reload` in `chat`; re-read on demand in `serve`) so file edits skip a restart
+- [ ] a tiny **eval / compare harness**: run a task under N config variants (prompt / type set / model), diff outputs + token usage side by side
+- *Ships:* a tight edit → run → measure loop for prompt and organization experiments.
+
+**G — Docs consolidation** · *deps all; ship time* · [`workspace.md`](workspace.md) §7, [`prompts.md`](prompts.md) §5
 - [ ] `design.md` / `tools.md`: workspace vs config-dir (reference)
 - [ ] new `docs/environment.md`: consolidate config-dir + workspace + tier + env; `usage.md` config-dir section → pointer
 
-*Deferred (designed, unscheduled):* the model-driven `spawn_agent` / `spawn_agents` tools
-([`subagents.md`](subagents.md) §3, §5), cross-engine `Isolation: "engine"` delegation (§7), and the
-`serve` per-run `workspace` field. Also `Phase 6d` (budget dial), postponed earlier.
+*Deferred (designed, unscheduled):* **parallel read-only executors / fan-out** — `FanOutResearch`,
+`workerObs`, `Event.Worker`, `RunResearchTurn`, `cmd/chat.go --research`, `golang.org/x/sync`
+([`subagents.md`](subagents.md) §4); a latency optimization and a special case of a parallel
+`spawn_agents` batch tool (§5). Also cross-engine `Isolation: "engine"` delegation (§7), the `serve`
+per-run `workspace` field, and `Phase 6d` (budget dial), postponed earlier.
+
+### UX & plumbing (current code; independent of stages A–G)
+
+Small, self-contained items surfaced in review — not blocked on the sub-agent / prompt work.
+
+- [ ] **Verbosity setting.** The intermediate trace is the `CLIObserver` (`internal/agent/observer.go`);
+  quiet mode simply doesn't attach it — `ask_user` prompts and the final answer bypass the observer, so
+  they still show. Manage like `model`/`tier`: a `Config.Verbose` field + `config set-verbose` +
+  `--verbose`/`--quiet` flag (precedence flag > env > config > default), plus a live `/verbose` toggle in
+  `chat` via a verbosity-gated observer wrapper. **`chat` becomes quiet by default** (matching `run`);
+  `--verbose` or `/verbose on` restores the trace. The full transcript is unaffected — always on disk.
+- [ ] **Transcript location = share-nothing.** The run transcript (`run.jsonl`) defaults to the shared
+  data dir (`~/.local/share/ai-agent/sessions/<runID>/`), so agents on different `--config-dir`s
+  **co-mingle** transcripts — inconsistent with "separate config dirs share nothing" (and with
+  `audit.jsonl`, already under the config-dir). Default the transcript base under the config-dir in a
+  **distinct** subfolder (`<config-dir>/runs/`), keeping `--sessions-dir`/env as the override, and keep
+  `<config-dir>/sessions/` for the resumable session store (don't overload the name). Fold into
+  `environment.md` (stage G).
+- [ ] **Unified human-in-the-loop across all clients.** Approvals (`y/N`) and `ask_user` (free text) are
+  the same primitive — pause the run, route a prompt to the frontend that owns it, block for the answer —
+  but only approvals use the async, queue-backed `Approver` seam (`internal/tools/approval.go`);
+  `ask_user` uses raw stdin and is wired to the **planner only**. Unify: generalize `Approver` into one
+  human-gate returning a structured response (bool for approve, string for ask), back it with the same
+  per-frontend impls (stdin for CLI, queue for serve/API/Telegram), and give the **executor** `ask_user`
+  through it. Gain: a running task can ask a clarifying question mid-run over *any* client, not just the
+  CLI planner.

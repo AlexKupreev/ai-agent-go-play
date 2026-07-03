@@ -3,8 +3,10 @@
 How this engine should let one agent **delegate to other agents**. It adapts the model that
 Claude Code and the pi coding agent use — **declarative agent *types* (data) + a generic spawn
 tool the coordinator calls at runtime** — simplified to what this engine needs, with a clear
-extension path. The first concrete use case is **parallel read-only executors** (research /
-scout fan-out).
+extension path. Build ordering lives in [`plan.md`](plan.md)'s backlog: the near-term unlock is the
+**foreground `spawn_agent` tool** (§3), which lets new subagent organizations be tried from prompts +
+agent-type files; **parallel read-only executors** (research / scout fan-out, §4) are **deferred** as a
+later latency optimization.
 
 Companion to [`../design.md`](../design.md) (trust model, §1) and [`plan.md`](plan.md). This is
 roadmap, **not** current behavior — nothing here is built yet. It replaces an earlier
@@ -137,7 +139,12 @@ struct refactor landed first.
 
 ---
 
-## 4. Use case — parallel read-only executors (the near-term build)
+## 4. Use case — parallel read-only executors (deferred; latency optimization)
+
+*Sequencing: deferred under `plan.md`'s experimentation-first ordering. The foreground spawn tool (§3)
+ships first; this fan-out is a later optimization and a special case of a parallel `spawn_agents` batch
+(§5). The design below stands unchanged — only its schedule moved.*
+
 
 The concrete payoff: split an I/O-bound task into independent read-only sub-questions and run them
 **concurrently**, then synthesize. Research fan-out is the canonical case; a repo-wide scout sweep is
@@ -231,9 +238,11 @@ compatible, not competing.
 | Best for | a known decomposition (research/scout sweep) | open-ended tasks where delegation isn't known up front |
 | Machinery | `RunResearchTurn` + `FanOutResearch` | `spawn_agent` / `spawn_agents` built-ins |
 
-Ship the in-code pipeline first; add the spawn tools over the *same* fan-out helper. Offering both is
-mild redundancy (two doors to one room), acceptable because the model-driven path generalizes beyond
-research while the pipeline stays the cheap, predictable default.
+Chosen ordering (`plan.md`): ship the **model-driven foreground spawn tool first** (it unlocks
+organization experiments from prompts, with no concurrency), and add the in-code fan-out pipeline
+later as a latency optimization over the *same* worker machinery. Offering both is mild redundancy
+(two doors to one room), acceptable because the model-driven path generalizes beyond research while the
+pipeline stays the cheap, predictable default when a decomposition is known up front.
 
 ---
 
