@@ -115,6 +115,11 @@ func printEvent(e api.Event) {
 			decision = "approved"
 		}
 		fmt.Printf("[escalation %s] %s\n", e.ApprovalID, decision)
+	case api.KindQuestionRequested:
+		// The prompt appears here; the watcher goroutine reads the answer from stdin.
+		fmt.Printf("\n[agent asks %s] %s\n", e.ApprovalID, e.Text)
+	case api.KindQuestionAnswered:
+		fmt.Printf("[answered %s]\n", e.ApprovalID)
 	case api.KindError:
 		fmt.Fprintf(os.Stderr, "run error: %s\n", e.Text)
 	}
@@ -151,6 +156,19 @@ func watchApprovalsScan(ctx context.Context, c *api.Client, stdin *bufio.Scanner
 				continue
 			}
 			handled[p.ID] = true
+			if p.Mode == "question" {
+				// ask_user: prompt for a free-text answer.
+				fmt.Printf("\n[agent asks] %s\n> ", p.Title)
+				answer := ""
+				if stdin.Scan() {
+					answer = strings.TrimSpace(stdin.Text())
+				}
+				if err := c.Answer(ctx, p.ID, answer); err != nil {
+					fmt.Fprintf(os.Stderr, "answer question: %v\n", err)
+				}
+				continue
+			}
+			// Approval: prompt y/N.
 			fmt.Printf("\n[approve] %s\n  %s\n  proceed? [y/N] > ", p.Title, p.Detail)
 			approved := false
 			if stdin.Scan() {

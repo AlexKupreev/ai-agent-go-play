@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/provider"
@@ -138,6 +139,34 @@ func (u *UsageObserver) Steps() int {
 	defer u.mu.Unlock()
 	return u.steps
 }
+
+// GatedObserver forwards events to an inner observer only while enabled. It backs
+// chat's live /verbose toggle: the observer list is captured once (buildExecutor
+// closes over it), so the CLI trace is switched on/off by flipping this gate rather
+// than rebuilding the executor. Safe for concurrent use.
+type GatedObserver struct {
+	inner Observer
+	on    atomic.Bool
+}
+
+// NewGatedObserver wraps inner, starting enabled iff on.
+func NewGatedObserver(inner Observer, on bool) *GatedObserver {
+	g := &GatedObserver{inner: inner}
+	g.on.Store(on)
+	return g
+}
+
+func (g *GatedObserver) Emit(e Event) {
+	if g.on.Load() {
+		g.inner.Emit(e)
+	}
+}
+
+// SetEnabled turns forwarding on or off.
+func (g *GatedObserver) SetEnabled(on bool) { g.on.Store(on) }
+
+// Enabled reports whether events are currently forwarded.
+func (g *GatedObserver) Enabled() bool { return g.on.Load() }
 
 // CLIObserver prints the human-facing trace (the old verbose output) to a writer.
 type CLIObserver struct{ w io.Writer }

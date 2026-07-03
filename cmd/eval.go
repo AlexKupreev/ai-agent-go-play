@@ -190,7 +190,12 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		return res
 	}
 
-	log, err := logger.New(sessionsDir())
+	runsBase, err := runsDir()
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	log, err := logger.New(runsBase)
 	if err != nil {
 		res.Err = fmt.Errorf("logger: %w", err)
 		return res
@@ -209,7 +214,7 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 	executor := agent.NewExecutor(agent.ExecutorConfig{
 		Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 		Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
-		Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+		Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,

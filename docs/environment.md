@@ -128,10 +128,11 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `--workspace` (global flag) | — | Project the agent acts on: shell cwd + project prompt files & agent types. Default: process cwd. |
 | `--context-file` (global flag, repeatable) | — | Extra prompt file(s) appended last, always loaded regardless of tier. |
 | `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`--context-file`; run on the bare base prompt. |
-| `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `~/.local/share/ai-agent/sessions`. |
+| `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share nothing. |
 | `openai_key` | — | OpenAI API key. |
 | `model` | `--model` flag | Default model (built-in default `gpt-4o-mini`). |
 | `tier` | `--tier` flag | Default trust tier (built-in default `balanced`). |
+| `verbose` | `--verbose`/`--quiet` flag, `AI_AGENT_VERBOSE` env | Default trace verbosity (built-in default off). Gates only the live CLI tool-call trace; the on-disk transcript is always written. `chat` is quiet by default and has a live `/verbose [on\|off]` toggle. |
 | `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
 | `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
 | `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
@@ -151,7 +152,8 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | `<config-dir>/tools.json` | Persisted agent-authored tool catalog. |
 | `<config-dir>/memory.json` | Long-term memory store. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
-| `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session). |
+| `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
+| `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
 | `<config-dir>/SYSTEM.md`, `AGENTS.md` | Global prompt customization (optional). |
 | `<config-dir>/agents/<name>.md` | Global sub-agent type definitions (optional). |
 
@@ -162,11 +164,11 @@ Under the **workspace** (the project dir; default the cwd), optional and tier-ga
 | `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`) | Project prompt customization. |
 | `<workspace>/agents/<name>.md` | Project sub-agent type definitions. |
 
-Under the **sessions dir** (default `~/.local/share/ai-agent/sessions`, override with
-`--sessions-dir` / `AI_AGENT_SESSIONS_DIR`):
+Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /
+`AI_AGENT_SESSIONS_DIR`):
 
 | Path | What |
 | --- | --- |
-| `<sessions-dir>/<run-id>/` | Per-run transcript: `run.jsonl`, `audit.jsonl`, `artifacts/`. |
+| `<runs-dir>/<run-id>/` | Per-run transcript: `run.jsonl`, `audit.jsonl`, `artifacts/`. |
 
 All are created on first use; deleting them resets the corresponding state.

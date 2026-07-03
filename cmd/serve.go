@@ -38,8 +38,8 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// One approval queue, shared: the executor parks risky actions on it (as its
-		// Approver), and the HTTP endpoints resolve them.
+		// One human-gate queue, shared: the executor parks risky actions and ask_user
+		// questions on it (as its HumanGate), and the HTTP endpoints resolve/answer them.
 		approvals := api.NewApprovalQueue()
 
 		// One tool catalog, shared across runs and exposed at GET /tools: a tool
@@ -111,7 +111,7 @@ var serveCmd = &cobra.Command{
 			workDir:  workDir,
 			model:    resolveModel(modelFlag, cfg),
 			tier:     tier,
-			approver: approvals,
+			gate: approvals,
 			registry: registry,
 			mem:      mem,
 			central:  rec,
@@ -161,14 +161,14 @@ var serveCmd = &cobra.Command{
 }
 
 // serveDeps holds everything needed to build a per-run executor. The shared
-// process-wide state (catalog, approver, memory, central audit) is consistent across
+// process-wide state (catalog, gate, memory, central audit) is consistent across
 // runs and with the API; per-run state (transcript, session audit file) is fresh.
 type serveDeps struct {
 	prov     *openaiprovider.Client
 	workDir  string
 	model    string
 	tier     capability.Tier
-	approver tools.Approver
+	gate tools.HumanGate
 	registry tools.Registry
 	mem      memory.Store
 	central  audit.Recorder
@@ -181,7 +181,11 @@ type serveDeps struct {
 // runID (so the transcript, audit Run field, and parked approvals share one id). It
 // returns a cleanup to defer. Shared by the plain runner and the session turn runner.
 func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*agent.Agent, func(), error) {
-	log, err := logger.NewWithID(sessionsDir(), runID)
+	runsBase, err := runsDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	log, err := logger.NewWithID(runsBase, runID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create logger: %w", err)
 	}
@@ -200,7 +204,7 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 	executor := agent.NewExecutor(agent.ExecutorConfig{
 		Provider: d.prov, WorkDir: d.workDir, Model: d.model, RunID: runID,
 		Observer: obsAll, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
-		Audit: rec, Tier: d.tier, Approver: d.approver,
+		Audit: rec, Tier: d.tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,

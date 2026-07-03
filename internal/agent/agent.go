@@ -177,10 +177,11 @@ type ExecutorConfig struct {
 	Audit    audit.Recorder    // brokered-effect audit sink
 	Tier     capability.Tier   // trust tier governing capability auto-approval
 
-	// Approver gates risky actions (destructive shell, capability escalation); it is
-	// the seam frontends drive — pass a queue-backed approver to route approvals over
-	// the API. Nil defaults to StdinApprover (CLI behavior).
-	Approver tools.Approver
+	// Gate is the human-in-the-loop seam: it gates risky actions (destructive shell,
+	// capability escalation) and answers the executor's ask_user questions. Pass a
+	// queue-backed gate to route both over the API to a frontend. Nil defaults to
+	// StdinGate (CLI behavior).
+	Gate tools.HumanGate
 
 	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
 	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
@@ -209,9 +210,9 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	p, workDir, model, runID := cfg.Provider, cfg.WorkDir, cfg.Model, cfg.RunID
 	obs, registry, mem, docs := cfg.Observer, cfg.Registry, cfg.Memory, cfg.Docs
 	rec, tier := cfg.Audit, cfg.Tier
-	approver, usage, auditReader := cfg.Approver, cfg.Usage, cfg.AuditReader
-	if approver == nil {
-		approver = tools.StdinApprover{}
+	gate, usage, auditReader := cfg.Gate, cfg.Usage, cfg.AuditReader
+	if gate == nil {
+		gate = tools.StdinGate{}
 	}
 	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
 	// caller is assigned after the agent exists, breaking the broker⇄dispatch
@@ -225,15 +226,19 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		Audit:    rec,
 		Tier:     tier,
 		RunID:    runID,
-		Approver: approver,
+		Gate:     gate,
 	})
 
 	builtins := []tools.Tool{
-		tools.NewShell(workDir, approver),
+		tools.NewShell(workDir, gate),
 		tools.NewRunCode(glue, scriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		authorTool,
+		// ask_user: pose a clarifying question mid-run, routed through the same gate as
+		// approvals (stdin on the CLI, the queue → the owning frontend on serve). Trusted,
+		// not sandbox-exposed. Always present — the gate is never nil.
+		tools.NewAskUserTool(gate, runID),
 		// Self-status: identity + host resources. Read-only, trusted, not sandbox-exposed.
 		tools.NewStatusTool(tools.StatusDeps{
 			Model:    model,
@@ -315,7 +320,9 @@ func NewPlanner(p provider.Provider, model string, obs Observer) *Agent {
 	a := newAgent(p, model, plannerPrompt, []tools.Tool{
 		tools.WebSearchDDG,
 		tools.WebFetch,
-		tools.AskUser,
+		// The planner runs CLI-side only (run / chat --plan), so its clarifying questions
+		// read from stdin via StdinGate — one ask_user implementation shared with the executor.
+		tools.NewAskUserTool(tools.StdinGate{}, ""),
 	}, obs)
 	a.responseFormat = &planResponseFormat
 	return a

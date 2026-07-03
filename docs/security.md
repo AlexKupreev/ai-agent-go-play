@@ -140,9 +140,10 @@ guardrail catches irreversible/high-impact commands before they run:
   `truncate`, single-`>` overwrite, recursive `chmod`/`chown`, `sudo`, `kill`/`pkill`,
   `shutdown`/`reboot`, `git push`/`reset --hard`/`clean`/`branch -D`, package removal, and
   `curl|wget … | sh`.
-- A match calls the `Approver` (`Approve(ctx, ApprovalRequest) (bool, error)`; CLI:
-  `StdinApprover`, a y/N prompt). Decline **or an approval error** blocks the run; the approver is
-  injectable for tests, and `nil` disables the gate.
+- A match calls the `HumanGate` (`Approve(ctx, ApprovalRequest) (bool, error)`; CLI:
+  `StdinGate`, a y/N prompt). Decline **or an approval error** blocks the run; the gate is
+  injectable for tests, and `nil` disables the gate. The same gate also answers the executor's
+  `ask_user` questions (`Ask`), so both human interactions share one seam and one frontend route.
 
 **Defends against:** the agent — possibly steered by injected content — running something
 destructive without a human nod.

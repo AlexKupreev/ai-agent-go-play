@@ -17,8 +17,9 @@ import (
 // Config holds persistent settings stored on disk.
 type Config struct {
 	OpenAIKey string `json:"openai_key"`
-	Model     string `json:"model,omitempty"` // default model; overridden by --model
-	Tier      string `json:"tier,omitempty"`  // default trust tier; overridden by --tier
+	Model     string `json:"model,omitempty"`   // default model; overridden by --model
+	Tier      string `json:"tier,omitempty"`    // default trust tier; overridden by --tier
+	Verbose   bool   `json:"verbose,omitempty"` // default trace verbosity; overridden by --verbose/--quiet
 
 	// Optional Telegram frontend. Empty token ⇒ the bot is disabled and the engine
 	// runs unchanged. Both may be supplied via env vars (see resolveTelegram*).
@@ -68,6 +69,21 @@ var setTierCmd = &cobra.Command{
 		}
 		cfg := loadConfigOrEmpty()
 		cfg.Tier = args[0]
+		return saveConfig(cfg)
+	},
+}
+
+var setVerboseCmd = &cobra.Command{
+	Use:   "set-verbose <on|off>",
+	Short: "Save the default trace verbosity; --verbose/--quiet override it per run",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		v, ok := parseBool(args[0])
+		if !ok {
+			return fmt.Errorf("expected on|off (or true|false), got %q", args[0])
+		}
+		cfg := loadConfigOrEmpty()
+		cfg.Verbose = v
 		return saveConfig(cfg)
 	},
 }
@@ -130,6 +146,7 @@ func init() {
 	configCmd.AddCommand(setKeyCmd)
 	configCmd.AddCommand(setModelCmd)
 	configCmd.AddCommand(setTierCmd)
+	configCmd.AddCommand(setVerboseCmd)
 	configCmd.AddCommand(setEngineCmd)
 	configCmd.AddCommand(rmEngineCmd)
 	configCmd.AddCommand(enginesCmd)
@@ -168,16 +185,21 @@ var sessionsDirFlag string
 // envSessionsDir overrides the sessions directory when --sessions-dir is not given.
 const envSessionsDir = "AI_AGENT_SESSIONS_DIR"
 
-// sessionsDir returns the root under which per-run transcripts are written (each run
-// gets its own <root>/<runID>/ subdirectory). Precedence: --sessions-dir flag >
-// AI_AGENT_SESSIONS_DIR env > "" (the logger's default ~/.local/share/ai-agent/
-// sessions). Give two agents distinct sessions roots so their transcripts stay
-// separate, the same way --config-dir separates their config/tools/memory/audit.
-func sessionsDir() string {
+// runsDir returns the root under which per-run transcripts are written (each run gets
+// its own <root>/<runID>/ subdirectory). Precedence: --sessions-dir flag >
+// AI_AGENT_SESSIONS_DIR env > <config-dir>/runs. Defaulting under the config dir keeps
+// the "separate --config-dir agents share nothing" guarantee: two agents no longer
+// co-mingle transcripts in the shared ~/.local/share/ai-agent/sessions. The distinct
+// "runs" subfolder avoids overloading <config-dir>/sessions, which holds the resumable
+// session *store* (agent state), not these transcripts (logs).
+func runsDir() (string, error) {
 	if sessionsDirFlag != "" {
-		return sessionsDirFlag
+		return sessionsDirFlag, nil
 	}
-	return strings.TrimSpace(os.Getenv(envSessionsDir))
+	if v := strings.TrimSpace(os.Getenv(envSessionsDir)); v != "" {
+		return v, nil
+	}
+	return underConfigDir("runs")
 }
 
 // underConfigDir joins name onto the resolved config directory.
@@ -312,6 +334,39 @@ func resolveModel(flag string, cfg Config) string {
 		return flag
 	}
 	return cfg.Model
+}
+
+// envVerbose overrides the default trace verbosity when no flag is given.
+const envVerbose = "AI_AGENT_VERBOSE"
+
+// resolveVerbose applies verbosity precedence: an explicit --quiet or --verbose flag
+// wins (quiet takes precedence if both are somehow set), then AI_AGENT_VERBOSE, then
+// the saved config default, then false. The intermediate CLI trace is the only thing
+// gated — the on-disk transcript is always written regardless.
+func resolveVerbose(cmd *cobra.Command, cfg Config) bool {
+	if cmd.Flags().Changed("quiet") {
+		return false
+	}
+	if cmd.Flags().Changed("verbose") {
+		return true
+	}
+	if v, ok := parseBool(os.Getenv(envVerbose)); ok {
+		return v
+	}
+	return cfg.Verbose
+}
+
+// parseBool accepts the friendly on/off spellings alongside Go's true/false/1/0.
+// The second return is false when the input is empty or unrecognized.
+func parseBool(s string) (val bool, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on", "true", "yes", "1":
+		return true, true
+	case "off", "false", "no", "0":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // resolveTier applies tier precedence: the --tier flag wins, then the saved config

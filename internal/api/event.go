@@ -20,10 +20,11 @@ type Event struct {
 	Result    string `json:"result,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
 
-	// Approval escalation fields (KindApprovalRequested / KindApprovalResolved). A
-	// requested event carries the id a frontend POSTs back to resolve; a resolved
-	// event carries the decision. Reused fields on a requested event: Tool = the
-	// action category, Text = the human title, Input = the full detail.
+	// Human-gate fields. On an approval (KindApprovalRequested / KindApprovalResolved): a
+	// requested event carries the id a frontend POSTs back to resolve, Tool = the action
+	// category, Text = the human title, Input = the full detail; a resolved event carries
+	// the decision in Approved. On a question (KindQuestionRequested / KindQuestionAnswered):
+	// ApprovalID is the id to answer and Text = the prompt (requested) or the answer (answered).
 	ApprovalID string `json:"approval_id,omitempty"`
 	Approved   *bool  `json:"approved,omitempty"`
 }
@@ -58,4 +59,11 @@ const (
 const (
 	KindApprovalRequested = "approval_requested"
 	KindApprovalResolved  = "approval_resolved"
+)
+
+// Question event kinds — the ask_user half of the human-gate seam. A run pauses on a
+// free-text question (requested), resolved when a frontend POSTs an answer (answered).
+const (
+	KindQuestionRequested = "question_requested"
+	KindQuestionAnswered  = "question_answered"
 )

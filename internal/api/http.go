@@ -152,8 +152,12 @@ func handleListApprovals(q *ApprovalQueue) http.HandlerFunc {
 	}
 }
 
+// resolveApprovalRequest is the body of POST /approvals/{id}. It resolves either half of
+// the human gate: an approval carries `approved` (bool); a question carries `answer`
+// (string). When `answer` is present the item is answered, otherwise it is approved/denied.
 type resolveApprovalRequest struct {
-	Approved bool `json:"approved"`
+	Approved bool    `json:"approved"`
+	Answer   *string `json:"answer,omitempty"`
 }
 
 func handleResolveApproval(q *ApprovalQueue) http.HandlerFunc {
@@ -163,7 +167,13 @@ func handleResolveApproval(q *ApprovalQueue) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		if err := q.Resolve(r.PathValue("id"), req.Approved); err != nil {
+		var err error
+		if req.Answer != nil {
+			err = q.Answer(r.PathValue("id"), *req.Answer)
+		} else {
+			err = q.Resolve(r.PathValue("id"), req.Approved)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

@@ -9,9 +9,9 @@ import (
 // NewShell creates a shell tool that runs commands with workDir as the working
 // directory. Any files the agent creates will land in workDir automatically.
 //
-// If approver is non-nil, commands that look destructive (see isDestructive) must
+// If gate is non-nil, commands that look destructive (see isDestructive) must
 // be approved before they run. Pass nil to disable the gate (e.g. in tests).
-func NewShell(workDir string, approver Approver) Tool {
+func NewShell(workDir string, gate HumanGate) Tool {
 	return Tool{
 		Name:        "shell",
 		Description: "Run a shell command and return its combined stdout+stderr output. Use this for filesystem operations, running scripts, inspecting the environment, etc.",
@@ -27,8 +27,8 @@ func NewShell(workDir string, approver Approver) Tool {
 				return "", fmt.Errorf("command must be a string")
 			}
 
-			if approver != nil && isDestructive(command) {
-				ok, err := approver.Approve(ctx, ApprovalRequest{
+			if gate != nil && isDestructive(command) {
+				ok, err := gate.Approve(ctx, ApprovalRequest{
 					Kind:   "shell.destructive",
 					Title:  "This command looks destructive",
 					Detail: command,

@@ -71,12 +71,14 @@ type Client interface {
 	CloseSession(ctx context.Context, sessionID string) error
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
+	Answer(ctx context.Context, id, text string) error
 }
 
 // Bot wires a chat Transport to the engine Client, gating access by an allowlist of
 // Telegram user ids. Each chat is mapped to an engine session (a persistent
 // conversation): a message runs a turn and streams its events back to the chat; a
-// parked approval becomes an Approve/Deny inline keyboard resolved over the API.
+// parked approval becomes an Approve/Deny inline keyboard resolved over the API, and a
+// parked ask_user question is sent as a prompt whose next chat reply is the answer.
 // /new starts a fresh session, /end terminates the current one.
 type Bot struct {
 	transport Transport
@@ -85,6 +87,7 @@ type Bot struct {
 
 	mu       sync.Mutex
 	sessions map[int64]string // chat id -> engine session id
+	pendingQ map[int64]string // chat id -> parked ask_user question id awaiting a reply
 }
 
 // NewBot builds a bot. allowed is the set of Telegram user ids permitted to reach the
@@ -94,7 +97,13 @@ func NewBot(transport Transport, client Client, allowed []int64) *Bot {
 	for _, id := range allowed {
 		set[id] = true
 	}
-	return &Bot{transport: transport, client: client, allowed: set, sessions: map[int64]string{}}
+	return &Bot{
+		transport: transport,
+		client:    client,
+		allowed:   set,
+		sessions:  map[int64]string{},
+		pendingQ:  map[int64]string{},
+	}
 }
 
 // Run reads updates and dispatches them until ctx is cancelled or the update stream
@@ -136,6 +145,15 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	}
 	if strings.HasPrefix(m.Text, "/") {
 		b.handleCommand(ctx, m)
+		return
+	}
+
+	// If the run parked an ask_user question on this chat, this reply is its answer —
+	// deliver it to the still-running turn rather than starting a new one.
+	if qid, ok := b.takePendingQuestion(m.ChatID); ok {
+		if err := b.client.Answer(ctx, qid, m.Text); err != nil {
+			_ = b.transport.Send(ctx, m.ChatID, "could not deliver answer: "+err.Error(), nil)
+		}
 		return
 	}
 
@@ -201,6 +219,7 @@ func (b *Bot) closeChat(ctx context.Context, chatID int64) bool {
 	b.mu.Lock()
 	id, ok := b.sessions[chatID]
 	delete(b.sessions, chatID)
+	delete(b.pendingQ, chatID) // abandon any unanswered question with the session
 	b.mu.Unlock()
 	if !ok {
 		return false
@@ -217,6 +236,11 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 		switch e.Kind {
 		case api.KindApprovalRequested:
 			b.sendApproval(ctx, chatID, e)
+		case api.KindQuestionRequested:
+			b.sendQuestion(ctx, chatID, e)
+		case api.KindQuestionAnswered:
+			// Answered (here or elsewhere) — drop any lingering pending marker for this chat.
+			b.clearPendingQuestion(chatID, e.ApprovalID)
 		case api.KindDone:
 			// Terminal marker only: its Text duplicates the final EvResponse
 			// (already forwarded by the default branch), so don't send it again.
@@ -246,6 +270,36 @@ func (b *Bot) sendApproval(ctx context.Context, chatID int64, e api.Event) {
 		{Text: "Deny", Data: "deny:" + e.ApprovalID},
 	}
 	_ = b.transport.Send(ctx, chatID, text, buttons)
+}
+
+// sendQuestion relays a parked ask_user question as a plain prompt and marks it pending
+// for this chat, so the user's next reply is delivered as the answer.
+func (b *Bot) sendQuestion(ctx context.Context, chatID int64, e api.Event) {
+	b.mu.Lock()
+	b.pendingQ[chatID] = e.ApprovalID
+	b.mu.Unlock()
+	_ = b.transport.Send(ctx, chatID, "❓ "+e.Text+"\n(reply with your answer)", nil)
+}
+
+// takePendingQuestion returns and clears the chat's pending question id, if any.
+func (b *Bot) takePendingQuestion(chatID int64) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id, ok := b.pendingQ[chatID]
+	if ok {
+		delete(b.pendingQ, chatID)
+	}
+	return id, ok
+}
+
+// clearPendingQuestion drops the chat's pending marker only if it still points at id
+// (so a newer question isn't clobbered by a stale resolution event).
+func (b *Bot) clearPendingQuestion(chatID int64, id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.pendingQ[chatID] == id {
+		delete(b.pendingQ, chatID)
+	}
 }
 
 func (b *Bot) handleCallback(ctx context.Context, c Callback) {

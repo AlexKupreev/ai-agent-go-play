@@ -118,10 +118,26 @@ func (c *Client) Pending(ctx context.Context) ([]PendingApproval, error) {
 	return out, nil
 }
 
-// Resolve answers a parked approval by id.
+// Resolve answers a parked approval by id (yes/no).
 func (c *Client) Resolve(ctx context.Context, id string, approved bool) error {
-	body, _ := json.Marshal(resolveApprovalRequest{Approved: approved})
-	req, err := c.newRequest(ctx, http.MethodPost, "/approvals/"+id, bytes.NewReader(body))
+	if err := c.postResolve(ctx, id, resolveApprovalRequest{Approved: approved}); err != nil {
+		return fmt.Errorf("resolve approval %s: %w", id, err)
+	}
+	return nil
+}
+
+// Answer answers a parked ask_user question by id (free text).
+func (c *Client) Answer(ctx context.Context, id, text string) error {
+	if err := c.postResolve(ctx, id, resolveApprovalRequest{Answer: &text}); err != nil {
+		return fmt.Errorf("answer question %s: %w", id, err)
+	}
+	return nil
+}
+
+// postResolve POSTs a resolution body to /approvals/{id}, shared by Resolve and Answer.
+func (c *Client) postResolve(ctx context.Context, id string, body resolveApprovalRequest) error {
+	b, _ := json.Marshal(body)
+	req, err := c.newRequest(ctx, http.MethodPost, "/approvals/"+id, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
@@ -132,7 +148,7 @@ func (c *Client) Resolve(ctx context.Context, id string, approved bool) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("resolve approval %s: %s", id, resp.Status)
+		return fmt.Errorf("%s", resp.Status)
 	}
 	return nil
 }

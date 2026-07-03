@@ -23,7 +23,7 @@ type AuthorToolDeps struct {
 	Audit    audit.Recorder
 	Tier     capability.Tier
 	RunID    string
-	Approver Approver // approval gate for caps beyond the tier; nil = cannot escalate
+	Gate  HumanGate // approval gate for caps beyond the tier; nil = cannot escalate
 }
 
 // NewAuthorTool returns the author_tool meta-tool: the agent's path to promote an
@@ -161,10 +161,10 @@ func (d AuthorToolDeps) approve(ctx context.Context, spec ToolSpec) string {
 	if len(beyond) == 0 {
 		return ""
 	}
-	if d.Approver == nil {
+	if d.Gate == nil {
 		return "author_tool rejected: tool requests capabilities beyond the current tier and no approval channel is available: " + strings.Join(beyond, ", ")
 	}
-	ok, err := d.Approver.Approve(ctx, ApprovalRequest{
+	ok, err := d.Gate.Approve(ctx, ApprovalRequest{
 		Kind:   "tool.capability",
 		Title:  fmt.Sprintf("Authorize tool %q with elevated capabilities", spec.Name),
 		Detail: strings.Join(beyond, "\n"),

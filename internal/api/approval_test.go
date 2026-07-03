@@ -146,6 +146,51 @@ func TestApprovalEmitter_PushesOntoRunStream(t *testing.T) {
 	}
 }
 
+// TestHTTP_QuestionParksAndAnswers drives the ask_user half of the gate over the API: a
+// run blocks on Ask, the question surfaces at GET /approvals with mode "question", and a
+// POST /approvals/{id} with an answer unblocks the run with the typed text.
+func TestHTTP_QuestionParksAndAnswers(t *testing.T) {
+	q := NewApprovalQueue()
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+		ans, err := q.Ask(ctx, tools.Question{Prompt: "which environment?", RunID: runID})
+		if err != nil {
+			return "", err
+		}
+		return "using " + ans, nil
+	})
+	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil, nil, nil))
+	defer srv.Close()
+
+	runID := startRun(t, srv.URL, "deploy")
+	pending := waitForPending(t, srv.URL, 1)
+	if pending[0].Mode != "question" || pending[0].Kind != "ask_user" || pending[0].Title != "which environment?" {
+		t.Fatalf("unexpected pending question: %+v", pending[0])
+	}
+
+	// Answering with the y/N approval path must be rejected — it's a question.
+	if err := q.Resolve(pending[0].ID, true); err == nil {
+		t.Fatal("Resolve on a question should error")
+	}
+	answer(t, srv.URL, pending[0].ID, "staging")
+
+	if final := waitForDone(t, srv.URL, runID); final != "using staging" {
+		t.Fatalf("final = %q, want %q", final, "using staging")
+	}
+	if got := getPending(t, srv.URL); len(got) != 0 {
+		t.Fatalf("queue not drained: %+v", got)
+	}
+}
+
+// TestQueue_CrossModeResolutionErrors guards the mode checks in isolation.
+func TestQueue_CrossModeResolutionErrors(t *testing.T) {
+	if err := NewApprovalQueue().Answer("nope", "x"); err == nil {
+		t.Error("Answer on unknown id should error")
+	}
+	if err := NewApprovalQueue().Resolve("nope", true); err == nil {
+		t.Error("Resolve on unknown id should error")
+	}
+}
+
 func TestHTTP_ResolveUnknownIs404(t *testing.T) {
 	srv := httptest.NewServer(NewServer(NewEngine(RunnerFunc(fakeRunner)), NewApprovalQueue(), nil, nil, nil))
 	defer srv.Close()
@@ -215,6 +260,19 @@ func resolve(t *testing.T, base, id string, approved bool) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("resolve status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func answer(t *testing.T, base, id, text string) {
+	t.Helper()
+	body, _ := json.Marshal(resolveApprovalRequest{Answer: &text})
+	resp, err := http.Post(base+"/approvals/"+id, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /approvals/%s: %v", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("answer status = %d, want 204", resp.StatusCode)
 	}
 }
 

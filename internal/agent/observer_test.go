@@ -41,6 +41,30 @@ func TestUsageObserver_Accumulates(t *testing.T) {
 	}
 }
 
+// TestGatedObserver_ForwardsOnlyWhenEnabled checks that a gate suppresses events while
+// off and passes them while on — the mechanism behind chat's live /verbose toggle.
+func TestGatedObserver_ForwardsOnlyWhenEnabled(t *testing.T) {
+	inner := &captureObserver{}
+	g := NewGatedObserver(inner, false)
+
+	g.Emit(Event{Kind: EvStart}) // dropped: off
+	if len(inner.events) != 0 {
+		t.Fatalf("expected no events while off, got %d", len(inner.events))
+	}
+	if g.Enabled() {
+		t.Fatal("Enabled() = true, want false")
+	}
+
+	g.SetEnabled(true)
+	g.Emit(Event{Kind: EvResponse}) // forwarded
+	g.SetEnabled(false)
+	g.Emit(Event{Kind: EvToolResult}) // dropped again
+
+	if len(inner.events) != 1 || inner.events[0].Kind != EvResponse {
+		t.Fatalf("forwarded events = %v, want one EvResponse", inner.kinds())
+	}
+}
+
 // A run that makes one tool call then answers emits the full event sequence
 // through the observer — no direct stdout/stderr from the loop.
 func TestRun_EmitsEventSequence(t *testing.T) {

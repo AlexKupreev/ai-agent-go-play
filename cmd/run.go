@@ -23,6 +23,7 @@ import (
 var modelFlag string
 var tierFlag string
 var verboseFlag bool
+var quietFlag bool
 
 var runCmd = &cobra.Command{
 	Use:   "run <task>",
@@ -33,13 +34,18 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		verbose := resolveVerbose(cmd, cfg)
 
 		// Ctrl+C cancels the run gracefully (the loop honors ctx at the next
 		// model/tool boundary); a second Ctrl+C is no longer caught and force-quits.
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		log, err := logger.New(sessionsDir())
+		runsBase, err := runsDir()
+		if err != nil {
+			return err
+		}
+		log, err := logger.New(runsBase)
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}
@@ -66,7 +72,7 @@ var runCmd = &cobra.Command{
 		// usage accumulator sums tokens across the planner + executor for a summary.
 		usage := agent.NewUsageObserver()
 		obs := agent.Observers{agent.NewLoggerObserver(log), usage}
-		if verboseFlag {
+		if verbose {
 			obs = append(obs, agent.NewCLIObserver(os.Stderr))
 		}
 		runStart := time.Now()
@@ -83,7 +89,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to parse plan: %w", err)
 		}
 
-		if verboseFlag {
+		if verbose {
 			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n", plan.RefinedTask)
 			for _, a := range plan.Assumptions {
 				fmt.Fprintf(os.Stderr, "[planner] assumption: %s\n", a)
@@ -143,7 +149,7 @@ var runCmd = &cobra.Command{
 		executor := agent.NewExecutor(agent.ExecutorConfig{
 			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
-			Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+			Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
@@ -171,5 +177,6 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
 	runCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
-	runCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "print tool calls and results to stderr")
+	runCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "print the tool-call trace to stderr (overrides config/env)")
+	runCmd.Flags().BoolVar(&quietFlag, "quiet", false, "suppress the tool-call trace (overrides config/env; the disk transcript is unaffected)")
 }

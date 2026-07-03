@@ -71,6 +71,60 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 	}
 }
 
+// TestClient_AnswersQuestion drives the ask_user half over the Client: the run parks a
+// question, the client reads it from Pending (mode "question") and delivers a free-text
+// answer via Answer, which unblocks the run.
+func TestClient_AnswersQuestion(t *testing.T) {
+	q := NewApprovalQueue()
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+		ans, err := q.Ask(ctx, tools.Question{Prompt: "which env?", RunID: task})
+		if err != nil {
+			return "", err
+		}
+		return "using " + ans, nil
+	})
+
+	srv := httptest.NewServer(NewServer(NewEngine(runner), q, nil, nil, nil))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	ctx := context.Background()
+
+	runID, err := c.StartRun(ctx, "deploy")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			pending, err := c.Pending(ctx)
+			if err == nil && len(pending) > 0 && pending[0].Mode == "question" {
+				_ = c.Answer(ctx, pending[0].ID, "prod")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	var mu sync.Mutex
+	var terminal string
+	err = c.StreamEvents(ctx, runID, func(e Event) {
+		if e.Kind == KindDone || e.Kind == KindError {
+			mu.Lock()
+			terminal = e.Text
+			mu.Unlock()
+		}
+	})
+	if err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if terminal != "using prod" {
+		t.Fatalf("terminal event text = %q, want %q", terminal, "using prod")
+	}
+}
+
 // TestClient_RevokeTool exercises the client's tool-detail + revoke path against a
 // real server sharing a catalog.
 func TestClient_RevokeTool(t *testing.T) {

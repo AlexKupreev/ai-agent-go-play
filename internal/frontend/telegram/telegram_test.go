@@ -76,9 +76,17 @@ type fakeClient struct {
 	resolveID     string
 	resolveOK     bool
 	resolved      chan bool
+	// question mode: when set, StreamEvents parks an ask_user question instead of an
+	// approval and waits for an answer delivered via Answer.
+	question     bool
+	answeredID   string
+	answeredText string
+	answered     chan string
 }
 
-func newFakeClient() *fakeClient { return &fakeClient{resolved: make(chan bool, 1)} }
+func newFakeClient() *fakeClient {
+	return &fakeClient{resolved: make(chan bool, 1), answered: make(chan string, 1)}
+}
 
 func (c *fakeClient) StartSession(context.Context) (string, error) {
 	c.mu.Lock()
@@ -106,6 +114,9 @@ func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
 // StreamEvents scripts a run that parks an approval, waits for the decision (via
 // Resolve), then finishes — mirroring the real engine's approval flow.
 func (c *fakeClient) StreamEvents(ctx context.Context, _ string, onEvent func(api.Event)) error {
+	if c.question {
+		return c.streamQuestion(ctx, onEvent)
+	}
 	onEvent(api.Event{
 		Kind: api.KindApprovalRequested, ApprovalID: "a1",
 		Tool: "shell.destructive", Text: "rm -rf build", Input: "rm -rf ./build",
@@ -134,6 +145,30 @@ func (c *fakeClient) Resolve(_ context.Context, id string, approved bool) error 
 	c.resolveOK = approved
 	c.mu.Unlock()
 	c.resolved <- approved
+	return nil
+}
+
+// streamQuestion scripts a run that parks an ask_user question, waits for the answer
+// (via Answer), then finishes.
+func (c *fakeClient) streamQuestion(ctx context.Context, onEvent func(api.Event)) error {
+	onEvent(api.Event{Kind: api.KindQuestionRequested, ApprovalID: "q1", Text: "which environment?"})
+	select {
+	case ans := <-c.answered:
+		onEvent(api.Event{Kind: api.KindQuestionAnswered, ApprovalID: "q1", Text: ans})
+		onEvent(api.Event{Kind: string(agent.EvResponse), Text: "using " + ans})
+		onEvent(api.Event{Kind: api.KindDone, Text: "using " + ans})
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *fakeClient) Answer(_ context.Context, id, text string) error {
+	c.mu.Lock()
+	c.answeredID = id
+	c.answeredText = text
+	c.mu.Unlock()
+	c.answered <- text
 	return nil
 }
 
@@ -176,6 +211,43 @@ func TestBot_ApprovalFlow(t *testing.T) {
 	defer cl.mu.Unlock()
 	if cl.resolveID != "a1" || !cl.resolveOK {
 		t.Fatalf("resolve = (%q, %v), want (a1, true)", cl.resolveID, cl.resolveOK)
+	}
+}
+
+// TestBot_QuestionFlow drives the ask_user path: a run parks a free-text question, the
+// bot relays it, and the user's next reply is delivered as the answer to that question
+// (not started as a new turn).
+func TestBot_QuestionFlow(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.question = true
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	// Allowed user sends a task; the run parks a question relayed to the chat.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "deploy"}}
+	q := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "which environment?") })
+	if q.chatID != 100 || len(q.buttons) != 0 {
+		t.Fatalf("question should be a plain prompt with no buttons: %+v", q)
+	}
+	if cl.turnCalls != 1 {
+		t.Fatalf("turnCalls = %d, want 1 (the initial task)", cl.turnCalls)
+	}
+
+	// The user's next message is the answer — routed to Answer, not a new turn.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "staging"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "using staging" })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.answeredID != "q1" || cl.answeredText != "staging" {
+		t.Fatalf("answer = (%q, %q), want (q1, staging)", cl.answeredID, cl.answeredText)
+	}
+	if cl.turnCalls != 1 {
+		t.Fatalf("turnCalls = %d, want 1 — the answer must not start a new turn", cl.turnCalls)
 	}
 }
 

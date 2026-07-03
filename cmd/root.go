@@ -28,7 +28,8 @@ func init() {
 			"Point two `agent serve` processes at different dirs for two independent agents.")
 	rootCmd.PersistentFlags().StringVar(&sessionsDirFlag, "sessions-dir", "",
 		"directory for per-run transcripts, one subdir per run "+
-			"(default ~/.local/share/ai-agent/sessions; env AI_AGENT_SESSIONS_DIR)")
+			"(default <config-dir>/runs, so separate --config-dir agents share nothing; "+
+			"env AI_AGENT_SESSIONS_DIR)")
 	rootCmd.PersistentFlags().BoolVar(&noContextFilesFlag, "no-context-files", false,
 		"ignore SYSTEM.md / AGENTS.md prompt customization in the config dir "+
 			"(reproducible runs with the built-in base prompt)")

@@ -41,7 +41,10 @@ var chatCmd = &cobra.Command{
 		"and can be resumed here or from another client (e.g. Telegram). --addr accepts a host:port " +
 		"or an alias from `agent config set-engine`. Use --list to see resumable sessions and " +
 		"--session <id> to resume one.\n\n" +
-		"Commands (local): /reset clears the conversation, /exit (or Ctrl-D) quits.\n" +
+		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
+		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
+		"Commands (local): /reset clears the conversation, /verbose [on|off] toggles the trace, " +
+		"/exit (or Ctrl-D) quits.\n" +
 		"Commands (--addr): /reset starts a fresh session, /end closes the session, /exit (or " +
 		"Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
@@ -65,7 +68,11 @@ var chatCmd = &cobra.Command{
 			return err
 		}
 
-		log, err := logger.New(sessionsDir())
+		runsBase, err := runsDir()
+		if err != nil {
+			return err
+		}
+		log, err := logger.New(runsBase)
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}
@@ -95,11 +102,14 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
-		// Interactive: stream the agent's activity (tool calls/results) to stderr, and
-		// keep the transcript on disk. The final answer of each turn goes to stdout. A
-		// usage accumulator runs for the whole session; per-turn cost is its delta.
+		// Interactive: optionally stream the agent's activity (tool calls/results) to
+		// stderr, and keep the transcript on disk. The final answer of each turn goes to
+		// stdout. A usage accumulator runs for the whole session; per-turn cost is its delta.
+		// The CLI trace sits behind a gate so /verbose can toggle it live without rebuilding
+		// the executor (buildExecutor captures obs once). Quiet by default, matching `run`.
 		usage := agent.NewUsageObserver()
-		obs := agent.Observers{agent.NewLoggerObserver(log), agent.NewCLIObserver(os.Stderr), usage}
+		trace := agent.NewGatedObserver(agent.NewCLIObserver(os.Stderr), resolveVerbose(cmd, cfg))
+		obs := agent.Observers{agent.NewLoggerObserver(log), trace, usage}
 
 		// buildExecutor reads the prompt files + agent-type catalog from disk and builds a
 		// fresh executor over the shared, session-stable deps (provider, transcript, catalog,
@@ -120,7 +130,7 @@ var chatCmd = &cobra.Command{
 			return agent.NewExecutor(agent.ExecutorConfig{
 				Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
-				Audit: rec, Tier: tier, Approver: tools.StdinApprover{},
+				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 				Usage: tools.UsageContext{}, AuditReader: rec,
 				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 				AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
@@ -133,8 +143,8 @@ var chatCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s\n", executor.Model(), tier, onOff(chatPlanFlag))
-		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /reload to re-read prompts+agents, /exit or Ctrl-D to quit)\n", log.RunID)
+		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, verbose %s\n", executor.Model(), tier, onOff(chatPlanFlag), onOff(trace.Enabled()))
+		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -151,6 +161,21 @@ var chatCmd = &cobra.Command{
 				break
 			}
 			line := strings.TrimSpace(scanner.Text())
+			// /verbose [on|off] toggles the live CLI trace (no arg flips it). Handled
+			// before the exact-match switch because it takes an optional argument.
+			if arg, ok := strings.CutPrefix(line, "/verbose"); ok {
+				arg = strings.TrimSpace(arg)
+				if arg == "" {
+					trace.SetEnabled(!trace.Enabled())
+				} else if v, ok := parseBool(arg); ok {
+					trace.SetEnabled(v)
+				} else {
+					fmt.Fprintln(os.Stderr, "usage: /verbose [on|off]")
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "(verbose %s)\n", onOff(trace.Enabled()))
+				continue
+			}
 			switch line {
 			case "":
 				continue
@@ -247,6 +272,8 @@ func init() {
 	chatCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
 	chatCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	chatCmd.Flags().BoolVar(&chatPlanFlag, "plan", false, "refine each message through the planner before executing (experimental)")
+	chatCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "start with the tool-call trace on (default off; toggle live with /verbose)")
+	chatCmd.Flags().BoolVar(&quietFlag, "quiet", false, "start with the tool-call trace off (the default; overrides config/env)")
 	chatCmd.Flags().StringVar(&chatAddrFlag, "addr", "", "drive a running engine's persistent session instead of an in-process executor (host:port or an alias from `agent config set-engine`)")
 	chatCmd.Flags().StringVar(&chatSessionFlag, "session", "", "with --addr: resume this session id instead of starting a new one")
 	chatCmd.Flags().BoolVar(&chatListFlag, "list", false, "with --addr: list resumable sessions on the engine and exit")

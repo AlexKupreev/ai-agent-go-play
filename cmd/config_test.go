@@ -3,7 +3,78 @@ package cmd
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+// TestParseBool checks the friendly on/off spellings plus the empty/unknown miss.
+func TestParseBool(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		wantVal bool
+		wantOk  bool
+	}{
+		{"on", true, true}, {"ON", true, true}, {"true", true, true}, {"yes", true, true}, {"1", true, true},
+		{"off", false, true}, {"false", false, true}, {"no", false, true}, {"0", false, true},
+		{" on ", true, true}, {"", false, false}, {"maybe", false, false},
+	} {
+		val, ok := parseBool(tc.in)
+		if val != tc.wantVal || ok != tc.wantOk {
+			t.Errorf("parseBool(%q) = (%v, %v), want (%v, %v)", tc.in, val, ok, tc.wantVal, tc.wantOk)
+		}
+	}
+}
+
+// TestResolveVerbose checks the precedence: --quiet/--verbose flags > AI_AGENT_VERBOSE
+// env > config default > false.
+func TestResolveVerbose(t *testing.T) {
+	// newCmd returns a command with verbose/quiet registered, optionally marking each as
+	// explicitly set (as cobra does when the flag appears on the command line).
+	newCmd := func(setVerbose, setQuiet bool) *cobra.Command {
+		c := &cobra.Command{Use: "x", RunE: func(*cobra.Command, []string) error { return nil }}
+		var v, q bool
+		c.Flags().BoolVar(&v, "verbose", false, "")
+		c.Flags().BoolVar(&q, "quiet", false, "")
+		if setVerbose {
+			_ = c.Flags().Set("verbose", "true")
+		}
+		if setQuiet {
+			_ = c.Flags().Set("quiet", "true")
+		}
+		return c
+	}
+
+	t.Run("quiet flag wins over everything", func(t *testing.T) {
+		t.Setenv(envVerbose, "on")
+		if resolveVerbose(newCmd(true, true), Config{Verbose: true}) {
+			t.Fatal("expected --quiet to force false")
+		}
+	})
+	t.Run("verbose flag beats env and config", func(t *testing.T) {
+		t.Setenv(envVerbose, "off")
+		if !resolveVerbose(newCmd(true, false), Config{Verbose: false}) {
+			t.Fatal("expected --verbose to force true")
+		}
+	})
+	t.Run("env beats config", func(t *testing.T) {
+		t.Setenv(envVerbose, "on")
+		if !resolveVerbose(newCmd(false, false), Config{Verbose: false}) {
+			t.Fatal("expected env to force true")
+		}
+	})
+	t.Run("config used when no flag or env", func(t *testing.T) {
+		t.Setenv(envVerbose, "")
+		if !resolveVerbose(newCmd(false, false), Config{Verbose: true}) {
+			t.Fatal("expected config default true")
+		}
+	})
+	t.Run("false when nothing set", func(t *testing.T) {
+		t.Setenv(envVerbose, "")
+		if resolveVerbose(newCmd(false, false), Config{}) {
+			t.Fatal("expected default false")
+		}
+	})
+}
 
 // TestResolveAddr checks that --addr resolves a configured engine alias to its address
 // and passes any other value (a literal host:port) through unchanged.
@@ -71,22 +142,26 @@ func TestConfigDirPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("sessions dir: flag > env > empty default", func(t *testing.T) {
+	t.Run("runs dir: flag > env > <config-dir>/runs default", func(t *testing.T) {
 		origS := sessionsDirFlag
 		t.Cleanup(func() { sessionsDirFlag = origS })
 
 		t.Setenv(envSessionsDir, "/from/env")
 		sessionsDirFlag = "/from/flag"
-		if got := sessionsDir(); got != "/from/flag" {
-			t.Fatalf("sessionsDir() = %q, want /from/flag", got)
+		if got, _ := runsDir(); got != "/from/flag" {
+			t.Fatalf("runsDir() = %q, want /from/flag", got)
 		}
 		sessionsDirFlag = ""
-		if got := sessionsDir(); got != "/from/env" {
-			t.Fatalf("sessionsDir() = %q, want /from/env", got)
+		if got, _ := runsDir(); got != "/from/env" {
+			t.Fatalf("runsDir() = %q, want /from/env", got)
 		}
+		// No flag/env: transcripts default under the config dir (share-nothing), in a
+		// distinct "runs" subfolder — not the shared ~/.local/share default.
 		t.Setenv(envSessionsDir, "")
-		if got := sessionsDir(); got != "" {
-			t.Fatalf("sessionsDir() = %q, want empty (logger default)", got)
+		configDirFlag = "/agents/work"
+		t.Setenv(envConfigDir, "")
+		if got, _ := runsDir(); got != "/agents/work/runs" {
+			t.Fatalf("runsDir() = %q, want /agents/work/runs", got)
 		}
 	})
 
@@ -101,6 +176,8 @@ func TestConfigDirPrecedence(t *testing.T) {
 			{catalogPath, "/agents/work/tools.json"},
 			{memoryPath, "/agents/work/memory.json"},
 			{auditPath, "/agents/work/audit.jsonl"},
+			{sessionStorePath, "/agents/work/sessions"},
+			{runsDir, "/agents/work/runs"},
 		} {
 			got, err := tc.get()
 			if err != nil {

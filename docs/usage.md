@@ -10,7 +10,7 @@ is the *how*.
 - [Two ways to run](#two-ways-to-run)
 - [Command reference](#command-reference)
 - [Trust tiers — the safety dial](#trust-tiers--the-safety-dial)
-- [Approvals — how risky actions are gated](#approvals--how-risky-actions-are-gated)
+- [Approvals & questions — the human-in-the-loop gate](#approvals--questions--the-human-in-the-loop-gate)
 - [Customizing the agent — prompts & agent types](#customizing-the-agent--prompts--agent-types)
 - [Comparing configurations — `agent eval`](#comparing-configurations--agent-eval)
 - [Self-authored tools](#self-authored-tools)
@@ -41,7 +41,13 @@ Optional defaults (both overridable per-run with `--model` / `--tier`):
 ```bash
 ./agent config set-model gpt-4o        # default model (built-in default: gpt-4o-mini)
 ./agent config set-tier balanced       # default trust tier (built-in default: balanced)
+./agent config set-verbose on          # default trace verbosity (built-in default: off)
 ```
+
+The CLI tool-call trace is off by default; turn it on per run with `--verbose` (or off with
+`--quiet`), or as a default with `config set-verbose` / `AI_AGENT_VERBOSE`. In `chat` it is
+also togglable live with `/verbose [on|off]`. The trace is display-only — the full transcript
+is always written to disk regardless.
 
 Everything is stored under `~/.config/ai-agent/` — see [`environment.md`](environment.md#files-on-disk).
 
@@ -100,7 +106,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
-| `agent config set-key\|set-model\|set-tier` | Save API key / default model / default tier. |
+| `agent config set-key\|set-model\|set-tier\|set-verbose` | Save API key / default model / default tier / default trace verbosity. |
 | `agent config set-engine\|rm-engine\|engines` | Name an engine address as an alias for `--addr` (and list/remove them). |
 
 Every command that talks to a running engine takes `--addr`, which accepts a literal
@@ -215,22 +221,28 @@ it per run with `--tier`, or as a default with `agent config set-tier`.
 
 ---
 
-## Approvals — how risky actions are gated
+## Approvals & questions — the human-in-the-loop gate
 
-Some actions always route through a human-approval gate: **destructive shell commands**
-and **capability escalations** beyond the current tier. How the prompt reaches you
-depends on the front door:
+Two kinds of interaction pause a run and route a prompt to whoever owns it: an **approval**
+(yes/no — **destructive shell commands** and **capability escalations** beyond the current
+tier) and a **question** (free text — the executor's `ask_user`, when a task is ambiguous).
+Both go through one gate, so a running task can also *ask you something mid-run*, not just
+ask permission. How the prompt reaches you depends on the front door:
 
-- **`agent run`** — prompts inline on stdin (`proceed? [y/N]`).
-- **`agent serve` + `agent client`** — the action *parks* on the engine; `client` polls
-  and prompts you in the terminal, then sends the decision back.
-- **`agent serve` + Telegram** — the escalation is pushed onto the run's event stream and
-  rendered as an **Approve / Deny** inline keyboard.
+- **`agent run` / `agent chat`** — prompts inline on stdin (`proceed? [y/N]` for an approval,
+  a free-text line for a question).
+- **`agent serve` + `agent client` / `chat --addr`** — the request *parks* on the engine; the
+  client polls, prompts you in the terminal, and sends the decision or answer back.
+- **`agent serve` + Telegram** — pushed onto the run's event stream: an approval becomes an
+  **Approve / Deny** inline keyboard; a question is sent as a prompt whose next chat reply is
+  delivered as the answer.
 
-Under the hood every parked request is also visible at `GET /approvals` and resolvable
-with `POST /approvals/{id}` (`{"approved": true|false}`), and it is emitted onto the
-run's SSE stream as `approval_requested` / `approval_resolved`. A cancelled or abandoned
-run never executes the gated action.
+Under the hood every parked request is visible at `GET /approvals` (each carries a `mode` of
+`approval` or `question`) and resolved with `POST /approvals/{id}` — `{"approved": true|false}`
+for an approval, `{"answer": "…"}` for a question. It is also emitted onto the run's SSE stream
+as `approval_requested` / `approval_resolved` or `question_requested` / `question_answered`. A
+cancelled or abandoned run never executes the gated action (and an unanswered question surfaces
+its cancellation to the model).
 
 ---
 
@@ -403,7 +415,7 @@ Under `agent serve` there is **one process-wide log** at
 ```
 
 Flags: `--addr`, `--run`, `--type`, `--limit` (0 = all). Each `agent run` / `serve` run
-also keeps its own transcript under `~/.local/share/ai-agent/sessions/<run-id>/`.
+also keeps its own transcript under `<config-dir>/runs/<run-id>/`.
 
 ---
 
@@ -552,13 +564,13 @@ one separately by passing the same `--config-dir` to `config`/`tool`/`audit`:
 ./agent --config-dir ~/.config/ai-agent/work tool list
 ```
 
-Per-run **transcripts** default to a shared `~/.local/share/ai-agent/sessions/` (each run
-in its own uniquely-named subdir, so they never collide). To keep each agent's
-transcripts separate too, give each its own `--sessions-dir` (or `AI_AGENT_SESSIONS_DIR`):
+Per-run **transcripts** default to `<config-dir>/runs/` (each run in its own uniquely-named
+subdir), so pointing two agents at different `--config-dir`s already keeps their transcripts
+separate — no extra flag needed. Override the location with `--sessions-dir` (or
+`AI_AGENT_SESSIONS_DIR`) if you want transcripts somewhere other than under the config dir:
 
 ```bash
 ./agent --config-dir ~/.config/ai-agent/work \
-        --sessions-dir ~/.local/share/ai-agent/work/sessions \
         serve --addr 127.0.0.1:8080
 ```
 
@@ -598,8 +610,8 @@ writes on disk — lives in **[`environment.md`](environment.md)**. In brief:
 
 - Config lives in `<config-dir>/config.json` (created by `config set-*`; default config dir
   `~/.config/ai-agent`, set by `--config-dir` / `AI_AGENT_CONFIG_DIR`).
-- Per-run transcripts default to `~/.local/share/ai-agent/sessions/<run-id>/` (`--sessions-dir`
-  / `AI_AGENT_SESSIONS_DIR`).
+- Per-run transcripts default to `<config-dir>/runs/<run-id>/` (`--sessions-dir`
+  / `AI_AGENT_SESSIONS_DIR`), so separate `--config-dir` agents share nothing.
 - Precedence everywhere: **flag > env > config value > built-in default**.
 
 See [`environment.md`](environment.md#configuration--environment-reference) for the tables.
