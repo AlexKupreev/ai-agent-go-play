@@ -100,6 +100,66 @@ func TestNewExecutor_PromptOverrideAndAppends(t *testing.T) {
 	}
 }
 
+// TestTierPolicyNote_Buckets checks the tier permission manifest renders the correct
+// permitted / needs-approval split per tier (derived from the enforced policy), always
+// states the forbidden boundaries, and is embedded in the system prompt.
+func TestTierPolicyNote_Buckets(t *testing.T) {
+	cases := []struct {
+		tier         capability.Tier
+		autoContains []string // capabilities that must appear as auto-granted
+		needApproval []string // capabilities that must appear as needing approval
+	}{
+		{capability.TierSafe, nil, []string{"read files", "write files", "fetch over the network", "call other tools"}},
+		{capability.TierBalanced, []string{"read files", "read the clock"}, []string{"write files", "fetch over the network", "call other tools"}},
+		{capability.TierPermissive, []string{"read files", "write files", "fetch over the network"}, nil},
+	}
+	for _, tc := range cases {
+		note := tierPolicyNote(tc.tier)
+		if !strings.Contains(note, "trust tier: "+string(tc.tier)) {
+			t.Errorf("%s: note missing tier header\n%s", tc.tier, note)
+		}
+		// The forbidden boundaries are stated at every tier.
+		for _, want := range []string{"FORBIDDEN", "cannot call shell", "pure computation only"} {
+			if !strings.Contains(note, want) {
+				t.Errorf("%s: note missing forbidden clause %q", tc.tier, want)
+			}
+		}
+		auto, approve, _ := strings.Cut(note, "REQUIRE the user's approval first")
+		if !ok(auto, approve) {
+			t.Fatalf("%s: note not shaped as expected:\n%s", tc.tier, note)
+		}
+		for _, w := range tc.autoContains {
+			if !strings.Contains(auto, w) {
+				t.Errorf("%s: %q should be in the auto-granted section", tc.tier, w)
+			}
+		}
+		for _, w := range tc.needApproval {
+			if !strings.Contains(approve, w) {
+				t.Errorf("%s: %q should be in the needs-approval section", tc.tier, w)
+			}
+		}
+	}
+}
+
+// ok reports that Cut split the note into two non-empty halves.
+func ok(a, b string) bool { return a != "" && b != "" }
+
+// TestNewExecutor_EmbedsTierPolicy confirms the manifest is actually part of the system
+// prompt handed to the provider.
+func TestNewExecutor_EmbedsTierPolicy(t *testing.T) {
+	prov := &systemCapture{}
+	exec := NewExecutor(ExecutorConfig{
+		Provider: prov, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
+	if _, err := exec.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(prov.system, "capabilities and approval policy (trust tier: balanced)") {
+		t.Errorf("system prompt missing tier policy manifest; system = %q", prov.system)
+	}
+}
+
 // With no prompt files wired, the system prompt is the built-in base — the cached prefix is
 // unchanged from before prompt composition existed.
 func TestNewExecutor_NoPromptFilesUsesBase(t *testing.T) {

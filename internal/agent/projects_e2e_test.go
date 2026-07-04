@@ -124,7 +124,12 @@ func TestSwitchProject_ReanchorsShell(t *testing.T) {
 	if reloadedFor != target.Path {
 		t.Errorf("prompt reload asked for %q, want %q", reloadedFor, target.Path)
 	}
-	if exec.systemPrompt != "PROJECT SYSTEM PROMPT" {
+	// The project's SYSTEM.md override stands in for the base, and the tier policy manifest
+	// (the agent's hard limits) re-attaches after it — as it does at construction.
+	if !strings.HasPrefix(exec.systemPrompt, "PROJECT SYSTEM PROMPT") {
 		t.Errorf("system prompt after switch = %q, want the project's SYSTEM.md", exec.systemPrompt)
+	}
+	if !strings.Contains(exec.systemPrompt, "trust tier: balanced") {
+		t.Errorf("tier policy manifest not preserved across switch; system = %q", exec.systemPrompt)
 	}
 }

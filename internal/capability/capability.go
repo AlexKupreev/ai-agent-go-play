@@ -84,6 +84,46 @@ func (t Tier) AutoApproves(kind Kind) bool {
 	}
 }
 
+// AllKinds lists every capability kind in a stable, human-facing order (reads first,
+// then effects). Rendering the tier policy over this guarantees no kind is missed.
+var AllKinds = []Kind{ReadFile, Clock, Random, HTTPGet, WriteFile, CallTool}
+
+// Label returns a short human/model-facing description of a capability kind, including
+// the fact that each is bounded by an allowlist where one applies.
+func (k Kind) Label() string {
+	switch k {
+	case ReadFile:
+		return "read files (within an approved path)"
+	case WriteFile:
+		return "write files (within an approved path)"
+	case HTTPGet:
+		return "fetch over the network (from approved hosts)"
+	case CallTool:
+		return "call other tools (from an approved list)"
+	case Clock:
+		return "read the clock"
+	case Random:
+		return "use randomness"
+	default:
+		return string(k)
+	}
+}
+
+// CapabilityPolicy splits the capability kinds into those an authored tool may use
+// automatically at this tier and those that require the user's approval first. It is
+// derived from AutoApproves, so this description can never drift from the policy the
+// broker actually enforces.
+func (t Tier) CapabilityPolicy() (auto, needApproval []Kind) {
+	for _, k := range AllKinds {
+		if t.AutoApproves(k) {
+			auto = append(auto, k)
+		} else {
+			needApproval = append(needApproval, k)
+		}
+	}
+	return auto, needApproval
+}
+
 // GrantContext is what is live for one execution: the run it belongs to, the
 // capabilities granted, and the policy tier.
 type GrantContext struct {

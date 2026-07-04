@@ -103,12 +103,60 @@ type PromptCustomization struct {
 // self-docs note (empty when no docs are wired) attaches after it — the note advertises
 // read_self_docs and is orthogonal to the operator's wording. Shared by construction and by
 // switchWorkspace so a project switch recomposes the prompt identically.
-func baseSystemPrompt(override, docsNote string) string {
+func baseSystemPrompt(override, docsNote, policyNote string) string {
 	base := executorPrompt
 	if override != "" {
 		base = override
 	}
-	return base + docsNote
+	// policyNote is the agent's hard operating boundary (tier permissions); it attaches
+	// regardless of an operator override, like docsNote — an operator can restyle the
+	// prompt but not silently erase the agent's knowledge of its own limits.
+	return base + policyNote + docsNote
+}
+
+// tierPolicyNote renders the agent's operating policy for its trust tier as three clear
+// buckets — what runs automatically, what needs the user's approval, and what is never
+// allowed — so the agent knows its boundaries up front instead of discovering them by
+// hitting an approval prompt mid-task. Derived from capability.Tier.CapabilityPolicy so
+// it always matches the policy the broker enforces.
+func tierPolicyNote(tier capability.Tier) string {
+	auto, approve := tier.CapabilityPolicy()
+
+	autoStr := capList(auto)
+	if len(auto) == 0 {
+		autoStr = "none — every capability an authored tool needs requires the user's approval"
+	}
+	approveStr := capList(approve)
+	if len(approve) == 0 {
+		approveStr = "none — at this tier authored tools receive every capability without a prompt (full autonomy; use only when watched)"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\nYour capabilities and approval policy (trust tier: %s)\n", tier)
+	b.WriteString("This defines what you may do on your own, what needs the user's approval first, and what is never allowed. Know it before you act, and tell the user when a step you are about to take will need their approval.\n\n")
+
+	b.WriteString("PERMITTED automatically (no approval): the built-in tools — run_code (pure Lua computation, no I/O), web_search, web_fetch, memory (recall/remember), status, and the introspection tools. The one exception is shell: a command that looks destructive or irreversible (e.g. rm, mv, dd, sudo, kill, a single-'>' overwrite, git push / reset --hard / clean, package removal, or piping a download into a shell) pauses for the user's confirmation at every tier.\n\n")
+
+	b.WriteString("Tools you AUTHOR with author_tool are sandboxed and may request capabilities. At this tier:\n")
+	b.WriteString("- Granted automatically: " + autoStr + ".\n")
+	b.WriteString("- REQUIRE the user's approval first: " + approveStr + ".\n")
+	b.WriteString("  Approval is requested once, when author_tool registers a tool that needs the capability.\n\n")
+
+	b.WriteString("FORBIDDEN — no approval and no tier can grant these:\n")
+	b.WriteString("- Sandboxed code (authored tools and run_code) cannot call shell, and cannot touch the operating system, filesystem, network, or clock except through a capability granted to an authored tool — and only within that capability's allowlist (specific hosts, path prefixes, or tool names).\n")
+	b.WriteString("- run_code never holds any capability: it is pure computation only.\n")
+	b.WriteString("- You cannot exceed a granted allowlist: a host, path, or tool outside what was approved is denied.")
+
+	return b.String()
+}
+
+// capList renders capability kinds as a human-facing, semicolon-separated list.
+func capList(kinds []capability.Kind) string {
+	labels := make([]string, len(kinds))
+	for i, k := range kinds {
+		labels[i] = k.Label()
+	}
+	return strings.Join(labels, "; ")
 }
 
 func composeSystemPrompt(base, replaceWith string, appends ...string) string {
@@ -173,6 +221,10 @@ type Agent struct {
 	ws             *tools.Workspace
 	switchPrompts  func(workspace string) (PromptCustomization, error)
 	docsPromptNote string
+	// tierPolicyNote is the trust-tier permission manifest (permitted/needs-approval/
+	// forbidden), re-appended on a project switch so the recomposed prompt keeps it. The
+	// tier does not change on a switch, so this is fixed for the agent's lifetime.
+	tierPolicyNote string
 
 	// messages is the running conversation, EXCLUDING the system prompt (that is
 	// prepended fresh from current code on each request, so it is never persisted and
@@ -327,7 +379,10 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		builtins = append(builtins, tools.NewReadSelfDocsTool(docs))
 		docsNote = selfDocsPromptNote
 	}
-	prompt := composeSystemPrompt(baseSystemPrompt(cfg.SystemPromptOverride, docsNote), "", cfg.PromptAppends...)
+	// Tier policy note: the agent's permitted / needs-approval / forbidden boundaries for
+	// its trust tier, so it knows its limits up front (matches the enforced policy).
+	policyNote := tierPolicyNote(tier)
+	prompt := composeSystemPrompt(baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote), "", cfg.PromptAppends...)
 	// Self-usage: the agent can report its own session/day token spend (from the audit
 	// log). Omitted when no ledger is wired.
 	if usage.Ledger != nil {
@@ -360,6 +415,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	a.ws = ws
 	a.switchPrompts = cfg.SwitchWorkspace
 	a.docsPromptNote = docsNote
+	a.tierPolicyNote = policyNote
 
 	// Trust boundary: every built-in runs with ambient authority (Trusted), but
 	// only web_search/web_fetch are Exposed to sandboxed code. So call_tool can
@@ -407,7 +463,7 @@ func (a *Agent) switchWorkspace(dir string) error {
 	}
 	a.ws.Set(dir)
 	a.systemPrompt = composeSystemPrompt(
-		baseSystemPrompt(pc.SystemPromptOverride, a.docsPromptNote), "", pc.PromptAppends...)
+		baseSystemPrompt(pc.SystemPromptOverride, a.docsPromptNote, a.tierPolicyNote), "", pc.PromptAppends...)
 	return nil
 }
 
