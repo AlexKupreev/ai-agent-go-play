@@ -198,6 +198,24 @@ spec as arguments, never the control flow:
 
 `validate → approve → smoke-test (under exactly the requested caps) → register → audit`.
 
+**Host-global reference (in the tool description, so the model has it while authoring).** The Lua
+body reads its args from `input` and has only the string/table/math libs — plus one host global per
+*granted* capability (an ungranted one is `nil`; each raises a Lua error on failure/denial, which
+fails the test):
+
+| Global | Signature | Capability |
+|---|---|---|
+| `http_get` | `http_get(url) -> string` (response body) | `http_get` (allowlisted hosts) |
+| `read_file` | `read_file(path) -> string` (contents) | `read_file` (path prefix) |
+| `write_file` | `write_file(path, content)` (no return) | `write_file` (path prefix) |
+| `call_tool` | `call_tool(name, args_table) -> string` | `call_tool` (allowlisted tools) |
+| `now` | `now() -> number` (Unix seconds) | `clock` |
+| `random` | `random(n) -> string` (n random bytes, hex) | `random` |
+
+`run_code` holds no capabilities, so none of these exist in it — it is pure computation. The base
+executor prompt carries a worked analytics example (fetch a CSV via `http_get`, parse it) so the
+whole authoring loop is demonstrated, not just described.
+
 - **Benefit:** the model can extend itself, but a tool only becomes callable after it **parses**, a
   human has **approved** any capability beyond the tier, and its **own test passed under exactly the
   caps it will hold**. Rejections come back as content so the model can fix and retry; nothing

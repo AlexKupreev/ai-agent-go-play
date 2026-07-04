@@ -38,10 +38,20 @@ func NewAuthorTool(d AuthorToolDeps) Tool {
 	return Tool{
 		Name: "author_tool",
 		Description: "Create a new reusable tool from a Lua script and register it for the rest of this run. " +
-			"The script body reads its arguments from `input` and ends with `return <value>`. You must include a " +
+			"The script body reads its arguments from `input` (a table) and ends with `return <value>`. You must include a " +
 			"`test` that calls tool({...}) with sample input and `return true` on success. Request only the " +
 			"capabilities the tool needs in `required_caps`; capabilities beyond the current trust tier require " +
-			"user approval. Prefer authoring a tool over repeating the same multi-step work.",
+			"user approval. Prefer authoring a tool over repeating the same multi-step work.\n" +
+			"Only the Lua string, table, and math libraries are available (no os/io/require, no network) — except " +
+			"that each GRANTED capability injects one host global (an ungranted one is nil; guard with `if http_get then`):\n" +
+			"  http_get(url) -> string           -- HTTP GET; returns the response body; allowlisted hosts only\n" +
+			"  read_file(path) -> string         -- file contents; path must be within an allowed prefix\n" +
+			"  write_file(path, content)         -- write content to path (within an allowed prefix); no return\n" +
+			"  call_tool(name, args_table) -> string  -- invoke another tool by name; allowlisted tools only\n" +
+			"  now() -> number                   -- current time as Unix seconds (needs the clock capability)\n" +
+			"  random(n) -> string               -- n cryptographically-random bytes, hex-encoded (needs random)\n" +
+			"Every host global raises a Lua error on failure or denial, which fails your test — so a passing test " +
+			"proves the tool works under exactly the capabilities you requested.",
 		Parameters: map[string]any{
 			"name":         map[string]any{"type": "string", "description": "tool name: lowercase letters, digits, underscores; starts with a letter"},
 			"description":  map[string]any{"type": "string", "description": "what the tool does (shown to you when choosing tools later)"},

@@ -43,6 +43,25 @@ func newAuthorFixture(t *testing.T, tier capability.Tier, approve bool) authorFi
 	return authorFixture{tool: tool, reg: reg, rec: rec, confirm: cf}
 }
 
+// TestAuthorTool_DescriptionDocumentsHostGlobals guards the host-function reference so
+// the agent can see each granted capability's injected global (name + signature) while
+// authoring, instead of guessing the calling convention.
+func TestAuthorTool_DescriptionDocumentsHostGlobals(t *testing.T) {
+	desc := NewAuthorTool(AuthorToolDeps{}).Description
+	for _, want := range []string{
+		"http_get(url) -> string",
+		"read_file(path) -> string",
+		"write_file(path, content)",
+		"call_tool(name, args_table) -> string",
+		"now() -> number",
+		"random(n) -> string",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("author_tool description missing host-global signature %q", want)
+		}
+	}
+}
+
 func authorArgs(name, code, test string) map[string]any {
 	return map[string]any{
 		"name":         name,
