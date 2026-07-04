@@ -72,6 +72,7 @@ type Client interface {
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
 	Answer(ctx context.Context, id, text string) error
+	Reload(ctx context.Context) error
 }
 
 // Bot wires a chat Transport to the engine Client, gating access by an allowlist of
@@ -79,7 +80,8 @@ type Client interface {
 // conversation): a message runs a turn and streams its events back to the chat; a
 // parked approval becomes an Approve/Deny inline keyboard resolved over the API, and a
 // parked ask_user question is sent as a prompt whose next chat reply is the answer.
-// /new starts a fresh session, /end terminates the current one.
+// /new starts a fresh session, /end terminates the current one, and /reload re-reads
+// the engine's prompt files + agent-type catalog (effective from the next turn).
 type Bot struct {
 	transport Transport
 	client    Client
@@ -174,7 +176,8 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 }
 
 // handleCommand handles the chat control commands: /new (fresh session), /end
-// (terminate the current session). Unknown commands get a short hint.
+// (terminate the current session), /reload (re-read prompt files + agent-type catalog).
+// Unknown commands get a short hint.
 func (b *Bot) handleCommand(ctx context.Context, m Message) {
 	switch strings.Fields(m.Text)[0] {
 	case "/new", "/start":
@@ -190,8 +193,18 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		} else {
 			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
 		}
+	case "/reload":
+		// Re-read SYSTEM.md/AGENTS.md and the agents/*.md catalog on the engine. A
+		// malformed file leaves the running config intact and returns an error. The
+		// swapped snapshot lands on the next turn of every session, including this
+		// chat's live one (each turn builds a fresh executor from the current snapshot).
+		if err := b.client.Reload(ctx); err != nil {
+			_ = b.transport.Send(ctx, m.ChatID, "reload failed: "+err.Error(), nil)
+			return
+		}
+		_ = b.transport.Send(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message", nil)
 	default:
-		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (start a session), /end (terminate it)", nil)
+		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (start a session), /end (terminate it), /reload (re-read prompts + agent types)", nil)
 	}
 }
 

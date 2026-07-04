@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,8 @@ type fakeClient struct {
 	closedID      string
 	resolveID     string
 	resolveOK     bool
+	reloadCalls   int
+	reloadErr     error
 	resolved      chan bool
 	// question mode: when set, StreamEvents parks an ask_user question instead of an
 	// approval and waits for an answer delivered via Answer.
@@ -109,6 +112,13 @@ func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
 	defer c.mu.Unlock()
 	c.closedID = sessionID
 	return nil
+}
+
+func (c *fakeClient) Reload(context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reloadCalls++
+	return c.reloadErr
 }
 
 // StreamEvents scripts a run that parks an approval, waits for the decision (via
@@ -300,6 +310,55 @@ func TestBot_NewAndEndCommands(t *testing.T) {
 	defer cl.mu.Unlock()
 	if cl.closedID != "sess1" {
 		t.Fatalf("closed session = %q, want sess1", cl.closedID)
+	}
+}
+
+// TestBot_ReloadCommand covers /reload: an authorized user triggers an engine
+// prompt/agent-catalog reload from the chat and gets a confirmation. A reload error
+// is surfaced instead of the confirmation.
+func TestBot_ReloadCommand(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	// Success: the engine reload is invoked and the chat is told it took effect.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/reload"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "reloaded prompts") })
+	cl.mu.Lock()
+	if cl.reloadCalls != 1 {
+		cl.mu.Unlock()
+		t.Fatalf("Reload calls = %d, want 1", cl.reloadCalls)
+	}
+	cl.reloadErr = errors.New("SYSTEM.md: bad syntax")
+	cl.mu.Unlock()
+
+	// Failure: a malformed file surfaces as an error message, not a success.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/reload"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "reload failed: SYSTEM.md: bad syntax") })
+}
+
+// TestBot_ReloadRejectsUnauthorized confirms /reload is behind the same allowlist gate
+// as every other engine-reaching action — an unauthorized user cannot trigger it.
+func TestBot_ReloadRejectsUnauthorized(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 99, Text: "/reload"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "not authorized" })
+	time.Sleep(20 * time.Millisecond)
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.reloadCalls != 0 {
+		t.Fatalf("unauthorized user triggered reload: calls=%d", cl.reloadCalls)
 	}
 }
 
