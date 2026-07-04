@@ -88,29 +88,6 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, obs)
-		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
-		planJSON, err := planner.Run(ctx, task)
-		if err != nil {
-			return fmt.Errorf("planner error: %w", err)
-		}
-
-		var plan agent.Plan
-		if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
-			return fmt.Errorf("failed to parse plan: %w", err)
-		}
-
-		if verbose {
-			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n", plan.RefinedTask)
-			for _, a := range plan.Assumptions {
-				fmt.Fprintf(os.Stderr, "[planner] assumption: %s\n", a)
-			}
-			for _, c := range plan.Confirmed {
-				fmt.Fprintf(os.Stderr, "[planner] confirmed: %s\n", c)
-			}
-			fmt.Fprintln(os.Stderr)
-		}
-
 		// Live audit log (per run) + persistent tool catalog, threaded into the
 		// executor so authored tools run brokered and audited.
 		rec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
@@ -152,6 +129,8 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
+		// Build the executor before the planner so the planner can be handed the executor's
+		// live environment (generated tools + tier + host) — the planner plans for it.
 		executor := agent.NewExecutor(agent.ExecutorConfig{
 			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
@@ -162,6 +141,30 @@ var runCmd = &cobra.Command{
 			ProjectsRoot:    projectsRoot,
 			SwitchWorkspace: switchWorkspaceFn(tier),
 		})
+
+		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, executor.EnvironmentSummary(), obs)
+		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
+		planJSON, err := planner.Run(ctx, task)
+		if err != nil {
+			return fmt.Errorf("planner error: %w", err)
+		}
+
+		var plan agent.Plan
+		if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+			return fmt.Errorf("failed to parse plan: %w", err)
+		}
+
+		if verbose {
+			fmt.Fprintf(os.Stderr, "[planner] refined task: %s\n", plan.RefinedTask)
+			for _, a := range plan.Assumptions {
+				fmt.Fprintf(os.Stderr, "[planner] assumption: %s\n", a)
+			}
+			for _, c := range plan.Confirmed {
+				fmt.Fprintf(os.Stderr, "[planner] confirmed: %s\n", c)
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {
 			return err

@@ -145,12 +145,12 @@ var chatCmd = &cobra.Command{
 		// buildPlanner constructs a fresh planner, re-reading PLANNER.md each time so an edit
 		// takes effect on the next planned turn without a restart (mirrors buildExecutor for
 		// the pre-execution clarify/refine pass). Used per turn only when --plan is set.
-		buildPlanner := func() (*agent.Agent, error) {
+		buildPlanner := func(environment string) (*agent.Agent, error) {
 			prompts, err := loadPrompts(workDir, tier)
 			if err != nil {
 				return nil, err
 			}
-			return agent.NewPlanner(prov, model, prompts.PlannerOverride, obs), nil
+			return agent.NewPlanner(prov, model, prompts.PlannerOverride, environment, obs), nil
 		}
 
 		// One executor for the whole session: its conversation persists across turns.
@@ -235,7 +235,7 @@ var chatCmd = &cobra.Command{
 
 // runTurn runs one chat turn under a cancellable context (Ctrl-C cancels just this
 // turn). When the planner is enabled it refines the input first, mirroring `agent run`.
-func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func() (*agent.Agent, error), line string) error {
+func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func(environment string) (*agent.Agent, error), line string) error {
 	// Discard any Ctrl-C that arrived while idle at the prompt.
 	select {
 	case <-sigCh:
@@ -257,8 +257,10 @@ func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func() 
 
 	input := line
 	if chatPlanFlag {
-		// A fresh planner per turn: planning is independent of the running dialogue.
-		planner, err := buildPlanner()
+		// A fresh planner per turn: planning is independent of the running dialogue. Hand it
+		// the executor's live environment (generated tools + tier + host) so it plans within
+		// what the agent actually has — including tools authored in earlier turns.
+		planner, err := buildPlanner(executor.EnvironmentSummary())
 		if err != nil {
 			return fmt.Errorf("planner: %w", err)
 		}

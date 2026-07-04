@@ -160,6 +160,53 @@ func TestNewExecutor_EmbedsTierPolicy(t *testing.T) {
 	}
 }
 
+// TestNewExecutor_EmbedsToolRoster checks the executor's own system prompt carries the
+// generated tool inventory (replacing the old hardcoded list, so it can't drift).
+func TestNewExecutor_EmbedsToolRoster(t *testing.T) {
+	exec := NewExecutor(ExecutorConfig{
+		Provider: &systemCapture{}, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
+	if !strings.Contains(exec.systemPrompt, "Your available tools:") {
+		t.Fatalf("executor prompt missing generated tool roster:\n%s", exec.systemPrompt)
+	}
+	for _, w := range []string{"shell", "run_code", "author_tool"} {
+		if !strings.Contains(exec.systemPrompt, w) {
+			t.Errorf("tool roster missing %q", w)
+		}
+	}
+}
+
+// TestEnvironmentSummary_GeneratedTierHostAndDynamic checks the planner-facing environment
+// summary lists the real tools, the tier, and live host resources — and that it is dynamic:
+// a tool registered after construction shows up on the next call (no rebuild).
+func TestEnvironmentSummary_GeneratedTierHostAndDynamic(t *testing.T) {
+	reg := tools.NewMemoryRegistry()
+	exec := NewExecutor(ExecutorConfig{
+		Provider: &systemCapture{}, WorkDir: t.TempDir(), Registry: reg,
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
+	env := exec.EnvironmentSummary()
+	for _, w := range []string{"run_code", "author_tool", "Trust tier: balanced", "Host resources (live)"} {
+		if !strings.Contains(env, w) {
+			t.Errorf("EnvironmentSummary missing %q\n%s", w, env)
+		}
+	}
+
+	// Dynamic: register a new tool, and it appears in the next summary without a rebuild.
+	if _, err := reg.Register(tools.ToolSpec{
+		Name: "widget_maker", Description: "makes widgets on demand",
+		InputSchema: map[string]any{"type": "object"},
+		Impl:        tools.Impl{Kind: tools.ImplScript, Lang: "lua", Source: "return 1"},
+		Scope:       tools.ScopeShared,
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if env2 := exec.EnvironmentSummary(); !strings.Contains(env2, "widget_maker") {
+		t.Errorf("EnvironmentSummary is not dynamic — widget_maker missing after registration:\n%s", env2)
+	}
+}
+
 // With no prompt files wired, the system prompt is the built-in base — the cached prefix is
 // unchanged from before prompt composition existed.
 func TestNewExecutor_NoPromptFilesUsesBase(t *testing.T) {

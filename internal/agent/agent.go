@@ -11,6 +11,7 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/buildinfo"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/hoststat"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/sandbox"
@@ -39,7 +40,7 @@ const executorPrompt = `You are a helpful AI agent with access to a shell and th
 
 When given a task:
 1. Think through what steps are needed
-2. Use tools to execute each step — run_code (sandboxed Lua) for all computation, parsing, and data shaping; shell only for lightweight OS work (fetching with curl/wget, moving files, and text utilities like grep/awk/sed/cut/sort/head/tail); web_search to find information; web_fetch to read a specific page
+2. Use the tools available to you (your current set is listed under "Your available tools" below) to execute each step. Prefer run_code (sandboxed Lua) for computation, parsing, and data shaping; use shell only for lightweight OS work (curl/wget, moving files, text utilities like grep/awk/sed/cut/sort/head/tail); web_search to find information; web_fetch to read a specific page
 3. If you find yourself repeating the same multi-step work, use author_tool to create a reusable, tested tool for it (request only the capabilities it needs); you can call the new tool immediately
 4. Observe the output and adjust if something fails
 5. Once done, provide a concise summary of what you did and the result
@@ -115,15 +116,107 @@ type PromptCustomization struct {
 // self-docs note (empty when no docs are wired) attaches after it — the note advertises
 // read_self_docs and is orthogonal to the operator's wording. Shared by construction and by
 // switchWorkspace so a project switch recomposes the prompt identically.
-func baseSystemPrompt(override, docsNote, policyNote string) string {
+func baseSystemPrompt(override, docsNote, policyNote, rosterNote string) string {
 	base := executorPrompt
 	if override != "" {
 		base = override
 	}
-	// policyNote is the agent's hard operating boundary (tier permissions); it attaches
-	// regardless of an operator override, like docsNote — an operator can restyle the
-	// prompt but not silently erase the agent's knowledge of its own limits.
-	return base + policyNote + docsNote
+	// policyNote (tier permissions) and rosterNote (the live tool inventory) are the agent's
+	// factual self-knowledge; they attach regardless of an operator override, like docsNote —
+	// an operator can restyle the prompt but not silently erase what the agent is and can do.
+	return base + policyNote + rosterNote + docsNote
+}
+
+// toolRoster renders the agent's currently available tools as a compact roster
+// (name — one-line blurb), built-ins first then authored/registry tools. It is the single
+// generated source of "what tools do I have", shared by the executor's own prompt and by
+// the planner's environment description (EnvironmentSummary), so neither can drift from the
+// code the way a hand-maintained list does.
+func (a *Agent) toolRoster() string {
+	var b strings.Builder
+	for _, t := range a.tools {
+		fmt.Fprintf(&b, "- %s — %s\n", t.Name, toolBlurb(t.Description))
+	}
+	if a.registry != nil {
+		for _, spec := range a.registry.List(tools.ScopeAny) {
+			if _, isBuiltin := a.byName[spec.Name]; isBuiltin {
+				continue // a registry tool shadowed by a built-in name is unreachable; skip it
+			}
+			fmt.Fprintf(&b, "- %s — %s (authored)\n", spec.Name, toolBlurb(spec.Description))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// toolBlurb reduces a tool's (possibly multi-line) description to a one-line summary for
+// the roster — its first sentence or first line, capped.
+func toolBlurb(desc string) string {
+	desc = strings.TrimSpace(desc)
+	if i := strings.IndexByte(desc, '\n'); i >= 0 {
+		desc = desc[:i]
+	}
+	if i := strings.Index(desc, ". "); i >= 0 {
+		desc = desc[:i+1]
+	}
+	if len(desc) > 180 {
+		desc = strings.TrimSpace(desc[:180]) + "…"
+	}
+	return desc
+}
+
+// toolRosterNote frames the roster for injection into the executor's own system prompt.
+// Empty roster ⇒ empty note (no dangling header).
+func toolRosterNote(roster string) string {
+	if strings.TrimSpace(roster) == "" {
+		return ""
+	}
+	return "\n\nYour available tools:\n" + roster
+}
+
+// EnvironmentSummary renders, for the planner, a live description of the environment the
+// EXECUTION agent operates in: its current tools (generated, so it can't drift), its trust
+// tier, and the host's live resources. It is read fresh on each call — the planner is built
+// per run/turn — so a newly authored tool or a change in free disk/memory is reflected
+// without a rebuild. Host resources live HERE (the planner's one-shot prompt) and NOT in the
+// executor's cached system prompt: they change every second, so the long-lived executor reads
+// them on demand via the status tool instead of busting its prompt cache each request.
+func (a *Agent) EnvironmentSummary() string {
+	var b strings.Builder
+	b.WriteString("Execution environment (generated live for this task — trust it over any assumption):\n\n")
+	b.WriteString("Tools the execution agent has right now:\n")
+	b.WriteString(a.toolRoster())
+	fmt.Fprintf(&b, "\n\nTrust tier: %s.\n", a.tier)
+	if line := hostResourceLine(a.statDir()); line != "" {
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// statDir is the directory whose host resources describe the agent's box; "." if unanchored.
+func (a *Agent) statDir() string {
+	if a.ws != nil {
+		return a.ws.Dir()
+	}
+	return "."
+}
+
+// hostResourceLine renders a one-line live snapshot of the host's CPU/memory/disk for the
+// planner to gauge feasibility. Empty when host stats are unavailable.
+func hostResourceLine(dir string) string {
+	s := hoststat.Read(dir)
+	if s.NumCPU == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Host resources (live): %d CPU", s.NumCPU)
+	if s.MemTotalMB > 0 {
+		fmt.Fprintf(&b, ", memory %d MB free of %d MB", s.MemAvailMB, s.MemTotalMB)
+	}
+	if s.DiskTotalMB > 0 {
+		fmt.Fprintf(&b, ", disk %d MB free of %d MB", s.DiskFreeMB, s.DiskTotalMB)
+	}
+	b.WriteString(". Don't plan work that won't fit in the free memory/disk; if a step needs more than is free, plan to report that limit rather than let it fail.")
+	return b.String()
 }
 
 // tierPolicyNote renders the agent's operating policy for its trust tier as three clear
@@ -189,20 +282,16 @@ func composeSystemPrompt(base, replaceWith string, appends ...string) string {
 
 const plannerPrompt = `You are a planning agent. Your job is to clarify and refine a task before any execution happens. You do NOT execute the task yourself.
 
-The execution environment is FIXED and KNOWN — never ask the user about it, and never ask which framework, platform, SDK, language, or codebase to use: it is this agent and its own tools, running on a small Linux box. The agent that will carry out your refined task has:
-- shell — lightweight OS commands (curl/wget, grep/awk/sed/jq, file ops). No Python/Node/Ruby/R (the box is memory-limited).
-- run_code — sandboxed Lua for computation and parsing (pure compute: no network, files, or clock).
-- web_search / web_fetch — find and read web pages.
-- author_tool — it can CREATE a new reusable tool at runtime (a small Lua script that may be granted capabilities such as http_get / read_file / write_file, subject to the user's approval). So "no existing tool does X" is NOT a blocker or a question — the plan is simply to author one.
-- memory — recall and save durable facts across runs.
+The execution environment is FIXED and KNOWN: the agent's current tools, trust tier, and live host resources are listed in the "Execution environment" section at the END of this prompt (generated fresh for this task — trust it over any assumption). Never ask the user about the environment, and never ask which framework, platform, SDK, language, or codebase to use: it is this agent and the listed tools, on a small Linux box (no Python/Node/Ruby/R — it is memory-limited).
 
-Plan WITHIN these capabilities:
-- If the task needs a capability that no ready-made tool provides, plan for the agent to BUILD it with author_tool (or use run_code/shell) — do not ask the user how, and do not treat it as impossible.
-- Only when it is genuinely out of reach (e.g. it requires Python-only libraries, decoding a binary format Lua cannot parse, or a credential/secret the agent lacks) should the plan say to report that limitation — never to fabricate a result. Prefer machine-readable sources (CSV/JSON/API) over binary formats, since Lua parses text, not spreadsheets.
+Plan WITHIN the listed capabilities:
+- Use the tools that are listed. If the task needs something no listed tool provides but author_tool is available, plan for the agent to BUILD a small tool for it (run_code is sandboxed Lua for pure computation/parsing; shell is for lightweight OS commands). "No ready-made tool for X" is not a blocker or a question — the plan is to author one.
+- Only when it is genuinely out of reach — it needs Python-only libraries, decoding a binary format Lua cannot parse, a credential the agent lacks, or more memory/disk than the listed host has free — should the plan say to report that limitation, never to fabricate a result. Prefer machine-readable sources (CSV/JSON/API) over binary formats, since Lua parses text, not spreadsheets.
+- Factor the live host resources into the plan: do not plan work that will not fit in the free memory/disk shown below.
 
 When given a task:
 1. Check for typos, ambiguous names, or unclear references — if something is misspelled or could mean multiple distinct things, use ask_user to confirm.
-2. Identify ONLY genuine unknowns that require the human: their preferences, a choice between real alternatives, credentials, or a missing input the task can't proceed without. Do NOT ask about the agent's own tools, runtime, or environment — those are known above.
+2. Identify ONLY genuine unknowns that require the human: their preferences, a choice between real alternatives, credentials, or a missing input the task can't proceed without. Do NOT ask about the agent's own tools, runtime, or environment — those are listed below.
 3. Use web_search or web_fetch only to resolve technical ambiguity (e.g. confirming an API name or a data source's URL) — never to answer the task itself.
 4. Output a single refined task the execution agent can act on directly.
 
@@ -249,6 +338,9 @@ type Agent struct {
 	// forbidden), re-appended on a project switch so the recomposed prompt keeps it. The
 	// tier does not change on a switch, so this is fixed for the agent's lifetime.
 	tierPolicyNote string
+	// toolRosterNote is the generated tool-inventory section of the system prompt, re-appended
+	// on a project switch (the toolset doesn't change on a switch, so it is fixed too).
+	toolRosterNote string
 
 	// messages is the running conversation, EXCLUDING the system prompt (that is
 	// prepended fresh from current code on each request, so it is never persisted and
@@ -406,7 +498,10 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// Tier policy note: the agent's permitted / needs-approval / forbidden boundaries for
 	// its trust tier, so it knows its limits up front (matches the enforced policy).
 	policyNote := tierPolicyNote(tier)
-	prompt := composeSystemPrompt(baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote), "", cfg.PromptAppends...)
+	// Provisional prompt without the tool roster: the spawn_agent / switch_project tools are
+	// appended to a.tools *after* the agent exists (they close over it), so the full roster is
+	// known only then — a.systemPrompt is recomposed with the roster at the end of NewExecutor.
+	prompt := composeSystemPrompt(baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote, ""), "", cfg.PromptAppends...)
 	// Self-usage: the agent can report its own session/day token spend (from the audit
 	// log). Omitted when no ledger is wired.
 	if usage.Ledger != nil {
@@ -469,6 +564,14 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		a.tools = append(a.tools, sw)
 		a.byName[sw.Name] = sw
 	}
+
+	// All tools (built-ins + spawn/switch + any persistent authored tools in the registry) are
+	// wired now, so the roster is complete. Recompose the system prompt to include it — the
+	// generated inventory replaces the old hardcoded tool list and can't drift. Stored so a
+	// project switch recomposes with the same roster (the toolset doesn't change on a switch).
+	a.toolRosterNote = toolRosterNote(a.toolRoster())
+	a.systemPrompt = composeSystemPrompt(
+		baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote, a.toolRosterNote), "", cfg.PromptAppends...)
 	return a
 }
 
@@ -487,7 +590,7 @@ func (a *Agent) switchWorkspace(dir string) error {
 	}
 	a.ws.Set(dir)
 	a.systemPrompt = composeSystemPrompt(
-		baseSystemPrompt(pc.SystemPromptOverride, a.docsPromptNote, a.tierPolicyNote), "", pc.PromptAppends...)
+		baseSystemPrompt(pc.SystemPromptOverride, a.docsPromptNote, a.tierPolicyNote, a.toolRosterNote), "", pc.PromptAppends...)
 	return nil
 }
 
@@ -499,10 +602,17 @@ func (a *Agent) switchWorkspace(dir string) error {
 // the base planning prompt so the planner is tunable without a rebuild, the way SYSTEM.md
 // overrides the executor's base. The structured Plan output is enforced by responseFormat
 // regardless of the prompt, so an override cannot break the plan contract.
-func NewPlanner(p provider.Provider, model, promptOverride string, obs Observer) *Agent {
+//
+// environment is the executor's live EnvironmentSummary (tools + tier + host resources),
+// appended so the planner plans within what the execution agent actually has right now —
+// generated from the real toolset, not a hand-maintained list, and regenerated per run.
+func NewPlanner(p provider.Provider, model, promptOverride, environment string, obs Observer) *Agent {
 	base := plannerPrompt
 	if promptOverride != "" {
 		base = promptOverride
+	}
+	if strings.TrimSpace(environment) != "" {
+		base += "\n\n--- Execution environment ---\n" + environment
 	}
 	a := newAgent(p, model, base, []tools.Tool{
 		tools.WebSearchDDG,
