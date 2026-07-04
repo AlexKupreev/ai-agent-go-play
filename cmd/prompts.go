@@ -75,6 +75,10 @@ const (
 	systemPromptFile = "SYSTEM.md"
 	agentsFile       = "AGENTS.md"
 	agentsAliasFile  = "CLAUDE.md"
+	// plannerPromptFile overrides the built-in planner prompt (the pre-execution
+	// clarify/refine pass), so planner behavior is tunable without a rebuild and is
+	// re-read on /reload like the other prompt files.
+	plannerPromptFile = "PLANNER.md"
 )
 
 // promptFiles carries the operator's prompt customization read from disk, ready to hand to
@@ -83,6 +87,10 @@ const (
 type promptFiles struct {
 	Override string
 	Appends  []string
+	// PlannerOverride is the operator's PLANNER.md (empty ⇒ built-in planner prompt). It
+	// replaces the planner's base prompt, assembled with the same tier gate + project-wins
+	// precedence as Override.
+	PlannerOverride string
 }
 
 // loadPrompts assembles the two-tier prompt customization (prompts.md §2, workspace.md §3/§5):
@@ -120,6 +128,9 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 		}
 		if ws.Override != "" {
 			pf.Override = ws.Override // project SYSTEM.md wins outright
+		}
+		if ws.PlannerOverride != "" {
+			pf.PlannerOverride = ws.PlannerOverride // project PLANNER.md wins outright
 		}
 		pf.Appends = append(pf.Appends, ws.Appends...) // project appended after global
 	}
@@ -192,6 +203,12 @@ func loadPromptTier(dir string) (promptFiles, error) {
 		return promptFiles{}, err
 	}
 	pf.Override = override
+
+	plannerOverride, err := readOptionalFile(filepath.Join(dir, plannerPromptFile))
+	if err != nil {
+		return promptFiles{}, err
+	}
+	pf.PlannerOverride = plannerOverride
 
 	agents, err := readOptionalFile(filepath.Join(dir, agentsFile))
 	if err != nil {

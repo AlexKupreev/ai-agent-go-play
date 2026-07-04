@@ -68,8 +68,13 @@ the built-in base plus operator/project files, read from **both anchors**:
 
 | File | Effect | Combined across tiers |
 | --- | --- | --- |
-| `SYSTEM.md` | **Replaces** the built-in base prompt | project (workspace) wins outright over global (config-dir) |
-| `AGENTS.md` (alias `CLAUDE.md`) | **Appended** as operator/project instructions | global first, then project, concatenated (project has the last word) |
+| `SYSTEM.md` | **Replaces** the built-in base prompt (executor) | project (workspace) wins outright over global (config-dir) |
+| `AGENTS.md` (alias `CLAUDE.md`) | **Appended** as operator/project instructions (executor) | global first, then project, concatenated (project has the last word) |
+| `PLANNER.md` | **Replaces** the built-in planner prompt (the pre-execution clarify/refine pass) | project (workspace) wins outright over global (config-dir) |
+
+`PLANNER.md` tunes only the planner (`agent run`, `agent chat --plan`); the planner's structured
+Plan output is enforced by a JSON schema regardless, so an override can't break the plan contract.
+It is re-read on each planned turn / run (and on `/reload`), so edits take effect without a rebuild.
 
 Precedence is **project over global**, matching pi. When both `AGENTS.md` and `CLAUDE.md` exist in
 one directory, `AGENTS.md` wins (the alias is not also appended). The workspace tier is
@@ -81,8 +86,8 @@ Two escape hatches:
 - `--context-file <path>` (repeatable) — extra prompt file(s) appended last, **always honored
   regardless of tier** (you named them). A missing named file is an error (unlike absent tier
   files, which are a no-op).
-- `--no-context-files` — ignore all `SYSTEM.md` / `AGENTS.md` / `--context-file` loading and run on
-  the bare built-in base prompt (reproducible runs, debugging).
+- `--no-context-files` — ignore all `SYSTEM.md` / `AGENTS.md` / `PLANNER.md` / `--context-file`
+  loading and run on the bare built-in base prompts (reproducible runs, debugging).
 
 ---
 
@@ -180,7 +185,7 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `--config-dir` (global flag) | `AI_AGENT_CONFIG_DIR` | Agent identity dir: config/tools/memory/audit + global prompt files & agent types. Default `~/.config/ai-agent`. |
 | `--workspace` (global flag) | — | Project the agent acts on: shell cwd + project prompt files & agent types. Default: process cwd. |
 | `--context-file` (global flag, repeatable) | — | Extra prompt file(s) appended last, always loaded regardless of tier. |
-| `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`--context-file`; run on the bare base prompt. |
+| `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`PLANNER.md`/`--context-file`; run on the bare base prompts. |
 | `--no-project` (global flag) | — | Flat-repo mode: no named-project registry and no list/create/switch_project tools. |
 | `--project` (global flag) | — | Activate a project at launch by uid, title, or path; the workspace becomes its directory. |
 | `projects` | `--no-project` flag | Whether the project registry is enabled by default (built-in default on). Set with `config set-projects`. |
@@ -211,14 +216,14 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
 | `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
 | `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
-| `<config-dir>/SYSTEM.md`, `AGENTS.md` | Global prompt customization (optional). |
+| `<config-dir>/SYSTEM.md`, `AGENTS.md`, `PLANNER.md` | Global prompt customization (optional; `PLANNER.md` overrides the planner). |
 | `<config-dir>/agents/<name>.md` | Global sub-agent type definitions (optional). |
 
 Under the **workspace** (the project dir; default the cwd), optional and tier-gated:
 
 | Path | What |
 | --- | --- |
-| `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`) | Project prompt customization. |
+| `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`), `PLANNER.md` | Project prompt customization (`PLANNER.md` overrides the planner). |
 | `<workspace>/agents/<name>.md` | Project sub-agent type definitions. |
 | `<workspace>/projects/<slug>-<uid>/.agent/project.md` | A named project's registry marker (title, uid, timestamps). Disabled by `--no-project`; relocated by `projects_root`. |
 

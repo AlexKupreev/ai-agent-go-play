@@ -81,7 +81,14 @@ var runCmd = &cobra.Command{
 		}
 		runStart := time.Now()
 
-		planner := agent.NewPlanner(prov, model, obs)
+		// Prompt customization (SYSTEM.md/AGENTS.md/PLANNER.md) read once, shared by the
+		// planner (PLANNER.md) and the executor (SYSTEM.md/AGENTS.md) below.
+		prompts, err := loadPrompts(workDir, tier)
+		if err != nil {
+			return err
+		}
+
+		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(ctx, task)
 		if err != nil {
@@ -138,11 +145,6 @@ var runCmd = &cobra.Command{
 		}
 		if central != nil {
 			defer central.Close()
-		}
-
-		prompts, err := loadPrompts(workDir, tier)
-		if err != nil {
-			return err
 		}
 
 		catalog, err := loadAgentCatalog(workDir, tier)

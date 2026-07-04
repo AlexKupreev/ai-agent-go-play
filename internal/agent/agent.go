@@ -494,8 +494,17 @@ func (a *Agent) switchWorkspace(dir string) error {
 // NewPlanner creates an agent that clarifies and refines a task before execution.
 // It has no shell access — only web research and the ability to ask the user questions.
 // Its final response is a structured Plan enforced via JSON schema.
-func NewPlanner(p provider.Provider, model string, obs Observer) *Agent {
-	a := newAgent(p, model, plannerPrompt, []tools.Tool{
+//
+// promptOverride (an operator PLANNER.md, empty ⇒ the built-in plannerPrompt) replaces
+// the base planning prompt so the planner is tunable without a rebuild, the way SYSTEM.md
+// overrides the executor's base. The structured Plan output is enforced by responseFormat
+// regardless of the prompt, so an override cannot break the plan contract.
+func NewPlanner(p provider.Provider, model, promptOverride string, obs Observer) *Agent {
+	base := plannerPrompt
+	if promptOverride != "" {
+		base = promptOverride
+	}
+	a := newAgent(p, model, base, []tools.Tool{
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		// The planner runs CLI-side only (run / chat --plan), so its clarifying questions

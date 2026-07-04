@@ -15,7 +15,6 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
-	"ai-agent-go-play/internal/provider"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/tools"
 
@@ -143,6 +142,17 @@ var chatCmd = &cobra.Command{
 			}), nil
 		}
 
+		// buildPlanner constructs a fresh planner, re-reading PLANNER.md each time so an edit
+		// takes effect on the next planned turn without a restart (mirrors buildExecutor for
+		// the pre-execution clarify/refine pass). Used per turn only when --plan is set.
+		buildPlanner := func() (*agent.Agent, error) {
+			prompts, err := loadPrompts(workDir, tier)
+			if err != nil {
+				return nil, err
+			}
+			return agent.NewPlanner(prov, model, prompts.PlannerOverride, obs), nil
+		}
+
 		// One executor for the whole session: its conversation persists across turns.
 		executor, err := buildExecutor()
 		if err != nil {
@@ -210,7 +220,7 @@ var chatCmd = &cobra.Command{
 
 			before, beforeSteps := usage.Total(), usage.Steps()
 			turnStart := time.Now()
-			if err := runTurn(sigCh, executor, prov, model, obs, line); err != nil {
+			if err := runTurn(sigCh, executor, buildPlanner, line); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
 			// Per-turn usage is the accumulator's delta; also show the session total.
@@ -225,7 +235,7 @@ var chatCmd = &cobra.Command{
 
 // runTurn runs one chat turn under a cancellable context (Ctrl-C cancels just this
 // turn). When the planner is enabled it refines the input first, mirroring `agent run`.
-func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, prov provider.Provider, model string, obs agent.Observer, line string) error {
+func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func() (*agent.Agent, error), line string) error {
 	// Discard any Ctrl-C that arrived while idle at the prompt.
 	select {
 	case <-sigCh:
@@ -248,7 +258,10 @@ func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, prov provider.Provid
 	input := line
 	if chatPlanFlag {
 		// A fresh planner per turn: planning is independent of the running dialogue.
-		planner := agent.NewPlanner(prov, model, obs)
+		planner, err := buildPlanner()
+		if err != nil {
+			return fmt.Errorf("planner: %w", err)
+		}
 		planJSON, err := planner.Run(ctx, line)
 		if err != nil {
 			return fmt.Errorf("planner: %w", err)

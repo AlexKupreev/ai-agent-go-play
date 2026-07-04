@@ -260,10 +260,11 @@ it's acting on — per-run, trusted only above `safe`). The full model, preceden
 tier gate live in [`environment.md`](environment.md); the operational summary:
 
 - **System prompt / operator instructions.** `SYSTEM.md` **replaces** the built-in base prompt;
-  `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. Drop either in the config-dir
-  (global) and/or the workspace (project); project wins over global. `--context-file <path>`
-  (repeatable) appends an extra file regardless of tier; `--no-context-files` ignores them all
-  for a reproducible run on the bare base prompt.
+  `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. `PLANNER.md` **replaces** the
+  built-in planner prompt (the pre-execution clarify/refine pass; `agent run` and `chat --plan`).
+  Drop any in the config-dir (global) and/or the workspace (project); project wins over global.
+  `--context-file <path>` (repeatable) appends an extra file regardless of tier; `--no-context-files`
+  ignores them all for a reproducible run on the bare base prompts.
 - **Sub-agent types.** Declare delegatable agents as `agents/<name>.md` (YAML frontmatter +
   a body that is the sub-agent's system prompt) under the config-dir and/or workspace. The agent
   reaches them through a `spawn_agent(type, task)` tool; built-in types `researcher` and
