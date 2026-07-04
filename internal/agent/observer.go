@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -168,10 +170,24 @@ func (g *GatedObserver) SetEnabled(on bool) { g.on.Store(on) }
 // Enabled reports whether events are currently forwarded.
 func (g *GatedObserver) Enabled() bool { return g.on.Load() }
 
-// CLIObserver prints the human-facing trace (the old verbose output) to a writer.
-type CLIObserver struct{ w io.Writer }
+// ANSI styling for the trace. Grey (bright-black) so the whole intermediate trace
+// visually recedes behind the final answer, which the command prints in the default
+// colour. Emitted only when the sink is a real terminal (see colorEnabled).
+const (
+	ansiGrey  = "\x1b[90m"
+	ansiReset = "\x1b[0m"
+)
 
-func NewCLIObserver(w io.Writer) *CLIObserver { return &CLIObserver{w: w} }
+// CLIObserver prints the human-facing trace (the old verbose output) to a writer. The
+// model's intermediate "thinking" (the preamble it writes before a tool call) is wrapped
+// in a bounded, dimmed block so it is clearly separable from the final answer — the trace
+// is the agent's work-in-progress, not its output.
+type CLIObserver struct {
+	w     io.Writer
+	color bool
+}
+
+func NewCLIObserver(w io.Writer) *CLIObserver { return &CLIObserver{w: w, color: colorEnabled(w)} }
 
 func (c *CLIObserver) Emit(e Event) {
 	switch e.Kind {
@@ -181,13 +197,54 @@ func (c *CLIObserver) Emit(e Event) {
 		// answer, which the command prints itself — printing it here too would
 		// duplicate it.
 		if e.Text != "" && len(e.Calls) > 0 {
-			fmt.Fprintf(c.w, "%s%s\n", subAgentPrefix(e), e.Text)
+			c.thinking(e)
 		}
 	case EvToolStart:
-		fmt.Fprintf(c.w, "\n%s[tool: %s] %s\n", subAgentPrefix(e), e.Call.Name, string(e.Call.Input))
+		c.line(fmt.Sprintf("%s[tool: %s] %s", subAgentPrefix(e), e.Call.Name, string(e.Call.Input)))
 	case EvToolResult:
-		fmt.Fprintf(c.w, "%s[result] %s\n", subAgentPrefix(e), e.Result)
+		c.line(fmt.Sprintf("%s[result] %s", subAgentPrefix(e), e.Result))
 	}
+}
+
+// thinking renders the model's preamble as a bounded, dimmed block so it reads as
+// internal reasoning rather than the answer:
+//
+//	╭─ thinking ─
+//	│ <text…>
+//	╰─
+func (c *CLIObserver) thinking(e Event) {
+	prefix := subAgentPrefix(e)
+	fmt.Fprintln(c.w)
+	c.line(prefix + "╭─ thinking ─")
+	for ln := range strings.SplitSeq(strings.TrimRight(e.Text, "\n"), "\n") {
+		c.line(prefix + "│ " + ln)
+	}
+	c.line(prefix + "╰─")
+}
+
+// line writes one trace line, dimmed to grey when the sink supports colour.
+func (c *CLIObserver) line(s string) {
+	if c.color {
+		fmt.Fprintf(c.w, "%s%s%s\n", ansiGrey, s, ansiReset)
+		return
+	}
+	fmt.Fprintln(c.w, s)
+}
+
+// colorEnabled reports whether ANSI styling should be emitted to w: only when w is a
+// real terminal (a char device) and the environment does not opt out (NO_COLOR, or a
+// dumb TERM). Non-terminal sinks (a pipe, a file, a test buffer) get plain text, so
+// captured/redirected output stays clean and tests are unaffected.
+func colorEnabled(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	f, ok := w.(interface{ Stat() (os.FileInfo, error) })
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // subAgentPrefix indents and labels a sub-run's line so a spawned agent's activity is

@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"ai-agent-go-play/internal/audit"
@@ -62,6 +64,34 @@ func TestGatedObserver_ForwardsOnlyWhenEnabled(t *testing.T) {
 
 	if len(inner.events) != 1 || inner.events[0].Kind != EvResponse {
 		t.Fatalf("forwarded events = %v, want one EvResponse", inner.kinds())
+	}
+}
+
+// TestCLIObserver_ThinkingBlock checks that the model's preamble (a response that
+// precedes a tool call) is wrapped in a bounded "thinking" block so it is separable
+// from the final answer, while a response with no tool calls (the final answer) is NOT
+// printed by the observer — the command prints that itself. A non-terminal sink (this
+// buffer) gets plain text with no ANSI escapes.
+func TestCLIObserver_ThinkingBlock(t *testing.T) {
+	var buf bytes.Buffer
+	obs := NewCLIObserver(&buf)
+
+	// Preamble: text alongside a tool call → rendered as a bounded thinking block.
+	obs.Emit(Event{Kind: EvResponse, Text: "let me search\nfor it", Calls: []provider.ToolCall{{Name: "web_search"}}})
+	// Final answer: text with no tool calls → the observer must stay silent.
+	obs.Emit(Event{Kind: EvResponse, Text: "the answer is 42"})
+
+	got := buf.String()
+	for _, want := range []string{"╭─ thinking ─", "│ let me search", "│ for it", "╰─"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("trace missing %q\nfull:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "the answer is 42") {
+		t.Errorf("observer printed the final answer (should be left to the command):\n%s", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("non-terminal sink got ANSI escapes:\n%q", got)
 	}
 }
 

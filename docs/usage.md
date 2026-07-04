@@ -46,8 +46,12 @@ Optional defaults (both overridable per-run with `--model` / `--tier`):
 
 The CLI tool-call trace is off by default; turn it on per run with `--verbose` (or off with
 `--quiet`), or as a default with `config set-verbose` / `AI_AGENT_VERBOSE`. In `chat` it is
-also togglable live with `/verbose [on|off]`. The trace is display-only — the full transcript
-is always written to disk regardless.
+also togglable live with `/verbose [on|off]`. When shown, the whole trace is rendered in **grey**
+and the model's intermediate reasoning is wrapped in a bounded `╭─ thinking ─ … ╰─` block, so it
+reads as work-in-progress and stays visually distinct from the final answer (which prints in the
+default colour). Colour is emitted only to a real terminal — piped/redirected output stays plain
+(honours `NO_COLOR`). The trace is display-only — the full transcript is always written to disk
+regardless.
 
 Everything is stored under `~/.config/ai-agent/` — see [`environment.md`](environment.md#files-on-disk).
 
