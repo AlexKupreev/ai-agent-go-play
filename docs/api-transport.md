@@ -150,7 +150,8 @@ A frontend is just another `api.Client` consumer — no privileged path into the
 optional Telegram bot (`internal/frontend/telegram`, Phase 4e-6) is the reference: a `Bot` maps each
 chat to an engine **session**, turning a chat message into a *turn* (`PostTurn`) and the pushed
 `approval_requested` event into an **Approve/Deny inline keyboard** wired back to `Client.Resolve`.
-`/new` starts a fresh session, `/end` terminates it. Its chat backend sits behind a
+`/new` (alias `/reset`) starts a fresh session, `/end` terminates it, and `/reload` re-reads
+the engine's prompt/agent-type files (⇢ `POST /reload`, allowlist-gated). Its chat backend sits behind a
 `Transport` interface so the bot logic is tested with a fake and no network; the live transport
 (`NewHTTPTransport`, backed by the `go-telegram-bot-api` SDK) long-polls the Bot API. The bot is
 **optional and

@@ -43,10 +43,10 @@ var chatCmd = &cobra.Command{
 		"--session <id> to resume one.\n\n" +
 		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
 		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
-		"Commands (local): /reset clears the conversation, /verbose [on|off] toggles the trace, " +
-		"/exit (or Ctrl-D) quits.\n" +
-		"Commands (--addr): /reset starts a fresh session, /end closes the session, /exit (or " +
-		"Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
+		"Commands (local): /new (alias /reset) clears the conversation, /verbose [on|off] toggles " +
+		"the trace, /exit (or Ctrl-D) quits.\n" +
+		"Commands (--addr): /new (alias /reset) starts a fresh session, /end closes the session, " +
+		"/exit (or Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if chatAddrFlag != "" {
@@ -150,7 +150,7 @@ var chatCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, verbose %s\n", executor.Model(), tier, onOff(chatPlanFlag), onOff(trace.Enabled()))
-		fmt.Fprintf(os.Stderr, "session %s  (/reset to clear, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
+		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -187,7 +187,9 @@ var chatCmd = &cobra.Command{
 				continue
 			case "/exit", "/quit":
 				return nil
-			case "/reset":
+			case "/reset", "/new":
+				// /new + /reset are aliases (matching the remote REPL and Telegram bot):
+				// in the local in-process chat, "start fresh" means clearing the history.
 				executor.Reset()
 				fmt.Fprintln(os.Stderr, "(conversation cleared)")
 				continue

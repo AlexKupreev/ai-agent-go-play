@@ -141,7 +141,7 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
 ./agent chat --tier safe     # per-session model/tier, same flags as `run`
 ```
 
-- **Commands:** `/reset` clears the conversation and starts fresh; `/reload` re-reads the
+- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/reload` re-reads the
   prompt files and agent-type catalog and rebuilds the executor *without losing the
   conversation* (edit a `SYSTEM.md`/`AGENTS.md`/`agents/*.md`, `/reload`, keep going — a
   malformed file is reported and the current setup is kept); `/exit` (or Ctrl-D) quits.
@@ -165,8 +165,8 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 ./agent chat --addr home --session <id>     # resume an existing conversation
 ```
 
-- **Commands (remote):** `/reset` starts a fresh session (closing the old one); `/end`
-  closes the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable
+- **Commands (remote):** `/new` (alias `/reset`) starts a fresh session (closing the old
+  one); `/end` closes the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable
   (the resume command is printed on exit). **Ctrl-C** cancels the current turn (stopping the
   remote run) and returns you to the prompt.
 - Approvals are the engine's **shared** queue: an escalation you don't answer here is the
@@ -542,9 +542,12 @@ only — the system prompt is re-seeded from current code each turn.
 A Telegram bot can act as a peer client of the engine. Each chat maps to a **session**
 (a persistent conversation, below): a message runs a turn with retained context, events
 stream back, and a parked approval becomes an Approve/Deny inline keyboard. Chat commands:
-**`/new`** starts a fresh session, **`/end`** terminates the current one (a session is also
-created automatically on your first message). It is **entirely optional**: with no token
-set, the engine runs exactly as normal.
+**`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates the current one
+(a session is also created automatically on your first message), and **`/reload`** re-reads the
+engine's prompt files + agent-type catalog (effective from your next message — the same
+management action as `agent reload`, gated by the bot's allowlist). The `/new` + `/reset` +
+`/end` verbs match the CLI chat REPL. It is **entirely optional**: with no token set, the
+engine runs exactly as normal.
 
 Enable it by supplying a token (config *or* env; env wins) plus an allowlist of Telegram
 user ids that may drive the engine:

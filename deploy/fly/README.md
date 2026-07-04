@@ -56,7 +56,8 @@ fly secrets set AI_AGENT_TELEGRAM_TOKEN=123456:abcdef -a ai-agent
 # 4. Deploy.
 fly deploy -c deploy/fly/fly.one-agent.toml
 
-# 5. Message your bot on Telegram. /new starts a session; send a task.
+# 5. Message your bot on Telegram. /new (or /reset) starts a session; send a task.
+#    /end closes it; /reload re-reads prompt/agent-type files without a restart.
 ```
 
 Watch it come up with `fly logs`. You should see `telegram: bot enabled`. If the
@@ -135,6 +136,11 @@ Prefer this to exposing the port. If you truly need remote API access, bind `ser
 to the machine's private 6PN address and `fly proxy` over WireGuard — but that trades
 the localhost boundary for "trust Fly's private network", and the engine still has no
 auth, so only do it in a single-user org.
+
+**Reloading prompts without SSH.** After editing the prompt/agent-type files on the
+volume, you no longer need to SSH in to run `agent reload`: send **`/reload`** to the
+bot in Telegram (allowlist-gated) and the edits take effect on your next message. SSH is
+still the way to *edit* those files on `/data`; `/reload` just applies them live.
 
 ## Notes
 
