@@ -120,7 +120,9 @@ aliases](#engine-aliases)).
 ./agent run --verbose <task>     # also print tool calls + results to stderr
 ```
 
-Flags: `--model`, `--tier` (override config for this run), `--verbose`.
+Flags: `--model`, `--tier` (override config for this run), `--verbose`. The global
+`--workspace`, `--no-project`, and `--project` flags (see [Projects](#projects--named-recallable-workspaces))
+apply here too.
 
 ### `agent chat`
 
@@ -312,6 +314,40 @@ Each variant runs the executor directly (no planner) with a fresh context, shari
 tool catalog and memory. The report is a table (variant, effective model, steps, tokens,
 duration, status) followed by each variant's full output; a variant that errors is captured so
 the rest still report, and **Ctrl+C** stops after the current variant.
+
+---
+
+## Projects — named, recallable workspaces
+
+For conversational use (`chat`, `serve`, Telegram), the agent can keep work as **named
+projects** it recalls by intent and switches into mid-conversation — *"let's go back to the
+articles from last time"* — without you naming a path. Projects live under the workspace at
+`<workspace>/projects/<slug>-<uid>/`, each with a small `.agent/project.md` marker; **the
+filesystem is the registry** (no separate index). The full model is in
+[`environment.md`](environment.md#projects--named-recallable-workspaces); operationally the agent
+drives it through three tools:
+
+- **`list_projects`** — what projects exist (uid, title, description, recency).
+- **`create_project`** — mint and switch into a new project (**asks first**, and is audited);
+  promotion moves scratch work in.
+- **`switch_project`** — recall one by uid or title and re-anchor onto it (re-runs the tier gate
+  on its prompt files; audited).
+
+You usually don't manage these yourself — you talk, the agent calls them. What you control is
+whether the registry is on and where it lives:
+
+```bash
+./agent chat                              # default: registry at <workspace>/projects
+./agent run --no-project "fix the flaky test"   # flat-repo mode: no registry, act on the repo
+./agent chat --project articles           # activate a project at launch (by uid, title, or path)
+./agent config set-projects off           # disable the registry by default
+./agent config set-projects-root ~/work   # put the registry somewhere other than <workspace>/projects
+```
+
+`--no-project` (or config `projects: false`) is the pi-faithful "I cd'd into this repo, just act
+on it" path — no `projects/` folder is created and the three tools are omitted. `--project` and
+`--no-project` are mutually exclusive; an explicit `--project` re-enables the registry even if
+config disabled it.
 
 ---
 

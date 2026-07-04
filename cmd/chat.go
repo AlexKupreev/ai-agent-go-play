@@ -56,7 +56,11 @@ var chatCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		workDir, err := resolveWorkspace()
+		homeWorkDir, err := resolveWorkspace()
+		if err != nil {
+			return err
+		}
+		projectsRoot, workDir, err := resolveProjects(homeWorkDir, cfg)
 		if err != nil {
 			return err
 		}
@@ -134,6 +138,8 @@ var chatCmd = &cobra.Command{
 				Usage: tools.UsageContext{}, AuditReader: rec,
 				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 				AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+				ProjectsRoot:    projectsRoot,
+				SwitchWorkspace: switchWorkspaceFn(tier),
 			}), nil
 		}
 

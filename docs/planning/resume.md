@@ -2,7 +2,141 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-07-03._
+_Last session: 2026-07-04._
+
+---
+
+## Latest (2026-07-04): Projects track — P5 (docs) — DONE → Projects track COMPLETE
+
+Documented the Projects feature ([`projects.md`](projects.md) P5), closing the track (P1–P5 all done).
+Docs-only; `go build ./...` + selfdocs/cmd tests green (`environment.md` is embedded, so
+`read_self_docs` now serves the projects section).
+
+- **`docs/environment.md`** — new "Projects — named, recallable workspaces" section (the `projects/`
+  layout, trust-by-containment + tier gate on switch, the three tools as a table, the P4 flag/config
+  modes as a table + precedence). Added rows to the config-reference table (`--no-project`, `--project`,
+  `projects`, `projects_root`) and the files-on-disk table (`.agent/project.md` marker), and a pointer
+  from "Two anchors".
+- **`docs/usage.md`** — new "Projects" operational section (what the tools do, the flags, flat-repo
+  mode) + a pointer from the `agent run` flags line.
+- **`README.md`** — "Named projects" paragraph in the customize/experiment block.
+- `workspace.md` §6 was already "resolved — see projects.md" from P3, so untouched.
+
+**Projects track is COMPLETE.** Remaining optional follow-ups (not scheduled): auto-switch-on-create
+via the `switchWorkspace` seam; bump `last_active` on switch so recall recency reflects use (currently
+create-time only). **NEXT candidates across the repo:** Scheduling S1 (schedule store + `schedule_task`
+tool, no trigger); Phase 6d (budget dial + context-window awareness); deferred sub-agent fan-out.
+**Nothing pushed** — all commits local on `main`.
+
+### Prior (2026-07-04): Projects track — P4 (CLI flags) — DONE
+
+CLI/config control over the projects registry ([`projects.md`](projects.md) P4/§6). Build/vet/`go
+test -race` green (full suite); flags, error paths, and config persistence live-verified via the binary.
+
+- **One seam.** `cmd/projects.go` `resolveProjects(homeWorkDir, cfg) → (root, workDir, err)` replaces
+  the hard-wired `ProjectsRoot: projects.Root(workDir)` in `run`/`chat`/`serve`. Returns the registry
+  root (empty ⇒ list/create/switch_project omitted — same gate the executor already had) and the launch
+  workspace.
+- **Flags** (persistent, in `root.go`): `--no-project` = flat-repo mode (no registry/tools, workspace *is*
+  the repo); `--project <uid|title|path>` activates a project at launch (existing dir ⇒ used as a path,
+  else `projects.Resolve` against the root; ambiguous/absent reported). On activation the **workspace
+  becomes the project dir** but **root stays the home registry**, so `switch_project` still reaches
+  siblings; prints a `project: <path>` line.
+- **Config** (`Config.Projects *bool` — unset ⇒ enabled; `Config.ProjectsRoot string`): `projects:false`
+  disables by default, `projects_root` redirects the registry. Setters `config set-projects <on|off>` /
+  `set-projects-root <path>`. Precedence: `--no-project` wins outright; explicit `--project` forces on
+  (overrides config `false`); `--no-project`+`--project` is a conflict error.
+- **Serve** threads it as `serveDeps.projectsRoot` (buildExecutor reads the field instead of recomputing).
+  `eval` deliberately still untouched.
+- Tests: `cmd/projects_test.go` (default root, both disable paths, config-true/root override, conflict,
+  activate-by-title/-path, activate-overrides-config-false, unknown-is-error).
+
+**NEXT (Projects):** **P5** — docs: fold "projects" into [`../environment.md`](../environment.md)
+(scratch vs project, the `projects/` layout, the three tools, the P4 flags), update `workspace.md` §6 to
+"resolved — see projects.md", surface `list/create/switch_project` in `usage.md`/`README.md`. Then the
+optional follow-ups (auto-switch-on-create via the `switchWorkspace` seam; bump `last_active` on switch).
+Other open tracks unchanged: Scheduling S1, Phase 6d (budget dial), deferred fan-out. **Nothing pushed
+this session** — commits local on `main`.
+
+### Prior (2026-07-04): Projects track — P3 (switch) — DONE
+
+Mid-conversation project switching ([`projects.md`](projects.md) P3/§7): `switch_project(project)`
+makes a named project the active workspace *without rebuilding the executor*. Build/vet/`go test -race`
+green (full suite); the re-anchor is proven end-to-end with a scripted provider (a live model call
+needs an API key).
+
+- **Live re-anchor.** New mutable `tools.Workspace` anchor read by the shell at exec time
+  (`NewShellIn`; `NewShell(dir, gate)` now wraps `NewShellIn(NewWorkspace(dir), gate)` — signature and
+  all callers/tests unchanged). A switch calls `ws.Set(dir)`, so subsequent `cmd.Dir` moves live (§7 —
+  `cd` never persists across the per-command processes).
+- **Prompt reload under the §5 gate.** New `ExecutorConfig.SwitchWorkspace(workspace) →
+  agent.PromptCustomization` seam; `cmd/prompts.go`'s **`switchWorkspaceFn(tier)`** implements it as the
+  *same* `loadPrompts(workspace, tier)` used at build time, so the tier gate applies identically to the
+  project switched into (`safe` still won't auto-load its AGENTS.md/SYSTEM.md). `Agent.switchWorkspace`
+  re-anchors the `Workspace` + recomposes `systemPrompt` via a shared **`baseSystemPrompt(override,
+  docsNote)`** helper (captured `docsPromptNote` keeps the recomposition identical to construction);
+  the prompt is prepended fresh each request, so it takes effect next turn/step.
+- **Resolve + audit.** `projects.Resolve(root, query)`: uid exact (case-insensitive) → title exact →
+  title substring; `*AmbiguousError` (candidates) and `ErrNotFound` so the tool asks/guides rather than
+  guessing. `switch_project` is trusted, not sandbox-exposed, wired on `ProjectsRoot != "" &&
+  SwitchWorkspace != nil` after the agent exists (mutates *this* executor), in `run`/`chat`/`serve`.
+  Audited as `audit.EventProjectSwitched`.
+- Tests: `internal/projects/resolve_test.go`, switch cases in `internal/tools/projects_test.go`, and
+  `projects_e2e_test.go` (`TestSwitchProject_ReanchorsShell` — switch then `shell pwd` lands in the new
+  dir and the target's SYSTEM.md becomes the prompt; + wiring gate).
+- *Deliberately not in P3:* the agent-type catalog is **not** reloaded on switch (only the
+  trust-relevant prompt tier is); `create_project` still doesn't auto-switch, but `switchWorkspace` is
+  now the seam to fold that into.
+
+### Prior (2026-07-04): Projects track — P2 (create / promote) — DONE
+
+Write side of the Projects registry ([`projects.md`](projects.md)). Build/vet/`go test -race`
+green (full suite); the create write-path is fully unit-tested (the model-driven `create_project`
+call itself needs an API key to exercise live).
+
+- **`internal/projects/create.go`** — `Create(root, CreateOptions{Title, Description, FromPaths})`:
+  mints `<slug>-<uid>/` (`slugify` = lowercase/hyphen-collapsed/length-bounded, `project` fallback;
+  `mintUID` = 5 random bytes → lowercase unpadded base32 = 8 chars, retried on collision), creates the
+  projects root on first use, seeds `.agent/project.md` via `yaml.Marshal` (round-trips back through
+  `List` even with YAML-special chars), `created`/`last_active` = now. **Promotion** = same call with
+  `FromPaths` (`os.Rename` under base name; errors on missing source / in-project collision — work is
+  never silently dropped or clobbered).
+- **`create_project` built-in** (`internal/tools/projects.go`) — trusted, **not** sandbox-exposed;
+  side-effecting ⇒ **human-gated** (`gate.Approve`, `Kind:project.create`) + **audited**
+  (`audit.EventProjectCreated`, uid/title/path). Wired alongside `list_projects` on
+  `ExecutorConfig.ProjectsRoot`, so it rides the run/chat/serve threading already in place (no cmd change).
+- Tests: `internal/projects/create_test.go`, added cases in `internal/tools/projects_test.go`, and
+  `projects_e2e_test.go`'s wiring test widened (`TestProjectTools_Wiring`) to cover both built-ins.
+- *Not re-anchored:* create does **not** switch the workspace — auto-switch-on-create folds into P3.
+
+### Prior (2026-07-04): Projects track — P1 (marker + registry read) — DONE
+
+First slice of the Projects track ([`projects.md`](projects.md)): named, recallable workspaces.
+Build/vet/`go test -race` green (full suite); wiring covered by tests (the model-driven
+`list_projects` call itself needs an API key to exercise live).
+
+- **`internal/projects`** — the read side of the registry. `.agent/project.md` marker schema (YAML
+  frontmatter `title`/`uid`/`created`/`last_active`/`description` + optional body), `List(root)`
+  enumerating `<root>/*/.agent/project.md` (parsed via the stage-E `go.yaml.in/yaml/v3` dep), and
+  `Root(workspace)` = `<workspace>/projects`. **Filesystem IS the registry** (no index). `List` is
+  resilient: missing root ⇒ empty, no-marker dir = scratch (skipped), malformed marker skipped;
+  most-recently-active first; fallbacks (uid ← folder `<slug>-<uid>` suffix, title ← folder name,
+  last_active ← dir mtime). `splitFrontmatter` mirrors `cmd/agents.go`.
+- **`list_projects` built-in** (`internal/tools/projects.go`) — read-only, trusted, **not**
+  sandbox-exposed. Gated by new **`ExecutorConfig.ProjectsRoot`** (empty ⇒ omitted, like the other
+  optional-dep tools), threaded from the resolved workspace in `run`/`chat`/`serve` (the home/chat/serve
+  surfaces per `projects.md` §6; `eval` left untouched to keep measurements clean).
+- Tests: `internal/projects/projects_test.go`, `internal/tools/projects_test.go`,
+  `internal/agent/projects_e2e_test.go`.
+
+**NEXT (Projects):** **P4** — CLI flags: `--no-project` (flat-repo mode: workspace *is* the repo, no
+`projects/`, tools omitted), `--project <uid|title|path>` (activate/redirect at launch), config
+`projects: false` / `projects_root`, threaded through `run`/`chat`/`serve` next to `--workspace`
+(projects.md §6). Then **P5** docs (fold into `environment.md`, resolve `workspace.md` §6, surface the
+three tools in `usage.md`/`README.md`). Optional small follow-ups surfaced by P3: fold auto-switch into
+`create_project` (call the `switchWorkspace` seam), and bump `last_active` on switch so recall recency
+reflects use (currently set at create time only). Other open tracks unchanged: Phase 6d (budget dial),
+Scheduling S1, deferred fan-out. **Nothing pushed this session** — commits local on `main`.
 
 ---
 

@@ -40,6 +40,12 @@ func init() {
 	rootCmd.PersistentFlags().StringArrayVar(&contextFileFlag, "context-file", nil,
 		"extra prompt file(s) to append as operator/project instructions "+
 			"(repeatable). Named explicitly, so always loaded regardless of tier.")
+	rootCmd.PersistentFlags().BoolVar(&noProjectFlag, "no-project", false,
+		"flat-repo mode: act on the workspace directly, with no named-project "+
+			"registry and no list/create/switch_project tools (projects.md §6)")
+	rootCmd.PersistentFlags().StringVar(&projectFlag, "project", "",
+		"activate a named project at launch (by uid, title, or path); the "+
+			"workspace becomes that project's directory")
 
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)

@@ -9,6 +9,7 @@ this way, [`design.md`](design.md) and [`security.md`](security.md).
 - [Trust tier — the safety dial](#trust-tier--the-safety-dial)
 - [Prompt customization (SYSTEM.md / AGENTS.md)](#prompt-customization-systemmd--agentsmd)
 - [Sub-agent types (agents/\*.md)](#sub-agent-types-agentsmd)
+- [Projects — named, recallable workspaces](#projects--named-recallable-workspaces)
 - [Configuration & environment reference](#configuration--environment-reference)
 - [Files on disk](#files-on-disk)
 
@@ -36,7 +37,8 @@ what a single agent works on is a **workspace** change.
 
 Today the workspace resolves to the `--workspace` directory (validated, absolutized) or the
 process cwd; there is no parent-directory walk to a project root yet. `serve` uses one workspace
-(its process cwd) for every run it handles.
+(its process cwd) for every run it handles. A workspace can also be a **named project** the agent
+recalls and switches into mid-conversation — see [Projects](#projects--named-recallable-workspaces).
 
 ---
 
@@ -118,6 +120,57 @@ After editing prompt or agent-type files, pick them up without a restart: **`/re
 
 ---
 
+## Projects — named, recallable workspaces
+
+A **project** is a workspace that has been given a name and a home, so a conversation can recall
+it *by intent* (*"the articles from last time"*) and switch into it without you ever naming a
+path. It is the conversational counterpart to the cwd model: a workspace answers *what the agent
+is acting on*; a project is a workspace it can **find again**.
+
+Projects live under the home workspace, and **the filesystem is the registry** — there is no
+separate index to fall out of sync:
+
+```
+<home-workspace>/
+  projects/
+    articles-a3f9c1/
+      .agent/project.md      # title, uid, description, timestamps (YAML frontmatter)
+      … project artifacts …
+    health-analysis-7b2e04/
+      .agent/project.md
+  … scratch work lives at the workspace root, un-promoted …
+```
+
+The folder is `<slug>-<uid>`: the **uid is the stable identity** (retitle freely without moving
+the folder or breaking references), the slug a human convenience. `<home>/projects/` sits under a
+workspace you already authorized, so switching into a project inherits that trust by
+**containment** — and the switch still re-runs the [tier gate](#trust-tier--the-safety-dial) on
+the target's prompt files, so a just-scaffolded project's `AGENTS.md` doesn't auto-load on `safe`.
+
+The agent works the loop **scratch → promote → recall → switch** through three trusted built-in
+tools (never exposed to sandboxed `call_tool`), offered whenever the registry is enabled:
+
+| Tool | Does |
+| --- | --- |
+| `list_projects()` | Enumerate the registry (uid, title, description, last-active) — how the agent knows what exists. |
+| `create_project(title, description?)` | Mint `<slug>-<uid>/`, seed the marker, switch into it. **Human-gated + audited.** Promotion = the same call moving scratch artifacts in. |
+| `switch_project(uid \| title)` | Resolve (uid exact → title exact → title substring; ambiguous is *reported*, not guessed) and re-anchor the workspace + reload the project prompt tier. **Audited.** |
+
+**CLI control** (projects.md §6) — three modes, alongside `--workspace`:
+
+| Flag / config | Effect |
+| --- | --- |
+| *(default)* | Registry active at `<workspace>/projects`; the agent works at the home root until it creates/switches into a project. |
+| `--no-project` (or config `projects: false`) | **Flat-repo mode:** no registry, no project tools, the workspace *is* the repo. The pi-faithful "I cd'd in, just act on this" path. |
+| `--project <uid\|title\|path>` | Activate a project **at launch** — the workspace becomes that project's directory (a path is used directly; a uid/title is resolved against the registry). The registry root stays the home one, so `switch_project` can still reach siblings. |
+| config `projects_root` | Point the registry somewhere other than `<workspace>/projects`. |
+
+Precedence: `--no-project` wins outright; an explicit `--project` forces projects on (overriding
+config `projects: false`); `--no-project` together with `--project` is an error. Set the config
+defaults with `agent config set-projects <on|off>` / `set-projects-root <path>`.
+
+---
+
 ## Configuration & environment reference
 
 Config file: `<config-dir>/config.json` (created by `config set-*`).
@@ -128,6 +181,10 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `--workspace` (global flag) | — | Project the agent acts on: shell cwd + project prompt files & agent types. Default: process cwd. |
 | `--context-file` (global flag, repeatable) | — | Extra prompt file(s) appended last, always loaded regardless of tier. |
 | `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`--context-file`; run on the bare base prompt. |
+| `--no-project` (global flag) | — | Flat-repo mode: no named-project registry and no list/create/switch_project tools. |
+| `--project` (global flag) | — | Activate a project at launch by uid, title, or path; the workspace becomes its directory. |
+| `projects` | `--no-project` flag | Whether the project registry is enabled by default (built-in default on). Set with `config set-projects`. |
+| `projects_root` | — | Registry location; default `<workspace>/projects`. Set with `config set-projects-root`. |
 | `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share nothing. |
 | `openai_key` | — | OpenAI API key. |
 | `model` | `--model` flag | Default model (built-in default `gpt-4o-mini`). |
@@ -163,6 +220,7 @@ Under the **workspace** (the project dir; default the cwd), optional and tier-ga
 | --- | --- |
 | `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`) | Project prompt customization. |
 | `<workspace>/agents/<name>.md` | Project sub-agent type definitions. |
+| `<workspace>/projects/<slug>-<uid>/.agent/project.md` | A named project's registry marker (title, uid, timestamps). Disabled by `--no-project`; relocated by `projects_root`. |
 
 Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /
 `AI_AGENT_SESSIONS_DIR`):

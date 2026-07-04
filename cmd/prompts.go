@@ -139,6 +139,21 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 	return pf, nil
 }
 
+// switchWorkspaceFn is the executor's project-switch reload seam (projects.md P3, §7). It
+// returns a loader that re-reads a target workspace's prompt customization via loadPrompts —
+// the same two-tier assembly used at build time, so the §5 tier gate applies identically to
+// the project being switched into (at safe, its AGENTS.md/SYSTEM.md still won't auto-load).
+// The agent calls it, then re-anchors its shell working directory and recomposes its prompt.
+func switchWorkspaceFn(tier capability.Tier) func(string) (agent.PromptCustomization, error) {
+	return func(workspace string) (agent.PromptCustomization, error) {
+		pf, err := loadPrompts(workspace, tier)
+		if err != nil {
+			return agent.PromptCustomization{}, err
+		}
+		return agent.PromptCustomization{SystemPromptOverride: pf.Override, PromptAppends: pf.Appends}, nil
+	}
+}
+
 // loadWorkspaceTier reports whether the workspace prompt tier should be auto-loaded. It is
 // gated by trust (workspace.md §5): the safe tier does not auto-load an untrusted checkout's
 // files, but an explicit --workspace authorizes them. It is also suppressed when the workspace

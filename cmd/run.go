@@ -56,7 +56,11 @@ var runCmd = &cobra.Command{
 		fmt.Fprintf(os.Stderr, "Log:    %s\n", log.Path)
 		fmt.Fprintf(os.Stderr, "Task:   %s\n\n", task)
 
-		workDir, err := resolveWorkspace()
+		homeWorkDir, err := resolveWorkspace()
+		if err != nil {
+			return err
+		}
+		projectsRoot, workDir, err := resolveProjects(homeWorkDir, cfg)
 		if err != nil {
 			return err
 		}
@@ -153,6 +157,8 @@ var runCmd = &cobra.Command{
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+			ProjectsRoot:    projectsRoot,
+			SwitchWorkspace: switchWorkspaceFn(tier),
 		})
 		result, err := executor.Run(ctx, plan.RefinedTask)
 		if err != nil {

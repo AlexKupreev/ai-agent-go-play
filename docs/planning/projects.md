@@ -8,8 +8,9 @@ the conversational counterpart to [`workspace.md`](workspace.md)'s cwd model: a 
 it can be found again**. Companion to [`workspace.md`](workspace.md) (the anchor a project *is*),
 [`prompts.md`](prompts.md) (a project carries the project prompt tier), and
 [`subagents.md`](subagents.md) (a scout / worktree operates on the active project). **Status:
-design only — nothing built.** This doc resolves the mid-session-switch and "who vouches for a
-workspace" open questions left in [`workspace.md`](workspace.md) §6.
+built — P1–P5 complete** (registry read, create/promote, mid-session switch, CLI flags, docs; see
+§9). This doc resolves the mid-session-switch and "who vouches for a workspace" open questions left
+in [`workspace.md`](workspace.md) §6.
 
 ---
 
@@ -184,19 +185,73 @@ session's active project is switchable state, and the vouch is the user's in-con
 
 ## 9. Tasks (when built)
 
-- [ ] **P1 — Marker + registry read.** `.agent/project.md` schema (frontmatter: `title`, `uid`,
-  `created`, `last_active`, `description`); a `projects` package that enumerates
-  `<home>/projects/*/.agent/project.md` and parses via the existing YAML dep. `list_projects` built-in.
-- [ ] **P2 — Create / promote.** `create_project(title, description?)` — slug + UID minting, mkdir,
-  seed marker, switch; promotion = create + move `from_paths`. Trusted built-in, permission-gated
-  (side-effecting: mkdir + registry write).
-- [ ] **P3 — Switch.** `switch_project(uid|title)` reusing the stage-F reload seam
-  (`buildExecutor`/`promptState`) to re-anchor `WorkDir` + reload the project prompt tier under the
-  §5 gate; audit event on switch; title→path fuzzy resolve with disambiguation.
-- [ ] **P4 — CLI flags.** `--no-project` (flat repo mode) + `--project <uid|title|path>` +
-  config `projects: false` / `projects_root`, threaded through `run`/`chat`/`serve` next to
-  `--workspace`.
-- [ ] **P5 — Docs.** Fold "projects" into [`../environment.md`](../environment.md) (the runtime-env
-  home): scratch vs. project, the `projects/` layout, the three tools, the flags. Update
-  `workspace.md` §6 to "resolved — see projects.md". Surface `list/create/switch_project` in
-  `usage.md`/`README.md`.
+- [x] **P1 — Marker + registry read.** *(DONE — `internal/projects/projects.go`,
+  `internal/tools/projects.go`.)* `.agent/project.md` schema (frontmatter: `title`, `uid`, `created`,
+  `last_active`, `description` + optional body); `internal/projects` enumerates
+  `<root>/*/.agent/project.md` and parses via the existing `go.yaml.in/yaml/v3` dep, `Root(workspace)`
+  = `<workspace>/projects`. `List` is **resilient** — a missing root ⇒ empty (not error), a dir with no
+  marker is scratch (skipped), a malformed marker is skipped so the listing stays usable; results sort
+  most-recently-active first, with stable fallbacks (uid from the folder's `<slug>-<uid>` suffix, title
+  from the folder name, `last_active` from the dir mtime). `list_projects` built-in (read-only, trusted,
+  **not** sandbox-exposed) wired via `ExecutorConfig.ProjectsRoot` (empty ⇒ omitted), threaded from the
+  resolved workspace in `run`/`chat`/`serve` (the home/chat/serve surfaces, §6; `eval` untouched). Tests:
+  `internal/projects/projects_test.go` (parse/recency/skip/fallbacks), `internal/tools/projects_test.go`
+  (empty + list), `internal/agent/projects_e2e_test.go` (offered only with a root). *(No tier gate on
+  listing — it's read-only; the gate lands on `switch_project`, P3.)*
+- [x] **P2 — Create / promote.** *(DONE — `internal/projects/create.go`,
+  `internal/tools/projects.go`.)* `projects.Create(root, CreateOptions{Title, Description, FromPaths})`
+  mints `<slug>-<uid>/` (slug ← title, lowercase/hyphen-collapsed/length-bounded, `project` fallback;
+  uid ← 5 random bytes as lowercase unpadded base32 = 8 chars, retried on collision), creating the
+  projects root on first use; seeds `.agent/project.md` via `yaml.Marshal` (so a title/description with
+  YAML-special chars round-trips back through `List`) with `created`/`last_active` = now; **promotion**
+  = the same call with `FromPaths` moved in (`os.Rename` under their base name, erroring on a missing
+  source or in-project name collision so work is never silently dropped/clobbered). `create_project`
+  built-in (trusted, **not** sandbox-exposed): **human-gated** (`gate.Approve`, `Kind:project.create`)
+  and **audited** (`EventProjectCreated` with uid/title/path). Wired alongside `list_projects` on
+  `ExecutorConfig.ProjectsRoot` (so it comes free on the run/chat/serve surfaces already threading it).
+  Tests: `internal/projects/create_test.go` (round-trip, slug/uid, promotion + missing-path error, blank
+  title), `internal/tools/projects_test.go` (approved-creates+audits, denied-creates-nothing,
+  requires-title), `internal/agent/projects_e2e_test.go` (offered only with a root). *(Create does not
+  re-anchor the workspace — auto-switch-on-create folds in with the P3 switch seam.)*
+- [x] **P3 — Switch.** *(DONE — `internal/projects/resolve.go`, `internal/tools/{shell,projects}.go`,
+  `internal/agent/agent.go`, `cmd/prompts.go`.)* `switch_project(project)` makes a named project the
+  active workspace mid-run. **Re-anchor without a rebuild:** the shell now reads its working directory
+  from a mutable `tools.Workspace` (via `NewShellIn`; `NewShell` wraps it), so a switch re-points
+  `cmd.Dir` for subsequent commands live (§7 — `cd` never persists). **Prompt reload under the §5 gate:**
+  new `ExecutorConfig.SwitchWorkspace(workspace) → PromptCustomization` seam, implemented by
+  `cmd/prompts.go`'s `switchWorkspaceFn(tier)` = the *same* `loadPrompts` used at build time (so `safe`
+  still won't auto-load the target's AGENTS.md/SYSTEM.md); the agent's `switchWorkspace` re-anchors the
+  `Workspace` and recomposes `systemPrompt` via a shared `baseSystemPrompt` helper (picked up on the next
+  request, which prepends the prompt fresh). **Resolve** (`projects.Resolve`): uid exact (case-insensitive)
+  → title exact → title substring, with `*AmbiguousError` (carries candidates) so the tool reports rather
+  than guesses, `ErrNotFound` otherwise. **Audit:** `EventProjectSwitched` (uid/title/path). Trusted, not
+  sandbox-exposed; wired on `ProjectsRoot != "" && SwitchWorkspace != nil` after the agent exists (it
+  mutates *this* executor), in `run`/`chat`/`serve` (`eval` untouched). Tests: `resolve_test.go`
+  (uid/exact/substring/ambiguous/not-found), switch-tool cases in `internal/tools/projects_test.go`
+  (resolve+switch+audit, not-found, ambiguous, switch-error), and `projects_e2e_test.go`
+  `TestSwitchProject_ReanchorsShell` (a scripted switch → `shell pwd` runs in the new dir + the target's
+  SYSTEM.md becomes the prompt) + wiring gate. *(Not reloaded on switch: the agent-type catalog stays the
+  session's — only the trust-relevant prompt tier reloads; auto-switch-on-create can now call this seam.)*
+- [x] **P4 — CLI flags.** *(DONE — `cmd/projects.go`, edits to `cmd/{root,config,run,chat,serve}.go`.)*
+  `resolveProjects(homeWorkDir, cfg) → (root, workDir)` is the single seam all three surfaces call in
+  place of the hard-wired `projects.Root(workDir)`: it returns the registry root (empty ⇒ the
+  list/create/switch_project tools are omitted) and the workspace the agent acts on at launch.
+  **`--no-project`** (persistent flag) = flat-repo mode: no registry, no tools, the workspace *is* the
+  repo. **`--project <uid|title|path>`** activates a project at launch — a value naming an existing dir
+  is used as a path, else resolved against the registry via `projects.Resolve` (ambiguous/absent
+  reported, not guessed); the workspace becomes that project's dir while the root stays the *home*
+  registry (so `switch_project` still reaches its siblings). Config **`projects: false`** (a `*bool`, so
+  unset ⇒ enabled) disables by default; **`projects_root`** points the registry elsewhere than
+  `<workspace>/projects`; both have setters (`config set-projects`, `set-projects-root`). Precedence:
+  `--no-project` wins; then an explicit `--project` forces on (overriding config `false`);
+  `--no-project` + `--project` is a conflict error. Tests: `cmd/projects_test.go` (default root, both
+  disables, config-true/root override, conflict, activate-by-title/-path, activate-overrides-config-false,
+  unknown-is-error). Build/vet/`go test -race` green; flags + error paths + config persistence
+  live-verified via the binary. *(Serve threads it as `serveDeps.projectsRoot`; `eval` still untouched.)*
+- [x] **P5 — Docs.** *(DONE.)* Folded "projects" into [`../environment.md`](../environment.md) (the
+  runtime-env home): a new "Projects — named, recallable workspaces" section (the `projects/` layout,
+  trust-by-containment + the tier gate on switch, the three tools, the P4 flag/config modes), plus rows
+  in the config-reference and files-on-disk tables and a pointer from "Two anchors". `usage.md` gains a
+  "Projects" operational section (what the tools do, the flags, flat-repo mode) and a pointer from the
+  `agent run` flags. `README.md` gains a "Named projects" paragraph in the customize/experiment block.
+  `workspace.md` §6 was **already** "resolved — see projects.md" (P3), so no change needed there.
