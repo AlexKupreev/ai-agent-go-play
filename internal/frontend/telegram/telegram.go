@@ -80,8 +80,9 @@ type Client interface {
 // conversation): a message runs a turn and streams its events back to the chat; a
 // parked approval becomes an Approve/Deny inline keyboard resolved over the API, and a
 // parked ask_user question is sent as a prompt whose next chat reply is the answer.
-// /new starts a fresh session, /end terminates the current one, and /reload re-reads
-// the engine's prompt files + agent-type catalog (effective from the next turn).
+// /new (alias /reset) starts a fresh session, /end terminates the current one, and
+// /reload re-reads the engine's prompt files + agent-type catalog (effective from the
+// next turn). The /new + /reset + /end verbs match the CLI chat REPL.
 type Bot struct {
 	transport Transport
 	client    Client
@@ -175,12 +176,14 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	go b.stream(ctx, m.ChatID, runID)
 }
 
-// handleCommand handles the chat control commands: /new (fresh session), /end
-// (terminate the current session), /reload (re-read prompt files + agent-type catalog).
+// handleCommand handles the chat control commands: /new (alias /reset) starts a fresh
+// session (closing any current one first), /end terminates the current session, /reload
+// re-reads the prompt files + agent-type catalog. The /new + /reset + /end vocabulary is
+// shared with the CLI chat REPL so the session-control verbs are the same on every client.
 // Unknown commands get a short hint.
 func (b *Bot) handleCommand(ctx context.Context, m Message) {
 	switch strings.Fields(m.Text)[0] {
-	case "/new", "/start":
+	case "/new", "/start", "/reset":
 		b.closeChat(ctx, m.ChatID) // end any existing session first
 		if _, err := b.sessionFor(ctx, m.ChatID); err != nil {
 			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
@@ -204,7 +207,7 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		}
 		_ = b.transport.Send(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message", nil)
 	default:
-		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (start a session), /end (terminate it), /reload (re-read prompts + agent types)", nil)
+		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /reload (re-read prompts + agent types)", nil)
 	}
 }
 

@@ -303,6 +303,25 @@ func TestBot_NewAndEndCommands(t *testing.T) {
 	}
 	cl.mu.Unlock()
 
+	// /reset is an alias for /new: it closes the current session and starts a fresh one,
+	// matching the CLI REPL's vocabulary. Poll the client (the "new session" reply text is
+	// identical to /new's, so it can't distinguish the two — the call counts can).
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/reset"}}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cl.mu.Lock()
+		got := cl.sessionCalls == 2 && cl.closedID == "sess1"
+		calls, closed := cl.sessionCalls, cl.closedID
+		cl.mu.Unlock()
+		if got {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/reset: StartSession calls = %d (want 2), closed = %q (want sess1)", calls, closed)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	// /end terminates it (the session the bot created).
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/end"}}
 	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "session ended" })

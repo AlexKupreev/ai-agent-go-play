@@ -35,7 +35,7 @@ func runRemoteChat(addr string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
-	fmt.Fprintln(os.Stderr, "(/reset new conversation, /end close, /exit or Ctrl-D detach)")
+	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /end close, /exit or Ctrl-D detach)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -68,9 +68,10 @@ func runRemoteChat(addr string) error {
 				fmt.Fprintln(os.Stderr, "(session closed)")
 			}
 			return nil
-		case "/reset":
+		case "/reset", "/new":
 			// No server-side "clear history"; a fresh session is the honest
-			// equivalent. Close the old one so it doesn't linger.
+			// equivalent. Close the old one so it doesn't linger. /new + /reset are
+			// aliases here to match the Telegram bot's session-control verbs.
 			if err := c.CloseSession(ctx, sessionID); err != nil {
 				fmt.Fprintf(os.Stderr, "close old session: %v\n", err)
 			}
