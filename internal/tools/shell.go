@@ -8,10 +8,10 @@ import (
 )
 
 // Workspace is a mutable working-directory anchor. The shell tool reads the current
-// directory from it at execution time, so a mid-run project switch (projects.md P3) can
-// re-point subsequent commands at the new project without rebuilding the executor — the
-// per-command `cmd.Dir` is the only thing that actually moves the shell, since each command
-// is a fresh process and `cd` never persists (projects.md §7). Safe for concurrent use.
+// directory from it at execution time (rather than capturing it once), so the anchor can be
+// re-pointed mid-run without rebuilding the executor — the per-command `cmd.Dir` is the only
+// thing that actually moves the shell, since each command is a fresh process and `cd` never
+// persists. Safe for concurrent use.
 type Workspace struct {
 	mu  sync.RWMutex
 	dir string
@@ -46,7 +46,7 @@ func NewShell(workDir string, gate HumanGate) Tool {
 }
 
 // NewShellIn is like NewShell but reads its working directory from a mutable Workspace at
-// each invocation, so a project switch can re-point it mid-run (projects.md P3).
+// each invocation, so the anchor can be re-pointed mid-run.
 func NewShellIn(ws *Workspace, gate HumanGate) Tool {
 	return Tool{
 		Name:        "shell",
@@ -78,7 +78,7 @@ func NewShellIn(ws *Workspace, gate HumanGate) Tool {
 			}
 
 			cmd := exec.CommandContext(ctx, "bash", "-c", command)
-			cmd.Dir = ws.Dir() // all relative paths resolve here (re-anchorable, projects.md §7)
+			cmd.Dir = ws.Dir() // all relative paths resolve here (re-anchorable)
 			out, err := cmd.CombinedOutput()
 
 			if err != nil {

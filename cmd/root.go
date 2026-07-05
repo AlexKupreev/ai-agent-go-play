@@ -35,17 +35,11 @@ func init() {
 			"(reproducible runs with the built-in base prompt)")
 	rootCmd.PersistentFlags().StringVar(&workspaceFlag, "workspace", "",
 		"directory the agent acts on — the shell tool's working directory "+
-			"(default: the current directory). The project the agent works in, "+
-			"as distinct from --config-dir (the agent's own identity/state).")
+			"(default: the current directory), as distinct from --config-dir "+
+			"(the agent's own identity/state).")
 	rootCmd.PersistentFlags().StringArrayVar(&contextFileFlag, "context-file", nil,
-		"extra prompt file(s) to append as operator/project instructions "+
+		"extra prompt file(s) to append as operator instructions "+
 			"(repeatable). Named explicitly, so always loaded regardless of tier.")
-	rootCmd.PersistentFlags().BoolVar(&noProjectFlag, "no-project", false,
-		"flat-repo mode: act on the workspace directly, with no named-project "+
-			"registry and no list/create/switch_project tools (projects.md §6)")
-	rootCmd.PersistentFlags().StringVar(&projectFlag, "project", "",
-		"activate a named project at launch (by uid, title, or path); the "+
-			"workspace becomes that project's directory")
 
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(runCmd)

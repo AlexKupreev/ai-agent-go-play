@@ -21,8 +21,6 @@ const (
 	EventToolRevoked         = "tool_revoked"
 	EventMemoryWrite         = "memory_write"
 	EventRunUsage            = "run_usage"
-	EventProjectCreated      = "project_created"
-	EventProjectSwitched     = "project_switched"
 )
 
 // Event is one append-only record.

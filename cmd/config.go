@@ -30,13 +30,6 @@ type Config struct {
 	// commands can say `--addr alex` instead of `--addr 127.0.0.1:8081`. An --addr
 	// value that is not a known alias is used verbatim (see resolveAddr).
 	Engines map[string]string `json:"engines,omitempty"`
-
-	// Projects, when set to false, disables the named-project registry by default
-	// (flat-repo mode; the --no-project flag does the same per launch). A nil pointer
-	// means unset ⇒ enabled. ProjectsRoot points the registry elsewhere than the
-	// default <workspace>/projects. See projects.md §6 and resolveProjects.
-	Projects     *bool  `json:"projects,omitempty"`
-	ProjectsRoot string `json:"projects_root,omitempty"`
 }
 
 var configCmd = &cobra.Command{
@@ -91,32 +84,6 @@ var setVerboseCmd = &cobra.Command{
 		}
 		cfg := loadConfigOrEmpty()
 		cfg.Verbose = v
-		return saveConfig(cfg)
-	},
-}
-
-var setProjectsCmd = &cobra.Command{
-	Use:   "set-projects <on|off>",
-	Short: "Enable or disable the named-project registry by default; --no-project/--project override per launch",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		v, ok := parseBool(args[0])
-		if !ok {
-			return fmt.Errorf("expected on|off (or true|false), got %q", args[0])
-		}
-		cfg := loadConfigOrEmpty()
-		cfg.Projects = &v
-		return saveConfig(cfg)
-	},
-}
-
-var setProjectsRootCmd = &cobra.Command{
-	Use:   "set-projects-root <path>",
-	Short: "Point the project registry elsewhere than <workspace>/projects (empty to reset)",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := loadConfigOrEmpty()
-		cfg.ProjectsRoot = strings.TrimSpace(args[0])
 		return saveConfig(cfg)
 	},
 }
@@ -180,8 +147,6 @@ func init() {
 	configCmd.AddCommand(setModelCmd)
 	configCmd.AddCommand(setTierCmd)
 	configCmd.AddCommand(setVerboseCmd)
-	configCmd.AddCommand(setProjectsCmd)
-	configCmd.AddCommand(setProjectsRootCmd)
 	configCmd.AddCommand(setEngineCmd)
 	configCmd.AddCommand(rmEngineCmd)
 	configCmd.AddCommand(enginesCmd)

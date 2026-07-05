@@ -125,8 +125,7 @@ aliases](#engine-aliases)).
 ```
 
 Flags: `--model`, `--tier` (override config for this run), `--verbose`. The global
-`--workspace`, `--no-project`, and `--project` flags (see [Projects](#projects--named-sub-scopes-within-a-workspace))
-apply here too.
+`--workspace` flag applies here too.
 
 ### `agent chat`
 
@@ -255,14 +254,14 @@ its cancellation to the model).
 ## Customizing the agent — prompts & agent types
 
 You can shape the agent's behaviour with files, read from **two directories**: the
-**config-dir** (who the agent is — global, always trusted) and the **workspace** (the project
-it's acting on — per-run, trusted only above `safe`). The full model, precedence rules, and the
+**config-dir** (who the agent is — global, always trusted) and the **workspace** (what it's
+acting on — per-run, trusted only above `safe`). The full model, precedence rules, and the
 tier gate live in [`environment.md`](environment.md); the operational summary:
 
 - **System prompt / operator instructions.** `SYSTEM.md` **replaces** the built-in base prompt;
   `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. `PLANNER.md` **replaces** the
   built-in planner prompt (the pre-execution clarify/refine pass; `agent run` and `chat --plan`).
-  Drop any in the config-dir (global) and/or the workspace (project); project wins over global.
+  Drop any in the config-dir (global) and/or the workspace; workspace wins over global.
   `--context-file <path>` (repeatable) appends an extra file regardless of tier; `--no-context-files`
   ignores them all for a reproducible run on the bare base prompts.
 - **Sub-agent types.** Declare delegatable agents as `agents/<name>.md` (YAML frontmatter +
@@ -319,42 +318,6 @@ Each variant runs the executor directly (no planner) with a fresh context, shari
 tool catalog and memory. The report is a table (variant, effective model, steps, tokens,
 duration, status) followed by each variant's full output; a variant that errors is captured so
 the rest still report, and **Ctrl+C** stops after the current variant.
-
----
-
-## Projects — named sub-scopes within a workspace
-
-For conversational use (`chat`, `serve`, Telegram), the agent can keep work as **named
-projects** it recalls by intent and switches into mid-conversation — *"let's go back to the
-articles from last time"* — without you naming a path. A project is a named sub-scope *within* the
-workspace: it inherits the workspace's common guidelines and adds its own, and keeps its own
-artifacts and sessions. Projects live under the workspace at `<workspace>/projects/<slug>-<uid>/`,
-each with a small `.agent/project.md` marker; **the filesystem is the registry** (no separate
-index). The full model is in
-[`environment.md`](environment.md#projects--named-sub-scopes-within-a-workspace); operationally the
-agent drives it through three tools:
-
-- **`list_projects`** — what projects exist (uid, title, description, recency).
-- **`create_project`** — mint and switch into a new project (**asks first**, and is audited);
-  promotion moves scratch work in.
-- **`switch_project`** — recall one by uid or title and re-anchor onto it (re-runs the tier gate
-  on its prompt files; audited).
-
-You usually don't manage these yourself — you talk, the agent calls them. What you control is
-whether the registry is on and where it lives:
-
-```bash
-./agent chat                              # default: registry at <workspace>/projects
-./agent run --no-project "fix the flaky test"   # flat-repo mode: no registry, act on the repo
-./agent chat --project articles           # activate a project at launch (by uid, title, or path)
-./agent config set-projects off           # disable the registry by default
-./agent config set-projects-root ~/work   # put the registry somewhere other than <workspace>/projects
-```
-
-`--no-project` (or config `projects: false`) is the pi-faithful "I cd'd into this repo, just act
-on it" path — no `projects/` folder is created and the three tools are omitted. `--project` and
-`--no-project` are mutually exclusive; an explicit `--project` re-enables the registry even if
-config disabled it.
 
 ---
 

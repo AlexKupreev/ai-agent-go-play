@@ -46,7 +46,7 @@ identity** — memory/tools/audit stay config-dir-scoped, so per-project separat
 config-dir, not a second workspace. Unlike the config-dir, a workspace can be an untrusted checkout,
 so its prompt/agent files (they land *in* a system prompt) auto-load only above the `safe` tier unless
 named explicitly. Full model in
-[`environment.md`](environment.md#three-scopes-config-dir-workspace-project).
+[`environment.md`](environment.md#two-scopes-config-dir-and-workspace).
 
 ---
 

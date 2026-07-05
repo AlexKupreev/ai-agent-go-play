@@ -94,11 +94,7 @@ var serveCmd = &cobra.Command{
 		}
 		sessions := session.NewFileStore(sessStoreDir)
 
-		homeWorkDir, err := resolveWorkspace()
-		if err != nil {
-			return err
-		}
-		projectsRoot, workDir, err := resolveProjects(homeWorkDir, cfg)
+		workDir, err := resolveWorkspace()
 		if err != nil {
 			return err
 		}
@@ -111,18 +107,17 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		deps := serveDeps{
-			prov:         openaiprovider.New(cfg.OpenAIKey),
-			workDir:      workDir,
-			projectsRoot: projectsRoot,
-			model:        resolveModel(modelFlag, cfg),
-			tier:         tier,
-			gate:         approvals,
-			registry:     registry,
-			mem:          mem,
-			central:      rec,
-			ledger:       usage.NewLedger(rec), // rec is the process-wide log (a Reader)
-			reader:       rec,                  // same log, read side, for recent_activity
-			prompts:      promptSrc,
+			prov:     openaiprovider.New(cfg.OpenAIKey),
+			workDir:  workDir,
+			model:    resolveModel(modelFlag, cfg),
+			tier:     tier,
+			gate:     approvals,
+			registry: registry,
+			mem:      mem,
+			central:  rec,
+			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
+			reader:   rec,                  // same log, read side, for recent_activity
+			prompts:  promptSrc,
 		}
 
 		engine := api.NewEngine(deps.runner())
@@ -169,18 +164,17 @@ var serveCmd = &cobra.Command{
 // process-wide state (catalog, gate, memory, central audit) is consistent across
 // runs and with the API; per-run state (transcript, session audit file) is fresh.
 type serveDeps struct {
-	prov         *openaiprovider.Client
-	workDir      string
-	projectsRoot string // project registry root ("" ⇒ project tools omitted); see resolveProjects
-	model        string
-	tier         capability.Tier
-	gate         tools.HumanGate
-	registry     tools.Registry
-	mem          memory.Store
-	central      audit.Recorder
-	ledger       tools.UsageLedger // durable session/day token totals for the usage tool
-	reader       audit.Reader      // process-wide log, for the recent_activity tool
-	prompts      *promptState      // reloadable prompt customization + agent-type catalog
+	prov     *openaiprovider.Client
+	workDir  string
+	model    string
+	tier     capability.Tier
+	gate     tools.HumanGate
+	registry tools.Registry
+	mem      memory.Store
+	central  audit.Recorder
+	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
+	reader   audit.Reader      // process-wide log, for the recent_activity tool
+	prompts  *promptState      // reloadable prompt customization + agent-type catalog
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
@@ -214,8 +208,6 @@ func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-		ProjectsRoot:    d.projectsRoot,
-		SwitchWorkspace: switchWorkspaceFn(d.tier),
 	})
 	cleanup := func() { sessionRec.Close(); log.Close() }
 	return executor, cleanup, nil

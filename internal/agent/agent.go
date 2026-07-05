@@ -101,21 +101,10 @@ do not present it as a current capability.`
 // append is concatenated after, in order, under a labelled separator so the model can tell
 // operator/project instructions from the base. Pure: no I/O — the cmd layer reads files and
 // passes their contents in. Called once at construction so the cached prefix stays stable.
-// PromptCustomization is the operator prompt tier for one workspace: a SYSTEM.md override
-// (empty ⇒ the built-in base prompt) plus AGENTS.md/CLAUDE.md appends. It is what
-// ExecutorConfig.SwitchWorkspace returns, so a project switch re-applies the target project's
-// prompt files (projects.md P3). It mirrors the SystemPromptOverride/PromptAppends config
-// fields, letting the switch recompose the system prompt the same way construction does.
-type PromptCustomization struct {
-	SystemPromptOverride string
-	PromptAppends        []string
-}
-
 // baseSystemPrompt assembles the pre-appends base of the executor's system prompt: an
 // operator SYSTEM.md override stands in for the built-in base (prompts.md §2), and the
 // self-docs note (empty when no docs are wired) attaches after it — the note advertises
-// read_self_docs and is orthogonal to the operator's wording. Shared by construction and by
-// switchWorkspace so a project switch recomposes the prompt identically.
+// read_self_docs and is orthogonal to the operator's wording.
 func baseSystemPrompt(override, docsNote, policyNote, rosterNote string) string {
 	base := executorPrompt
 	if override != "" {
@@ -325,14 +314,10 @@ type Agent struct {
 	// the coordinator — but it is threaded down for the forward-compatible nested case.
 	spawnDepth int
 
-	// Project switching (projects.md P3). ws is the mutable shell working-directory anchor
-	// (shared with the shell tool) that switch_project re-points; switchPrompts is the
-	// cmd-injected loader that re-reads the target workspace's prompt tier under the §5 gate;
-	// docsPromptNote is the self-docs note (if any) re-appended when recomposing the prompt on
-	// a switch, so the recomposition matches what construction assembled. All nil/empty on the
-	// planner and when switching is not wired.
+	// ws is the shell's working-directory anchor (shared with the shell tool), set from the
+	// resolved workspace. docsPromptNote is the self-docs note (if any) folded into the system
+	// prompt. Both nil/empty on the planner.
 	ws             *tools.Workspace
-	switchPrompts  func(workspace string) (PromptCustomization, error)
 	docsPromptNote string
 	// tierPolicyNote is the trust-tier permission manifest (permitted/needs-approval/
 	// forbidden), re-appended on a project switch so the recomposed prompt keeps it. The
@@ -401,20 +386,6 @@ type ExecutorConfig struct {
 	AgentCatalog *AgentCatalog
 	SpawnDepth   int
 
-	// ProjectsRoot is the <home-workspace>/projects directory the agent recalls named
-	// projects from (projects.md P1). Non-empty ⇒ the read-only list_projects built-in and
-	// the side-effecting create_project built-in are offered; empty ⇒ both omitted. The cmd
-	// layer sets it from the resolved workspace.
-	ProjectsRoot string
-
-	// SwitchWorkspace enables the switch_project built-in (projects.md P3, §7). Given a target
-	// project directory it re-reads that workspace's prompt tier under the §5 tier gate (the
-	// cmd layer's loadPrompts) and returns the customization to apply; the executor then
-	// re-anchors its shell working directory and recomposes its system prompt from the result.
-	// Nil ⇒ switch_project omitted (like the other optional deps). Also needs ProjectsRoot set,
-	// so switch_project can resolve a uid/title to a path.
-	SwitchWorkspace func(workspace string) (PromptCustomization, error)
-
 	// Prompt composition (prompts.md §2). The cmd layer resolves and reads the operator's
 	// context files and passes their contents here; internal/agent never touches the disk.
 	// SystemPromptOverride (a SYSTEM.md) replaces the base executorPrompt entirely; empty ⇒
@@ -442,8 +413,8 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	broker := capability.NewBroker(rec, nil)
 	glue := sandbox.NewLuaGlue(broker)
 
-	// Mutable working-directory anchor: the shell reads it live so switch_project can
-	// re-point subsequent commands mid-run without rebuilding the executor (projects.md §7).
+	// Working-directory anchor: the shell reads it live at each command (a mutable anchor that
+	// could be re-pointed mid-run without rebuilding the executor).
 	ws := tools.NewWorkspace(workDir)
 
 	authorTool := tools.NewAuthorTool(tools.AuthorToolDeps{
@@ -498,9 +469,9 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// Tier policy note: the agent's permitted / needs-approval / forbidden boundaries for
 	// its trust tier, so it knows its limits up front (matches the enforced policy).
 	policyNote := tierPolicyNote(tier)
-	// Provisional prompt without the tool roster: the spawn_agent / switch_project tools are
-	// appended to a.tools *after* the agent exists (they close over it), so the full roster is
-	// known only then — a.systemPrompt is recomposed with the roster at the end of NewExecutor.
+	// Provisional prompt without the tool roster: the spawn_agent tool is appended to a.tools
+	// *after* the agent exists (it closes over it), so the full roster is known only then —
+	// a.systemPrompt is recomposed with the roster at the end of NewExecutor.
 	prompt := composeSystemPrompt(baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote, ""), "", cfg.PromptAppends...)
 	// Self-usage: the agent can report its own session/day token spend (from the audit
 	// log). Omitted when no ledger is wired.
@@ -516,23 +487,12 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	if auditReader != nil {
 		builtins = append(builtins, tools.NewRecentActivityTool(auditReader))
 	}
-	// Projects: recall named workspaces by intent (list, read-only) and promote work into a
-	// new one (create, side-effecting → human-gated + audited). Trusted, not sandbox-exposed.
-	// Omitted when no projects root is wired (projects.md P1–P2).
-	if cfg.ProjectsRoot != "" {
-		builtins = append(builtins,
-			tools.NewListProjectsTool(cfg.ProjectsRoot),
-			tools.NewCreateProjectTool(cfg.ProjectsRoot, gate, rec, runID),
-		)
-	}
-
 	a := newAgent(p, model, prompt, builtins, obs)
 	a.registry = registry
 	a.glue = glue
 	a.tier = tier
 	a.runID = runID
 	a.ws = ws
-	a.switchPrompts = cfg.SwitchWorkspace
 	a.docsPromptNote = docsNote
 	a.tierPolicyNote = policyNote
 
@@ -554,44 +514,13 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		a.byName[spawn.Name] = spawn
 	}
 
-	// Project switch (projects.md P3). Wired after the agent exists because switch_project
-	// re-anchors *this* executor's workspace + prompt via a.switchWorkspace. Trusted (in
-	// a.byName ⇒ broker.Trusted) but not Exposed, so sandboxed code cannot switch via
-	// call_tool. Offered only when both a projects root (to resolve names) and the
-	// SwitchWorkspace reload seam are wired.
-	if cfg.ProjectsRoot != "" && cfg.SwitchWorkspace != nil {
-		sw := tools.NewSwitchProjectTool(cfg.ProjectsRoot, a.switchWorkspace, rec, runID)
-		a.tools = append(a.tools, sw)
-		a.byName[sw.Name] = sw
-	}
-
-	// All tools (built-ins + spawn/switch + any persistent authored tools in the registry) are
-	// wired now, so the roster is complete. Recompose the system prompt to include it — the
-	// generated inventory replaces the old hardcoded tool list and can't drift. Stored so a
-	// project switch recomposes with the same roster (the toolset doesn't change on a switch).
+	// All tools (built-ins + spawn + any persistent authored tools in the registry) are wired
+	// now, so the roster is complete. Recompose the system prompt to include it — the generated
+	// inventory replaces the old hardcoded tool list and can't drift.
 	a.toolRosterNote = toolRosterNote(a.toolRoster())
 	a.systemPrompt = composeSystemPrompt(
 		baseSystemPrompt(cfg.SystemPromptOverride, docsNote, policyNote, a.toolRosterNote), "", cfg.PromptAppends...)
 	return a
-}
-
-// switchWorkspace re-anchors the shell working directory to dir and reloads the project
-// prompt tier for it (projects.md P3, §7): it runs the cmd-injected loader (loadPrompts under
-// the §5 tier gate) for the target workspace, then re-points the shared workspace anchor and
-// recomposes the system prompt (picked up on the next model request, which prepends it fresh).
-// On a loader error nothing changes, so a failed switch leaves the current workspace intact.
-func (a *Agent) switchWorkspace(dir string) error {
-	if a.switchPrompts == nil {
-		return fmt.Errorf("switching is not enabled")
-	}
-	pc, err := a.switchPrompts(dir)
-	if err != nil {
-		return err
-	}
-	a.ws.Set(dir)
-	a.systemPrompt = composeSystemPrompt(
-		baseSystemPrompt(pc.SystemPromptOverride, a.docsPromptNote, a.tierPolicyNote, a.toolRosterNote), "", pc.PromptAppends...)
-	return nil
 }
 
 // NewPlanner creates an agent that clarifies and refines a task before execution.
