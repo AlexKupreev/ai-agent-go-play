@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
@@ -22,10 +22,12 @@ import (
 )
 
 var (
-	chatPlanFlag    bool
-	chatAddrFlag    string
-	chatSessionFlag string
-	chatListFlag    bool
+	chatNoPlanFlag       bool
+	chatNoCritiqueFlag   bool
+	chatMaxRevisionsFlag int
+	chatAddrFlag         string
+	chatSessionFlag      string
+	chatListFlag         bool
 )
 
 var chatCmd = &cobra.Command{
@@ -59,6 +61,11 @@ var chatCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// Deliberate planning + the critique loop are ON by default; --no-plan / --no-critique
+		// turn them off. Critique needs the deliberate pipeline, so --no-plan implies no critique.
+		plan := !chatNoPlanFlag
+		critique := plan && !chatNoCritiqueFlag
 
 		prov := openaiprovider.New(cfg.OpenAIKey)
 		model := resolveModel(modelFlag, cfg)
@@ -101,6 +108,23 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
+		// Deliberate chat (--plan) is disk-backed: a session-scoped scratch dir holds working
+		// artifacts and a manifest indexes them (chat-planner.md §D3–D5). Both nil in bare chat,
+		// so the executor built below is unchanged there. The manifest lives under the run's
+		// session dir, so it is namespaced per session and reaped with the transcript.
+		var manifest *artifact.Manifest
+		var scratchDir string
+		if plan {
+			scratchDir = filepath.Join(log.SessionDir, "scratch")
+			if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+				return fmt.Errorf("failed to create scratch dir: %w", err)
+			}
+			manifest, err = artifact.New(filepath.Join(scratchDir, "manifest.json"))
+			if err != nil {
+				return fmt.Errorf("failed to open artifact manifest: %w", err)
+			}
+		}
+
 		// Interactive: optionally stream the agent's activity (tool calls/results) to
 		// stderr, and keep the transcript on disk. The final answer of each turn goes to
 		// stdout. A usage accumulator runs for the whole session; per-turn cost is its delta.
@@ -133,18 +157,35 @@ var chatCmd = &cobra.Command{
 				Usage: tools.UsageContext{}, AuditReader: rec,
 				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 				AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+				// nil/"" in bare chat ⇒ no record_artifact and no scratch note (unchanged).
+				Manifest: manifest, ScratchDir: scratchDir,
 			}), nil
 		}
 
 		// buildPlanner constructs a fresh planner, re-reading PLANNER.md each time so an edit
 		// takes effect on the next planned turn without a restart (mirrors buildExecutor for
-		// the pre-execution clarify/refine pass). Used per turn only when --plan is set.
-		buildPlanner := func(environment string) (*agent.Agent, error) {
+		// the pre-execution clarify/refine pass). It is fed the executor's live environment and
+		// the rendered artifact manifest so it plans in context (chat-planner.md §D4/§D6). Used
+		// per turn only when --plan is set.
+		buildPlanner := func(environment, manifestView string) (*agent.Agent, error) {
 			prompts, err := loadPrompts(workDir, tier)
 			if err != nil {
 				return nil, err
 			}
-			return agent.NewPlanner(prov, model, prompts.PlannerOverride, environment, obs), nil
+			// CLI clarifications read from stdin (nil ⇒ StdinGate); runID ties them to this run.
+			return agent.NewPlanner(prov, model, prompts.PlannerOverride, environment, manifestView, tools.StdinGate{}, log.RunID, obs), nil
+		}
+
+		// buildCritic constructs the verdict-emitting critic for the --critique loop (§9),
+		// re-reading CRITIC.md each turn so an edit takes effect without a restart (like
+		// buildPlanner). Tools-light: it only judges the answer against the brief's success
+		// criteria. The Verdict schema is enforced in code, so an override cannot break it.
+		buildCritic := func() (*agent.Agent, error) {
+			prompts, err := loadPrompts(workDir, tier)
+			if err != nil {
+				return nil, err
+			}
+			return agent.NewCritic(prov, model, prompts.CriticOverride, obs), nil
 		}
 
 		// One executor for the whole session: its conversation persists across turns.
@@ -153,7 +194,11 @@ var chatCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, verbose %s\n", executor.Model(), tier, onOff(chatPlanFlag), onOff(trace.Enabled()))
+		critiqueStatus := "off"
+		if critique {
+			critiqueStatus = fmt.Sprintf("on (max %d revisions)", chatMaxRevisionsFlag)
+		}
+		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, critique %s, verbose %s\n", executor.Model(), tier, onOff(plan), critiqueStatus, onOff(trace.Enabled()))
 		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
@@ -161,6 +206,11 @@ var chatCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt)
 		defer signal.Stop(sigCh)
+
+		// In --plan mode the conversation is a loop-owned turn log (chat-planner.md §D6): the
+		// executor is stateless and rebuilt per turn, the planner reads this log each turn. In
+		// bare chat it stays nil (the persistent executor holds the history instead).
+		var turnLog []chatTurn
 
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // allow long pasted input
@@ -186,6 +236,36 @@ var chatCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "(verbose %s)\n", onOff(trace.Enabled()))
 				continue
 			}
+			// /attach <path> registers a user-provided file in the artifact manifest with
+			// origin:user (chat-planner.md §D4 — explicit attach only, no prose sniffing). The
+			// executor then reads it by path like any other artifact. Requires --plan (the
+			// manifest only exists there).
+			if arg, ok := strings.CutPrefix(line, "/attach"); ok {
+				path := strings.TrimSpace(arg)
+				if manifest == nil {
+					fmt.Fprintln(os.Stderr, "/attach requires --plan")
+					continue
+				}
+				if path == "" {
+					fmt.Fprintln(os.Stderr, "usage: /attach <path>")
+					continue
+				}
+				abs, err := filepath.Abs(path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "/attach: %v\n", err)
+					continue
+				}
+				if _, err := os.Stat(abs); err != nil {
+					fmt.Fprintf(os.Stderr, "/attach: %v\n", err)
+					continue
+				}
+				if err := manifest.Append(artifact.Entry{Path: abs, Origin: artifact.OriginUser, Description: "user-attached file"}); err != nil {
+					fmt.Fprintf(os.Stderr, "/attach: %v\n", err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "(attached %s)\n", abs)
+				continue
+			}
 			switch line {
 			case "":
 				continue
@@ -193,13 +273,26 @@ var chatCmd = &cobra.Command{
 				return nil
 			case "/reset", "/new":
 				// /new + /reset are aliases (matching the remote REPL and Telegram bot):
-				// in the local in-process chat, "start fresh" means clearing the history.
-				executor.Reset()
+				// "start fresh" means clearing the conversation. In --plan mode that is the
+				// loop-owned turn log; in bare chat it is the persistent executor's history.
+				// (The scratch artifacts persist for the session either way — /reset clears
+				// the dialogue, not the materialized data.)
+				if plan {
+					turnLog = nil
+				} else {
+					executor.Reset()
+				}
 				fmt.Fprintln(os.Stderr, "(conversation cleared)")
 				continue
 			case "/reload":
-				// Re-read prompt files + agent-type catalog and rebuild the executor,
-				// carrying the conversation forward. On failure (e.g. a malformed
+				// In --plan mode prompts + agent types are re-read on every turn (the
+				// executor and planner are rebuilt per turn), so /reload is a no-op there.
+				if plan {
+					fmt.Fprintln(os.Stderr, "(prompts and agent types are re-read each turn in --plan mode)")
+					continue
+				}
+				// Bare chat: re-read prompt files + agent-type catalog and rebuild the
+				// executor, carrying the conversation forward. On failure (e.g. a malformed
 				// agents/*.md) keep the current executor so the session survives a typo.
 				next, err := buildExecutor()
 				if err != nil {
@@ -214,7 +307,23 @@ var chatCmd = &cobra.Command{
 
 			before, beforeSteps := usage.Total(), usage.Steps()
 			turnStart := time.Now()
-			if err := runTurn(sigCh, executor, buildPlanner, line); err != nil {
+			if plan {
+				// Deliberate turn: planner (context-aware) → executor (stateless) → optional
+				// critique loop. The loop owns the conversation, so append this turn on success.
+				answer, err := runPlannedTurn(sigCh, deliberateDeps{
+					buildExecutor: buildExecutor,
+					buildPlanner:  buildPlanner,
+					buildCritic:   buildCritic,
+					manifest:      manifest,
+					critique:      critique,
+					maxRevisions:  chatMaxRevisionsFlag,
+				}, turnLog, line)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				} else {
+					turnLog = append(turnLog, chatTurn{User: line, Answer: answer})
+				}
+			} else if err := runTurn(sigCh, executor, line); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
 			// Per-turn usage is the accumulator's delta; also show the session total.
@@ -227,15 +336,26 @@ var chatCmd = &cobra.Command{
 	},
 }
 
-// runTurn runs one chat turn under a cancellable context (Ctrl-C cancels just this
-// turn). When the planner is enabled it refines the input first, mirroring `agent run`.
-func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func(environment string) (*agent.Agent, error), line string) error {
-	// Discard any Ctrl-C that arrived while idle at the prompt.
+// runTurn runs one bare-chat turn (no planner) under a cancellable context — Ctrl-C cancels
+// just this turn. The persistent executor holds the conversation itself.
+func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, line string) error {
+	return underTurnContext(sigCh, func(ctx context.Context) error {
+		result, err := executor.Run(ctx, line)
+		if err != nil {
+			return err
+		}
+		fmt.Println(result)
+		return nil
+	})
+}
+
+// underTurnContext runs fn under a context cancelled by Ctrl-C, so a stray SIGINT ends the
+// current turn rather than the session. It drains any Ctrl-C that arrived while idle first.
+func underTurnContext(sigCh <-chan os.Signal, fn func(ctx context.Context) error) error {
 	select {
 	case <-sigCh:
 	default:
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
@@ -248,34 +368,33 @@ func runTurn(sigCh <-chan os.Signal, executor *agent.Agent, buildPlanner func(en
 		case <-done:
 		}
 	}()
+	return fn(ctx)
+}
 
-	input := line
-	if chatPlanFlag {
-		// A fresh planner per turn: planning is independent of the running dialogue. Hand it
-		// the executor's live environment (generated tools + tier + host) so it plans within
-		// what the agent actually has — including tools authored in earlier turns.
-		planner, err := buildPlanner(executor.EnvironmentSummary())
-		if err != nil {
-			return fmt.Errorf("planner: %w", err)
+// runPlannedTurn runs one deliberate CLI turn: it wraps the shared runDeliberateTurn
+// (cmd/deliberate.go) in the Ctrl-C context and surfaces the brief + critique notes to
+// stderr. It prints the answer and returns it for the loop to append to the turn log.
+func runPlannedTurn(sigCh <-chan os.Signal, deps deliberateDeps, turnLog []chatTurn, line string) (string, error) {
+	deps.onBrief = func(label, brief string) {
+		if label == "" {
+			fmt.Fprintf(os.Stderr, "[brief]\n%s\n\n", brief)
+		} else {
+			fmt.Fprintf(os.Stderr, "[brief · %s]\n%s\n\n", label, brief)
 		}
-		planJSON, err := planner.Run(ctx, line)
-		if err != nil {
-			return fmt.Errorf("planner: %w", err)
-		}
-		var plan agent.Plan
-		if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
-			return fmt.Errorf("parse plan: %w", err)
-		}
-		input = plan.RefinedTask
-		fmt.Fprintf(os.Stderr, "[planner] %s\n", input)
 	}
+	deps.onNote = func(msg string) { fmt.Fprintf(os.Stderr, "[critic] %s\n", msg) }
 
-	result, err := executor.Run(ctx, input)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
-	return nil
+	var answer string
+	err := underTurnContext(sigCh, func(ctx context.Context) error {
+		a, err := runDeliberateTurn(ctx, deps, turnLog, line)
+		if err != nil {
+			return err
+		}
+		answer = a
+		fmt.Println(answer)
+		return nil
+	})
+	return answer, err
 }
 
 func onOff(b bool) string {
@@ -288,7 +407,9 @@ func onOff(b bool) string {
 func init() {
 	chatCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
 	chatCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
-	chatCmd.Flags().BoolVar(&chatPlanFlag, "plan", false, "refine each message through the planner before executing (experimental)")
+	chatCmd.Flags().BoolVar(&chatNoPlanFlag, "no-plan", false, "disable deliberate mode (planning is ON by default): run the bare executor with retained context instead of planner → stateless executor")
+	chatCmd.Flags().BoolVar(&chatNoCritiqueFlag, "no-critique", false, "disable the critique loop (ON by default with planning): after each answer a critic judges it against the plan's success criteria and re-plans on a shortfall")
+	chatCmd.Flags().IntVar(&chatMaxRevisionsFlag, "max-revisions", 1, "max planner re-plan cycles in the critique loop before delivering the best answer")
 	chatCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "start with the tool-call trace on (default off; toggle live with /verbose)")
 	chatCmd.Flags().BoolVar(&quietFlag, "quiet", false, "start with the tool-call trace off (the default; overrides config/env)")
 	chatCmd.Flags().StringVar(&chatAddrFlag, "addr", "", "drive a running engine's persistent session instead of an in-process executor (host:port or an alias from `agent config set-engine`)")

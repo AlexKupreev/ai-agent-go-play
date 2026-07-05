@@ -9,6 +9,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/frontend/telegram"
@@ -23,7 +24,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var addrFlag string
+var (
+	addrFlag              string
+	serveNoPlanFlag       bool
+	serveNoCritiqueFlag   bool
+	serveMaxRevisionsFlag int
+)
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -31,7 +37,12 @@ var serveCmd = &cobra.Command{
 	Long: "Expose the agent as a headless API: POST /runs starts a run, " +
 		"GET /runs/{id}/events streams its events over SSE. Risky actions park on " +
 		"GET /approvals and are resolved with POST /approvals/{id}.\n\n" +
-		"Note: this runs the executor directly (no interactive planner yet).",
+		"Session turns are deliberate by default (chat-planner.md): each turn runs a " +
+		"context-aware planner → stateless executor with a session-scoped, disk-backed artifact " +
+		"cache; the conversation persists as the session's turn log, and a bounded critic→re-plan " +
+		"loop revises a shortfall. Turn this off with --no-plan (bare executor) or --no-critique " +
+		"(planner without the critique loop). These affect session turns (/sessions), not " +
+		"one-shot /runs.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -120,8 +131,21 @@ var serveCmd = &cobra.Command{
 			prompts:  promptSrc,
 		}
 
+		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
+		// turn them off. Critique needs the deliberate pipeline, so --no-plan implies no critique.
+		plan := !serveNoPlanFlag
+		critique := plan && !serveNoCritiqueFlag
+
 		engine := api.NewEngine(deps.runner())
-		engine.EnableSessions(sessions, deps.turnRunner())
+		// Session turns run the deliberate planner→executor pipeline (chat-planner.md) unless
+		// --no-plan drops back to the bare executor; one-shot /runs are unaffected either way.
+		turns := deps.turnRunner()
+		if plan {
+			// PublishToRun lets the deliberate turn runner surface the brief on the run's
+			// event stream out-of-band, the same seam the approval queue uses.
+			turns = deps.deliberateTurnRunner(critique, serveMaxRevisionsFlag, engine.PublishToRun)
+		}
+		engine.EnableSessions(sessions, turns)
 		// Record a run_usage event per completed run/turn into the process-wide log,
 		// so token spend is browsable over GET /audit alongside every other effect.
 		engine.SetAuditRecorder(rec)
@@ -152,6 +176,11 @@ var serveCmd = &cobra.Command{
 		// Started in the background so the Bot API handshake never delays serving.
 		go startTelegramIfConfigured(cfg)
 
+		if plan {
+			fmt.Fprintf(os.Stderr, "deliberate session turns: planner on, critique %s\n", onOff(critique))
+		} else {
+			fmt.Fprintln(os.Stderr, "session turns: bare executor (--no-plan)")
+		}
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
@@ -177,40 +206,68 @@ type serveDeps struct {
 	prompts  *promptState      // reloadable prompt customization + agent-type catalog
 }
 
-// buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's
-// runID (so the transcript, audit Run field, and parked approvals share one id). It
-// returns a cleanup to defer. Shared by the plain runner and the session turn runner.
-func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*agent.Agent, func(), error) {
+// turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
+// separate from executor construction so the deliberate pipeline (serve --plan) can build
+// several agents — planner, executor, critique re-runs — that all log to the same transcript
+// under one runID, instead of each rebuild truncating run.jsonl (logger.NewWithID → os.Create).
+type turnIO struct {
+	rec     audit.Recorder
+	obsAll  agent.Observer
+	cleanup func()
+}
+
+// openTurnIO opens the per-run transcript + session audit for runID and fans effects to both
+// the transcript and the process-wide log (GET /audit). obsAll layers the logger observer
+// under the caller's obs (the engine hub + usage accumulator).
+func (d serveDeps) openTurnIO(runID string, obs agent.Observer) (turnIO, error) {
 	runsBase, err := runsDir()
 	if err != nil {
-		return nil, nil, err
+		return turnIO{}, err
 	}
 	log, err := logger.NewWithID(runsBase, runID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create logger: %w", err)
+		return turnIO{}, fmt.Errorf("failed to create logger: %w", err)
 	}
 	sessionRec, err := audit.NewJSONLRecorder(filepath.Join(log.SessionDir, "audit.jsonl"))
 	if err != nil {
 		log.Close()
-		return nil, nil, fmt.Errorf("failed to open audit log: %w", err)
+		return turnIO{}, fmt.Errorf("failed to open audit log: %w", err)
 	}
-	// Effects fan out to the session transcript and the process-wide log (GET /audit).
-	rec := audit.Recorders{sessionRec, d.central}
-	obsAll := agent.Observers{agent.NewLoggerObserver(log), obs}
+	return turnIO{
+		rec:     audit.Recorders{sessionRec, d.central},
+		obsAll:  agent.Observers{agent.NewLoggerObserver(log), obs},
+		cleanup: func() { sessionRec.Close(); log.Close() },
+	}, nil
+}
+
+// newExecutor builds a fresh executor over already-open per-turn IO (rec + obs). manifest +
+// scratchDir wire the artifact cache (nil/"" for the plain, non-deliberate path). It opens no
+// files, so it is safe to call repeatedly within one turn (the deliberate pipeline does).
+func (d serveDeps) newExecutor(runID, sessionID string, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) *agent.Agent {
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
-	// Snapshot the current prompts + catalog once for this run, so a concurrent /reload
-	// can't change the executor's prompt mid-run (prompts.md §0).
+	// Snapshot the current prompts + catalog once, so a concurrent /reload can't change the
+	// executor's prompt mid-run (prompts.md §0).
 	prompts, catalog := d.prompts.snapshot()
-	executor := agent.NewExecutor(agent.ExecutorConfig{
+	return agent.NewExecutor(agent.ExecutorConfig{
 		Provider: d.prov, WorkDir: d.workDir, Model: d.model, RunID: runID,
-		Observer: obsAll, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
+		Observer: obs, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
 		Audit: rec, Tier: d.tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+		Manifest: manifest, ScratchDir: scratchDir,
 	})
-	cleanup := func() { sessionRec.Close(); log.Close() }
-	return executor, cleanup, nil
+}
+
+// buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's runID
+// (so the transcript, audit Run field, and parked approvals share one id). It returns a
+// cleanup to defer. Shared by the plain runner and the non-deliberate session turn runner.
+func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*agent.Agent, func(), error) {
+	io, err := d.openTurnIO(runID, obs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return d.newExecutor(runID, sessionID, nil, "", io.rec, io.obsAll), io.cleanup, nil
 }
 
 // runner drives a single-shot run: a fresh executor with no prior context.
@@ -237,6 +294,85 @@ func (d serveDeps) turnRunner() api.TurnRunner {
 		ex.Restore(prior)
 		answer, err := ex.Run(ctx, text)
 		return answer, ex.Messages(), err
+	})
+}
+
+// deliberateTurnRunner drives one session turn through the chat-planner pipeline (serve
+// --plan): a context-aware planner → stateless executor, with a session-scoped disk-backed
+// artifact cache, and — when critique is on — a bounded critic→re-plan loop. This lifts the
+// deliberation from CLI-only (chat-planner.md §7) to the engine: the planner's ask_user
+// routes through the engine's queue gate (d.gate) like the executor's, so a clarification
+// reaches whichever frontend owns the session.
+//
+// The conversation is the session's persisted turn log: prior user/answer message pairs are
+// reconstructed into the turn log the planner reads, and the turn appends one clean
+// user+answer pair back — the "turn log stored on the filesystem" (the session store), with
+// no executor tool-call cruft. Working data lives in the session scratch dir + manifest,
+// which persist across turns and restarts, keyed by session id.
+func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish func(runID string, ev api.Event)) api.TurnRunner {
+	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+		io, err := d.openTurnIO(runID, obs)
+		if err != nil {
+			return "", nil, err
+		}
+		defer io.cleanup()
+
+		// Session-scoped scratch + manifest, persistent across turns/restarts (keyed by
+		// session id), so cached artifacts survive between turns (chat-planner.md §D5).
+		scratchDir, err := sessionScratchDir(sessionID)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+			return "", nil, fmt.Errorf("failed to create session scratch dir: %w", err)
+		}
+		manifest, err := artifact.New(filepath.Join(scratchDir, "manifest.json"))
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to open artifact manifest: %w", err)
+		}
+
+		// The planner + critic are background deliberation: internalize their observer so their
+		// raw plan/verdict steps stay in the transcript (+ usage) but never reach the client
+		// stream (agent.Internalized → api.Hub drops them). The executor keeps the full obs, so
+		// its answer streams. The clean brief is surfaced separately as a KindBrief event.
+		internal := agent.Internalized(io.obsAll)
+		deps := deliberateDeps{
+			buildExecutor: func() (*agent.Agent, error) {
+				return d.newExecutor(runID, sessionID, manifest, scratchDir, io.rec, io.obsAll), nil
+			},
+			buildPlanner: func(environment, manifestView string) (*agent.Agent, error) {
+				prompts, _ := d.prompts.snapshot()
+				// The planner's ask_user shares the engine gate + runID, so a clarification
+				// routes to the session's frontend (not server stdin).
+				return agent.NewPlanner(d.prov, d.model, prompts.PlannerOverride, environment, manifestView, d.gate, runID, internal), nil
+			},
+			buildCritic: func() (*agent.Agent, error) {
+				prompts, _ := d.prompts.snapshot()
+				return agent.NewCritic(d.prov, d.model, prompts.CriticOverride, internal), nil
+			},
+			manifest:     manifest,
+			critique:     critique,
+			maxRevisions: maxRevisions,
+			// Surface the clean brief + critique notes as first-class KindBrief events on the
+			// run's stream, so a frontend renders the deliberation distinctly.
+			onBrief: func(label, brief string) {
+				text := brief
+				if label != "" {
+					text = "(" + label + ")\n" + brief
+				}
+				publish(runID, api.Event{Kind: api.KindBrief, Text: text})
+			},
+			onNote: func(msg string) {
+				publish(runID, api.Event{Kind: api.KindBrief, Text: "note: " + msg})
+			},
+		}
+
+		turnLog := messagesToTurnLog(prior)
+		answer, err := runDeliberateTurn(ctx, deps, turnLog, text)
+		if err != nil {
+			return "", nil, err
+		}
+		return answer, appendTurnMessages(prior, text, answer), nil
 	})
 }
 
@@ -274,4 +410,7 @@ func init() {
 	serveCmd.Flags().StringVar(&addrFlag, "addr", "127.0.0.1:8080", "address to listen on")
 	serveCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
 	serveCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
+	serveCmd.Flags().BoolVar(&serveNoPlanFlag, "no-plan", false, "disable deliberate session turns (planning is ON by default): run the bare executor seeded with prior history instead")
+	serveCmd.Flags().BoolVar(&serveNoCritiqueFlag, "no-critique", false, "disable the critique loop (ON by default with planning): after each answer a critic judges it and re-plans on a shortfall")
+	serveCmd.Flags().IntVar(&serveMaxRevisionsFlag, "max-revisions", 1, "max planner re-plan cycles in the critique loop before delivering the best answer")
 }

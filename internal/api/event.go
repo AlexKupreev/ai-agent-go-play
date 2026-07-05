@@ -53,6 +53,13 @@ const (
 	KindError = "error" // run failed; Text holds the error message
 )
 
+// KindBrief is a deliberate turn's surfaced brief (chat-planner.md §0): the clean, rendered
+// plan the executor was seeded with, plus any critique-loop progress notes. It is published
+// out-of-band (like approvals) via Engine.PublishToRun, so a frontend can render the
+// deliberation distinctly instead of receiving the planner's raw structured output. Text
+// holds the brief/note; a frontend may show or ignore it.
+const KindBrief = "brief"
+
 // Approval escalation event kinds. Emitted into a run's stream by the shared
 // ApprovalQueue so a streaming frontend learns of a parked escalation (and its
 // resolution) in the event stream it is already reading, rather than by polling.

@@ -79,6 +79,10 @@ const (
 	// clarify/refine pass), so planner behavior is tunable without a rebuild and is
 	// re-read on /reload like the other prompt files.
 	plannerPromptFile = "PLANNER.md"
+	// criticPromptFile overrides the built-in critic prompt (the chat --critique loop's
+	// verdict pass), tunable without a rebuild like PLANNER.md. The Verdict schema is
+	// enforced in code, so an override can retune the judging but not break the contract.
+	criticPromptFile = "CRITIC.md"
 )
 
 // promptFiles carries the operator's prompt customization read from disk, ready to hand to
@@ -91,6 +95,9 @@ type promptFiles struct {
 	// replaces the planner's base prompt, assembled with the same tier gate + project-wins
 	// precedence as Override.
 	PlannerOverride string
+	// CriticOverride is the operator's CRITIC.md (empty ⇒ built-in critic prompt), for the
+	// chat --critique loop. Same tier gate + project-wins precedence as PlannerOverride.
+	CriticOverride string
 }
 
 // loadPrompts assembles the two-tier prompt customization (prompts.md §2, workspace.md §3/§5):
@@ -131,6 +138,9 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 		}
 		if ws.PlannerOverride != "" {
 			pf.PlannerOverride = ws.PlannerOverride // project PLANNER.md wins outright
+		}
+		if ws.CriticOverride != "" {
+			pf.CriticOverride = ws.CriticOverride // project CRITIC.md wins outright
 		}
 		pf.Appends = append(pf.Appends, ws.Appends...) // project appended after global
 	}
@@ -194,6 +204,12 @@ func loadPromptTier(dir string) (promptFiles, error) {
 		return promptFiles{}, err
 	}
 	pf.PlannerOverride = plannerOverride
+
+	criticOverride, err := readOptionalFile(filepath.Join(dir, criticPromptFile))
+	if err != nil {
+		return promptFiles{}, err
+	}
+	pf.CriticOverride = criticOverride
 
 	agents, err := readOptionalFile(filepath.Join(dir, agentsFile))
 	if err != nil {

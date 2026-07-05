@@ -260,6 +260,12 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 		case api.KindDone:
 			// Terminal marker only: its Text duplicates the final EvResponse
 			// (already forwarded by the default branch), so don't send it again.
+		case api.KindBrief:
+			// The deliberate turn's plan/critique surface (serve --plan): show it distinctly
+			// from the answer so the deliberation is legible without being mistaken for prose.
+			if e.Text != "" {
+				_ = b.transport.Send(ctx, chatID, "🧭 "+e.Text, nil)
+			}
 		case api.KindError:
 			_ = b.transport.Send(ctx, chatID, "run error: "+e.Text, nil)
 		default:

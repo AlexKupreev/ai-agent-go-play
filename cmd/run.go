@@ -136,7 +136,9 @@ var runCmd = &cobra.Command{
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
 		})
 
-		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, executor.EnvironmentSummary(), obs)
+		// run has no artifact manifest (no scratch cache today, chat-planner.md Q9c) ⇒ "".
+		// CLI clarifications read from stdin (nil ⇒ StdinGate).
+		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, executor.EnvironmentSummary(), "", tools.StdinGate{}, log.RunID, obs)
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(ctx, task)
 		if err != nil {
@@ -159,7 +161,9 @@ var runCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr)
 		}
 
-		result, err := executor.Run(ctx, plan.RefinedTask)
+		// Seed the executor with the flattened brief (refined task + context + artifact
+		// refs + success criteria), not the bare refined task — chat-planner.md §4.
+		result, err := executor.Run(ctx, plan.Brief())
 		if err != nil {
 			return err
 		}

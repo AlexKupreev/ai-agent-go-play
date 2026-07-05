@@ -233,6 +233,15 @@ func auditPath() (string, error) { return underConfigDir("audit.jsonl") }
 // from the per-run transcripts under --sessions-dir, which are logs).
 func sessionStorePath() (string, error) { return underConfigDir("sessions") }
 
+// sessionScratchDir returns the per-session scratch directory for the deliberate engine
+// path (serve --plan): the artifact cache + manifest for one session, e.g.
+// ~/.config/ai-agent/session-scratch/<id>. Keyed by session id so it is namespaced per
+// conversation and persists across turns and restarts (chat-planner.md §D5). v1 has no
+// reaper — cache-with-fallback keeps a stale/absent file correct.
+func sessionScratchDir(sessionID string) (string, error) {
+	return underConfigDir(filepath.Join("session-scratch", sessionID))
+}
+
 // Env vars overriding the Telegram config (env wins, so a token can be supplied
 // without editing the config file).
 const (

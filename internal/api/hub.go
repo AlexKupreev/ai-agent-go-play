@@ -25,7 +25,16 @@ func newHub() *Hub {
 }
 
 // Emit implements agent.Observer: record the event and push it to live subscribers.
-func (h *Hub) Emit(e agent.Event) { h.publish(fromAgentEvent(e)) }
+// Internal events (background deliberation — the chat planner's planner/critic steps) are
+// dropped from the wire: they stay in the on-disk transcript (a separate logger observer)
+// for debugging, but a client never sees the raw plan/verdict machinery. The rendered brief
+// is surfaced separately as a first-class KindBrief event (see cmd's deliberate turn runner).
+func (h *Hub) Emit(e agent.Event) {
+	if e.Internal {
+		return
+	}
+	h.publish(fromAgentEvent(e))
+}
 
 // publish appends to history and broadcasts. Sends are buffered (channels are sized
 // generously) and non-blocking so a slow subscriber can never stall the run loop.

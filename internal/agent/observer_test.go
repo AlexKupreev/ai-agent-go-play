@@ -45,6 +45,28 @@ func TestUsageObserver_Accumulates(t *testing.T) {
 
 // TestGatedObserver_ForwardsOnlyWhenEnabled checks that a gate suppresses events while
 // off and passes them while on — the mechanism behind chat's live /verbose toggle.
+func TestInternalized_TagsAndForwards(t *testing.T) {
+	inner := &captureObserver{}
+	obs := Internalized(inner)
+	obs.Emit(Event{Kind: EvResponse, Text: "plan json"})
+
+	if len(inner.events) != 1 {
+		t.Fatalf("want 1 forwarded event, got %d", len(inner.events))
+	}
+	if !inner.events[0].Internal {
+		t.Error("forwarded event should be tagged Internal")
+	}
+	if inner.events[0].Text != "plan json" {
+		t.Errorf("payload should be preserved, got %q", inner.events[0].Text)
+	}
+}
+
+func TestInternalized_NilInnerStaysNil(t *testing.T) {
+	if Internalized(nil) != nil {
+		t.Error("Internalized(nil) should be nil")
+	}
+}
+
 func TestGatedObserver_ForwardsOnlyWhenEnabled(t *testing.T) {
 	inner := &captureObserver{}
 	g := NewGatedObserver(inner, false)

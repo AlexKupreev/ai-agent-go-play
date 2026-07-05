@@ -39,6 +39,11 @@ type Event struct {
 	Usage      provider.Usage      // EvResponse
 	DurationMs int64               // EvResponse
 	SubAgent   string              // non-empty ⇒ emitted by a foreground sub-run of this type
+	// Internal ⇒ background deliberation (the chat planner's planner/critic steps): kept in
+	// the on-disk transcript and counted for usage, but NOT streamed to clients — a stream
+	// sink (api.Hub) drops it so a frontend never sees the raw plan/verdict machinery, while
+	// the transcript stays complete for debugging (chat-planner.md §0 surfacing vs. §8 audit).
+	Internal bool
 }
 
 // subAgentLabeler forwards a sub-run's events to the parent's observer, stamping each
@@ -64,6 +69,26 @@ func (s *subAgentLabeler) Emit(e Event) {
 		e.SubAgent = s.name
 	}
 	s.inner.Emit(e)
+}
+
+// internalizer stamps every forwarded event Internal (see Event.Internal), marking a
+// background-deliberation agent's steps so a stream sink can drop them while the transcript
+// and usage sinks keep them.
+type internalizer struct{ inner Observer }
+
+// Internalized wraps obs so every event it forwards is tagged Internal. Used for the chat
+// planner's planner + critic, whose model steps belong in the transcript (and in usage) but
+// not in the client-facing stream. Returns nil when there is no inner observer.
+func Internalized(inner Observer) Observer {
+	if inner == nil {
+		return nil
+	}
+	return &internalizer{inner: inner}
+}
+
+func (o *internalizer) Emit(e Event) {
+	e.Internal = true
+	o.inner.Emit(e)
 }
 
 // Observer consumes run events. Implementations must tolerate being called from

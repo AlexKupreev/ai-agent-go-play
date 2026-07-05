@@ -68,6 +68,11 @@ func UserText(s string) Message {
 	return Message{Role: RoleUser, Content: []ContentBlock{{Kind: BlockText, Text: s}}}
 }
 
+// AssistantText builds an assistant message from plain text.
+func AssistantText(s string) Message {
+	return Message{Role: RoleAssistant, Content: []ContentBlock{{Kind: BlockText, Text: s}}}
+}
+
 // ToolResultMessage builds a tool-role message carrying a single result.
 func ToolResultMessage(callID, output string, isErr bool) Message {
 	return Message{Role: RoleTool, Content: []ContentBlock{{
