@@ -11,17 +11,17 @@ A **project** is a named, persistent **sub-scope within a workspace** the agent 
 and *switch into* mid-conversation — the thing that lets a local chat answer *"let's discuss the
 articles I shared last time"* or *"now let's write a script for health analysis"* without the user ever
 naming a path. It is the innermost of the **three-scope model** (config-dir → workspace → project;
-canonical in [`../environment.md`](../environment.md)): the [`workspace.md`](../planning/workspace.md) is the
+canonical in [`../environment.md`](../environment.md)): the [`workspace.md`](../adr/workspace.md) is the
 sandbox the agent lives in, and a project is a named corner of it that **inherits the workspace's
 common guidelines and adds its own**, keeping its own artifacts and sessions. Companion to
-[`workspace.md`](../planning/workspace.md) (the container a project lives in), [`prompts.md`](../planning/prompts.md) (a
-project carries the innermost prompt tier), and [`subagents.md`](../planning/subagents.md) (a scout / worktree
+[`workspace.md`](../adr/workspace.md) (the container a project lives in), [`prompts.md`](../adr/prompts.md) (a
+project carries the innermost prompt tier), and [`subagents.md`](../adr/subagents.md) (a scout / worktree
 operates on the active project). **Status: was built (P1–P5) then reverted** — see the banner above;
 the implementation (registry read, create/promote, mid-session switch, CLI flags, docs; §9 records
 what was built) was removed in `a406e4f`. The **guideline inheritance** from the enclosing workspace
-was specified but never wired ([`workspace.md`](../planning/workspace.md) §3). This doc resolves the
+was specified but never wired ([`workspace.md`](../adr/workspace.md) §3). This doc resolves the
 mid-session-switch and "who vouches for a workspace" open questions left in
-[`workspace.md`](../planning/workspace.md) §6.
+[`workspace.md`](../adr/workspace.md) §6.
 
 ---
 

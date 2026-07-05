@@ -3,12 +3,12 @@
 How this engine should let one agent **delegate to other agents**. It adapts the model that
 Claude Code and the pi coding agent use — **declarative agent *types* (data) + a generic spawn
 tool the coordinator calls at runtime** — simplified to what this engine needs, with a clear
-extension path. Build ordering lives in [`plan.md`](plan.md)'s backlog: the near-term unlock is the
+extension path. Build ordering lives in [`plan.md`](../planning/plan.md)'s backlog: the near-term unlock is the
 **foreground `spawn_agent` tool** (§3), which lets new subagent organizations be tried from prompts +
 agent-type files; **parallel read-only executors** (research / scout fan-out, §4) are **deferred** as a
 later latency optimization.
 
-Companion to [`../design.md`](../design.md) (trust model, §1) and [`plan.md`](plan.md). This is
+Companion to [`../design.md`](../design.md) (trust model, §1) and [`plan.md`](../planning/plan.md). This is
 roadmap, **not** current behavior — nothing here is built yet. It replaces an earlier
 `multi-agent.md` (removed; same decisions, reorganized around the agent-type model — see git history).
 

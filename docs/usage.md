@@ -368,8 +368,10 @@ The embedded set is the **reference docs** (README + `docs/*.md`: usage, environ
 security, tools, memory, api-transport — how it works *now*) plus the **vision doc**
 (`self-extending-agent-design.md` — design intent and trade-offs). Docs are tagged: the agent
 treats `[reference]` as authoritative about current behavior and `[vision]` as design intent
-that may include not-yet-built ideas. **Planning/scratchpad docs** (`docs/planning/`) are
-deliberately *not* embedded, so the agent never mistakes the roadmap for a current capability.
+that may include not-yet-built ideas. **Design-record and planning docs** (`docs/adr/` — the
+rationale for shipped features; `docs/planning/` — specs for not-yet-built work; `docs/deferred/`
+— shelved designs) are deliberately *not* embedded, so the agent never mistakes a roadmap or a
+decision record for a current capability.
 
 There's no separate CLI for it — it's a tool the agent uses during a run (e.g. ask it "how do
 your trust tiers work?" and it reads `usage.md` rather than guessing). `read_self_docs` is

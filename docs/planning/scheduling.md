@@ -50,10 +50,10 @@ New:
 
 Relation to neighbours:
 
-- **`spawn_agent` (§3 of [`subagents.md`](subagents.md))** is *foreground/blocking* delegation
+- **`spawn_agent` (§3 of [`subagents.md`](../adr/subagents.md))** is *foreground/blocking* delegation
   — the coordinator waits and threads the child's answer back into the conversation. Scheduling
   is *fire-by-clock, deliver-at-end*. Different trigger, different join.
-- **`RunMeta.Origin`** (the forward-compat substrate in [`subagents.md`](subagents.md) §7):
+- **`RunMeta.Origin`** (the forward-compat substrate in [`subagents.md`](../adr/subagents.md) §7):
   scheduled runs set `Origin: "scheduled"` so they're distinguishable in the audit/run list.
   If that substrate lands first, reuse it; if not, this is its first consumer.
 - **The unattended posture** ([`../security.md`](../security.md)): the tier dial exists precisely

@@ -5,11 +5,17 @@ weighs real alternatives, and decides — instead of single-shotting an answer a
 user to correct it every turn. The mechanism is a **persistent, conversation-aware planner in
 front of a stateless executor**, running the full clarify/refine → execute cycle on every turn.
 
-Companion to [`plan.md`](plan.md) §4f (the chat REPL + persistent sessions this builds on),
+Companion to [`plan.md`](../planning/plan.md) §4f (the chat REPL + persistent sessions this builds on),
 [`prompts.md`](prompts.md) (system-prompt composition) with [`../environment.md`](../environment.md)
 / [`../usage.md`](../usage.md) (the hot-reloadable `PLANNER.md` override), and
 [`workspace.md`](workspace.md) (the scratch-directory home for the artifact cache §D5).
-**Status: designed, not built.** This doc is the reviewable artifact agreed before code.
+**Status: built** — `agent chat` and `agent serve` (planner + critique **on by default**;
+`--no-plan` / `--no-critique` to disable). §1–§8 and the §9 critique loop are implemented for both
+the local CLI and the remote engine session path (the §7 "local only" boundary was lifted: the
+planner's `ask_user` routes through the engine gate). **Deferred:** the project-scoped parts (§D5–D7
+— cache promotion, `switch_project` briefing, proactive proposals) pending the named-projects
+feature below; the TTL/review reaper (§D5/O3); and routine turn-log summarization (§O5, a
+threshold guard ships, the policy does not). This doc is retained as the **design record**.
 
 > **Note:** the **project** scoping used below (§D5–§D7 — a project-scoped artifact cache, the
 > `list/create/switch_project` verbs) depends on the named-projects feature, which is currently
@@ -196,7 +202,7 @@ namespacing.
   worries.
 - **Retention by scope × provenance** (resolves O3 + projects.md §8):
   - *session / scratch (any origin):* kept for a **TTL grace window after the session closes** — not
-    deleted on close — then reaped. The window lets a reopened session ([`resume.md`](resume.md)) and
+    deleted on close — then reaped. The window lets a reopened session ([`resume.md`](../planning/resume.md)) and
     near-term follow-ups reuse the files; genuine long-term keep is what **promotion** is for, so
     un-promoted work still expires rather than accumulating forever.
   - *project, user-provided:* kept **until explicit deletion** — never auto-reaped. The agent must
@@ -227,7 +233,7 @@ re-fed* — not a long-lived agent object.
   transform — compress/summarize (O5), redact, drop stale turns — happens *on that structure* before
   it is fed, with no surgery on an agent's internal history. This seam is what makes O5 cheap.
 - **Storage is a separate axis:** in-memory for a live session; serialize the turn log to the
-  session store ([`resume.md`](resume.md)) only if/when resume is wanted — independent of this
+  session store ([`resume.md`](../planning/resume.md)) only if/when resume is wanted — independent of this
   decision.
 
 ### D7. Project switching, and proactive project proposals

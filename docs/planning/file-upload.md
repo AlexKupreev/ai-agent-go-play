@@ -3,11 +3,11 @@
 Letting the **user** hand the agent a file. Two shapes by frontend: on the CLI you **point to a
 file** already on disk; on Telegram/web you **upload bytes** that must be stored somewhere the
 executor can read. This is the concrete first slice of the `origin: user` registration in
-[`chat-planner.md`](chat-planner.md) §D4 — but it stands on its own and should ship **decoupled**
+[`chat-planner.md`](../adr/chat-planner.md) §D4 — but it stands on its own and should ship **decoupled**
 from the (still-unbuilt) planner/manifest pipeline.
 
-Companion to [`chat-planner.md`](chat-planner.md) (the artifact manifest this eventually feeds),
-[`workspace.md`](workspace.md) (the scope an attachment belongs to; the *(deferred)* per-project scope
+Companion to [`chat-planner.md`](../adr/chat-planner.md) (the artifact manifest this eventually feeds),
+[`workspace.md`](../adr/workspace.md) (the scope an attachment belongs to; the *(deferred)* per-project scope
 is [`../deferred/projects.md`](../deferred/projects.md)),
 and [`resume.md`](resume.md) (attachments must survive a resumed session). **Status: requirements +
 options, not decided.** Reviewable artifact before code.
@@ -27,7 +27,7 @@ Traced in code, so the gap is concrete, not assumed:
   `Document`/`Photo` updates are **silently dropped**. No file path reaches the engine.
 - **Web / HTTP API** (`internal/api/http.go`): `POST /sessions/{id}/turns` (`http.go:47`) is
   **text-only** (`PostTurn(sessionID, text)`, `engine.go:245`). No multipart/upload route exists.
-- **Storage**: the `record_artifact` tool + artifact manifest from [`chat-planner.md`](chat-planner.md)
+- **Storage**: the `record_artifact` tool + artifact manifest from [`chat-planner.md`](../adr/chat-planner.md)
   §D4 are **designed, not built**. There is **no per-session file area** today; the only file home is
   `workDir`. Sessions (`internal/session/session.go`) persist *message history only* — the doc
   comment is explicit that "nothing unserializable is persisted" — so there is no existing hook that
