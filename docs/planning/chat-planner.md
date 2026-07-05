@@ -423,3 +423,166 @@ accepted trade.
 - **Scratch dir hygiene.** Namespacing per session/project + a reaper keeps it from growing
   unbounded; cache-with-fallback keeps reaping safe. Consider auditing artifact writes for the same
   reason effectful paths are audited elsewhere (plan.md cross-cutting).
+
+---
+
+## 9. Making chat deliberate, persistent, focused — the control-loop view
+
+**Status: proposal / discussion — not yet decided** (unlike §1–§8, which are the agreed pipeline).
+This section reframes a broader question — *how do we make the agent more deliberate, persistent, and
+focused?* — and places the answer relative to the pipeline above and to
+[`subagents.md`](subagents.md). It exists so the next design pass starts from a structured space
+rather than a list of tempting-but-competing mechanisms.
+
+### 9.0. The three words are three different mechanisms, and they fight
+
+They sound like one virtue; they are not, and conflating them is how a persistence feature turns into
+a runaway loop:
+
+- **Deliberate** = think *before* acting. Already built: the planner's clarify/refine front-loads the
+  thinking (§0, D1). The pre-execution version.
+- **Persistent** = don't give up at the first obstacle — evaluate, re-strategize, retry. The *in-loop*
+  version. This is the genuinely missing piece.
+- **Focused** = don't wander, don't over-scope, terminate. A *budget / scope* concern.
+
+Persistence without focus is a loop burning tokens forever; focus without persistence is premature
+give-up. So the design target is **not "add persistence" — it is "add a re-strategizing loop that
+carries a termination guarantee."** Every loop level below needs both halves or it is a footgun.
+
+### 9.1. The candidate mechanisms are one loop at four altitudes
+
+The tempting options — *executor spawns a subagent per task; executor changes strategy inline;
+executor's answer feeds a new planner cycle instead of the human; adjust autonomously vs. manually* —
+are not alternatives. They are the same evaluate-and-re-strategize loop at different altitudes. Each
+level has an **actor**, the thing it **evaluates**, the thing it can **change**, and a **budget**:
+
+| Level | Actor | Evaluates | Can change | Budget | Status |
+| --- | --- | --- | --- | --- | --- |
+| **1. Tactical** | executor's inner think-act loop | each tool result | next action / tool | `MaxTurns` | **already exists** |
+| **2. Subtask** | `spawn_agent` child ([`subagents.md`](subagents.md) §3) | its one narrow goal | tactics, in isolation | spawn depth + `MaxTurns` | designed, not built |
+| **3. Strategic** | critic → planner re-plan | the whole answer | the plan itself | max-revisions | **the new piece (proposed)** |
+| **Escape** | `ask_user` | "am I blocked on something only the human has?" | — | — | exists |
+
+The insight that collapses the confusion: **level 1 is already a persistence loop.** Every ReAct step
+re-evaluates and re-strategizes — a tool errors, the executor tries something else. So *"should the
+executor change strategy?"* is already answered **yes, tactically.** What is missing is not executor
+self-correction; it is **strategic re-evaluation of a complete answer, without a human in the middle**
+(level 3) — today that failure just returns to the user (§0, "wait for the user to steer").
+
+### 9.2. Two properties make every level work (same instinct as D1)
+
+**P1 — the evaluator must not be the actor.** An agent grading its own work inflates — it declares
+victory. This is the most common failure mode of self-correcting agents, and it is exactly the D1
+separation (planner deliberates, executor grounds) applied one level up: the level-3 critique must be
+a **distinct role from the executor** that produced the answer. Cheap, but it is what *detects* that
+another iteration is needed — and its output is a **verdict, not a plan** (Q9a): the re-plan on a
+failing verdict is a separate, normal planner call. The inline-self-critique variant (executor grades
+itself) is rejected for the same reason D1 rejects a planner-that-answers.
+
+**P2 — the loop needs an objective stop condition.** A loop against *"did I do a good job?"* never
+terminates cleanly. So the planner emits a **success criterion** alongside the refined task —
+*"done when: the report has a per-region 2024-vs-2025 delta table."* Concretely: **add a
+`success_criteria` field to the `Plan` schema** — the same schema-widening already planned for
+`context` / `artifact_refs` (§4), nullable under the strict-mode rule. This is the highest-value single
+addition in this section, because it:
+
+- gives the level-3 critic something objective to check instead of vibes;
+- makes **"focused"** structural — the loop stops when the criterion is met, not when the model feels
+  done;
+- makes the §8 *under-briefing* risk observable — a thin brief yields a thin, visibly-inadequate
+  criterion.
+
+It makes persistence *terminating by construction* rather than hopeful.
+
+### 9.3. Autonomy is not on-the-fly vs. manual — it is budgeted autonomy
+
+The healthy middle: the agent re-strategizes on its own **up to a budget** (N revisions / T cost / K
+turns); on non-convergence it neither loops forever nor gives up silently — it **escalates to the human
+as a question** (`ask_user`), which the planner is already built to do. The routing rule:
+
+> **Handle each failure at the lowest competent level; escalate only what that level cannot resolve.**
+
+This makes "adjust the approach" concrete instead of magical, by mapping failure classes to levels:
+
+| Failure | Routed to | Cost |
+| --- | --- | --- |
+| Transient tool error | level 1 retry | ~free |
+| Wrong tactic (e.g. the `.xlsx`-won't-parse-as-CSV case, O1) | level 1 / 2 change tactic | cheap |
+| Answer produced but fails `success_criteria` | **level 3, revise plan** | one extra cycle |
+| Blocked on info only the human has | `ask_user` escape | a turn |
+| Goal itself ill-posed | re-clarify with human | a turn |
+
+The third row is the new one: today it returns to the human; level 3 catches it first.
+
+### 9.4. Build order (recommendation)
+
+1. **Tune level 1 first — nearly free.** Make the executor's turn budget explicit and prompt it to
+   *persist-then-report* rather than bail. Best effort-to-effect ratio; may reduce how much level 3 is
+   needed at all.
+2. **Add `success_criteria` to the `Plan` schema (§4) — in the *shared* planner, for both `run` and
+   `chat` (Q9c).** Small, and the enabler for everything else. Fold into the schema-widening already
+   scoped for chat-planner.
+3. **Build level 3 (critique loop) as explicit, budgeted, opt-in — as a shared planner mechanism, not
+   chat-only (Q9c).** Cycle: executor answers → **critic** judges against `success_criteria` (Q9a) →
+   **satisfied** ⇒ deliver the answer, or **not** ⇒ **planner re-plans** with the critic's `gaps` and
+   re-delegates — capped at N revisions, then escalate via `ask_user`. **`run` is its prime
+   beneficiary** — it is single-shot on execution with no human turn to catch a bad answer. **Promote to
+   default on `agent eval` evidence** (plan.md §F), exactly as O2 gates `--plan`. It is measurable:
+   "more persistent" = answer quality per turn *before* human intervention.
+4. **Reach for subagents (level 2) for focus, not persistence.** Their real payoff is **context
+   isolation** — the coordinator never sees the child's thrashing, and a narrow-prompt / narrow-tool
+   child *cannot* wander (a focus win, orthogonal to the persistence loop). Use when a subtask genuinely
+   benefits from isolation, not as the primary persistence mechanism.
+
+### 9.5. Interaction with D2 / O4 (design them together)
+
+Level 3 has real tension with the **stateless executor** (D2) and **executor working-state carryover**
+(O4). A revise-and-retry cycle wants the executor *not* to start cold on each revision, or it re-derives
+everything. Cache-with-fallback + the manifest (D3–D5) is most of the answer — state lives on disk, so a
+cold retry re-*reads* rather than re-*computes*. But a tight critique loop is precisely the
+incremental-build case O4 named as where D2 might need its scoped exception, so **level 3 is where O4
+first bites** — the critique loop and the O4 carryover decision should be designed in one pass, not
+separately.
+
+### 9.6. Open questions (this section)
+
+- **Q9a — Critic surface (resolved: a verdict-emitting critic, separate from the plan; re-plan is a
+  normal planner call).** Correcting an earlier over-collapse — *"reuse the planner, add an `accept`
+  field to `Plan`"*: **a critic's output is a verdict, not a plan.** Folding a verdict into `Plan` crams
+  a tagged union into the schema (on approve, `refined_task`/`artifact_refs` are dead weight) and pays
+  full planning cost just to say *"this is fine."* The loop is **three roles, only one of which answers**
+  (D1 preserved — the executor is still the sole author):
+  1. executor answers →
+  2. **critic** judges the answer against `success_criteria` → `{satisfied: bool, gaps: [...]}`. Small,
+     cheap output; can be a smaller/faster model, since judging ≠ planning.
+  3. `satisfied` ⇒ **deliver the executor's answer, loop ends — no re-plan.** `¬satisfied` ⇒ the
+     **planner runs again with its unchanged contract** (output = a `Plan`), now seeing the executor's
+     answer + the critic's `gaps` as added context, and emits a revised brief → back to the executor.
+
+  So `Plan` stays **exactly** as §4 defines it — **no `accept`/`verdict` field** — and D1's no-answer
+  guarantee is if anything *cleaner*; the verdict lives on the critic's own small schema. The residual
+  sub-question is only **whether the critic is a distinct prompt or the planner *model* invoked in a
+  judge mode** — but either way the two outputs are **distinct schemas** (verdict vs. plan), which is the
+  point the unified-role framing missed. **Lean distinct + cheap:** judgment is a different, cheaper
+  operation paid on *every* iteration (including the common approve case), so a small dedicated critic
+  keeps the loop's steady-state cost low; back it with the same model only if a second prompt proves not
+  worth it. (This is [`subagents.md`](subagents.md) §8's "start simple, split if it over-reaches" — with
+  the split warranted up front by the output-type mismatch.)
+- **Q9b — Revision budget surface & default.** Flag, config-dir entry, or per-plan field? And N = ?
+  (Start conservative — 1–2 revisions — to bound the §5 latency cost.)
+- **Q9c — Criterion scope (resolved: shared, and the loop is shared too).** `success_criteria` goes in
+  the **shared `Plan` schema** (`internal/agent/plan.go`), so both `run` and `chat` get it — excluding it
+  from `run` would be extra work for no gain, and it sharpens the executor's target even with no critique
+  loop (§4/§8 "planner role shared"). Going further: **the level-3 critique loop is a shared planner
+  mechanism, not chat-only, and `run` is its prime beneficiary.** `run` is deliberate-by-construction but
+  single-shot on execution — it emits an answer and stops with no human turn to catch a bad one, whereas
+  in `chat` the user is right there next turn. So autonomous `run` is where executor → planner-critic →
+  revise matters *most*, and because the critic is just the planner re-run (Q9a), `run` inherits the loop
+  with only the revise-cap wiring — no new agent. **Consequence to note (not resolved here):** the
+  `revise` path leans on the manifest (D4) to avoid re-derivation on a cold re-seed (§9.5/O4), and `run`
+  has **no manifest/scratch cache today** — so a `run` critique loop either stays scoped to
+  cheap-to-redo tasks or motivates giving `run` a lightweight manifest. Flagged for the joint §9.5 design
+  pass.
+- **Q9d — Criterion quality is now load-bearing** (like brief completeness, §8): a well-formed criterion
+  can still be a bad one. Same mitigation — observable/auditable, eval-gated — but note it as a new
+  prompt-tuning surface.
