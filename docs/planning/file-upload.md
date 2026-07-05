@@ -7,7 +7,8 @@ executor can read. This is the concrete first slice of the `origin: user` regist
 from the (still-unbuilt) planner/manifest pipeline.
 
 Companion to [`chat-planner.md`](chat-planner.md) (the artifact manifest this eventually feeds),
-[`workspace.md`](workspace.md) / [`projects.md`](projects.md) (the scope an attachment belongs to),
+[`workspace.md`](workspace.md) (the scope an attachment belongs to; the *(deferred)* per-project scope
+is [`../deferred/projects.md`](../deferred/projects.md)),
 and [`resume.md`](resume.md) (attachments must survive a resumed session). **Status: requirements +
 options, not decided.** Reviewable artifact before code.
 
@@ -17,8 +18,8 @@ options, not decided.** Reviewable artifact before code.
 
 Traced in code, so the gap is concrete, not assumed:
 
-- **CLI chat** (`cmd/chat.go`): the executor runs in `workDir` — the workspace root, or the active
-  project dir (`resolveProjects`, `cmd/projects.go:35`). There is **no attach affordance**; a user
+- **CLI chat** (`cmd/chat.go`): the executor runs in `workDir` — the resolved workspace root
+  (`resolveWorkspace`, `cmd/workspace.go`). There is **no attach affordance**; a user
   can only *mention* a path inside message text, and the executor reaches it only if its shell can
   read that path.
 - **Telegram** (`internal/frontend/telegram/`): `mapUpdate` (`transport_http.go:67`) maps **text
@@ -50,8 +51,9 @@ What any accepted design must satisfy:
 - **R4 — The agent is *told*, not force-fed.** A turn references the attachment (path + type + size,
   maybe a one-line shape note) rather than dumping the file's bytes into context (chat-planner §D3:
   filesystem is working memory, references travel, not payloads).
-- **R5 — Scope-correct.** An attachment belongs to a workspace/project scope and a session, and must
-  land in the right one (project-aware when a project is active — §3 D1).
+- **R5 — Scope-correct.** An attachment belongs to a workspace scope and a session, and must
+  land in the right one. *(Per-project scoping is [deferred](../deferred/projects.md); until it
+  returns, the scope is simply the workspace.)*
 - **R6 — Survives resume.** A resumed session ([`resume.md`](resume.md)) must still find its
   attachments — so storage is keyed by something stable (session id / scope), not process-local.
 - **R7 — Cross-frontend consistent.** A file uploaded via Telegram and one pointed-to via CLI should
@@ -93,7 +95,7 @@ HTTP multipart     ──┘   (bytes on disk,        ("user attached <path> (cs
 
 | Option | Layout | Trade |
 |---|---|---|
-| **A. Session-scoped, project-aware** *(lean)* | `<scope>/.agent/attachments/<sessionID>/<file>` where `<scope>` = workspace root, or the active project dir when one is active | Matches the cross-frontend session model + doc scoping; session isolation; easy cleanup + promotion; survives resume (R6). Reuses the `.agent/` convention already used for project markers (`projects.go:31`). Slightly more path plumbing. |
+| **A. Session-scoped** *(lean)* | `<scope>/.agent/attachments/<sessionID>/<file>` where `<scope>` = workspace root *(the active-project dir when the [deferred](../deferred/projects.md) project scope returns)* | Matches the cross-frontend session model + doc scoping; session isolation; easy cleanup + promotion; survives resume (R6). Reuses the `.agent/` directory convention. Slightly more path plumbing. |
 | **B. Scope root directly** | `<workDir>/<file>` | Simplest; executor already sees `workDir`. But clutters the tree, no session isolation, awkward cleanup, name collisions. |
 | **C. Shared per-scope dir** | `<scope>/.agent/attachments/<file>` | Simpler than A (no session key); but sessions in a scope see each other's files — leaks across conversations. |
 

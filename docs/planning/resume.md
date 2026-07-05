@@ -2,13 +2,34 @@
 
 Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
 
-_Last session: 2026-07-04._
+_Last session: 2026-07-05._
 
 ---
 
-## Latest (2026-07-04): Projects track — P5 (docs) — DONE → Projects track COMPLETE
+## Latest (2026-07-05): Projects feature REVERTED → back to a two-scope model
 
-Documented the Projects feature ([`projects.md`](projects.md) P5), closing the track (P1–P5 all done).
+Stepped back from the three-scope model (config-dir → workspace → project) to **config-dir +
+workspace only** (commit `a406e4f`). The project sub-scope introduced too much ambiguity (does a
+switch move the shell cwd? where do artifacts go? what is a "project" vs the workspace?) without a
+settled answer, so it is set aside until the model is clearer.
+
+- **Removed:** `internal/projects`, the `list/create/switch_project` tools, the `--project`/
+  `--no-project` flags + `projects`/`projects_root` config, `ExecutorConfig.ProjectsRoot`/
+  `SwitchWorkspace`, `Agent.switchWorkspace`, and the `project_created`/`project_switched` audit events.
+- **Kept:** `tools.Workspace` as the shell's re-anchorable cwd anchor (no longer driven by a project
+  switch).
+- **Design preserved** in [`../deferred/projects.md`](../deferred/projects.md); the in-progress
+  three-scope implementation is on the `wip/three-scope-projects` branch. Reference docs
+  (`environment.md`, `usage.md`, `tools.md`, `design.md`, README) are pruned to the two-scope model.
+
+**⚠️ The "Projects track" entries below (P1–P5, 2026-07-04) describe that reverted work — they are
+retained as history, not current behavior.** `go build ./...` + `go test ./...` green after the revert.
+
+---
+
+## Superseded (2026-07-04): Projects track — P5 (docs) — DONE → Projects track COMPLETE
+
+Documented the Projects feature ([`projects.md`](../deferred/projects.md) P5), closing the track (P1–P5 all done).
 Docs-only; `go build ./...` + selfdocs/cmd tests green (`environment.md` is embedded, so
 `read_self_docs` now serves the projects section).
 
@@ -30,7 +51,7 @@ tool, no trigger); Phase 6d (budget dial + context-window awareness); deferred s
 
 ### Prior (2026-07-04): Projects track — P4 (CLI flags) — DONE
 
-CLI/config control over the projects registry ([`projects.md`](projects.md) P4/§6). Build/vet/`go
+CLI/config control over the projects registry ([`projects.md`](../deferred/projects.md) P4/§6). Build/vet/`go
 test -race` green (full suite); flags, error paths, and config persistence live-verified via the binary.
 
 - **One seam.** `cmd/projects.go` `resolveProjects(homeWorkDir, cfg) → (root, workDir, err)` replaces
@@ -60,7 +81,7 @@ this session** — commits local on `main`.
 
 ### Prior (2026-07-04): Projects track — P3 (switch) — DONE
 
-Mid-conversation project switching ([`projects.md`](projects.md) P3/§7): `switch_project(project)`
+Mid-conversation project switching ([`projects.md`](../deferred/projects.md) P3/§7): `switch_project(project)`
 makes a named project the active workspace *without rebuilding the executor*. Build/vet/`go test -race`
 green (full suite); the re-anchor is proven end-to-end with a scripted provider (a live model call
 needs an API key).
@@ -90,7 +111,7 @@ needs an API key).
 
 ### Prior (2026-07-04): Projects track — P2 (create / promote) — DONE
 
-Write side of the Projects registry ([`projects.md`](projects.md)). Build/vet/`go test -race`
+Write side of the Projects registry ([`projects.md`](../deferred/projects.md)). Build/vet/`go test -race`
 green (full suite); the create write-path is fully unit-tested (the model-driven `create_project`
 call itself needs an API key to exercise live).
 
@@ -111,7 +132,7 @@ call itself needs an API key to exercise live).
 
 ### Prior (2026-07-04): Projects track — P1 (marker + registry read) — DONE
 
-First slice of the Projects track ([`projects.md`](projects.md)): named, recallable workspaces.
+First slice of the Projects track ([`projects.md`](../deferred/projects.md)): named, recallable workspaces.
 Build/vet/`go test -race` green (full suite); wiring covered by tests (the model-driven
 `list_projects` call itself needs an API key to exercise live).
 
@@ -461,7 +482,7 @@ executor + planner (shared loop). Test: `systemdate_test.go`.
   (`internal/tools/memory.go`), trusted + **not** sandbox-exposed; `NewExecutor` gained a
   `memory.Store` param (nil ⇒ tools omitted); `serve` shares one store across runs. `remember`
   emits a `memory_write` audit event. Tests: `internal/memory/memory_test.go` +
-  `internal/agent/memory_e2e_test.go`. Design + trade-offs in [`memory.md`](memory.md).
+  `internal/agent/memory_e2e_test.go`. Design + trade-offs in [`memory.md`](../memory.md).
 - **Model + tier config — DONE.** `Config.Model`/`Config.Tier` + `agent config set-model` /
   `set-tier`; precedence `--model`/`--tier` flag > config > built-in default
   (`resolveModel`/`resolveTier` in `cmd/config.go`; tier default `balanced`, validated by
@@ -569,10 +590,10 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    `webfetch.go`/`websearch_ddg.go`, executor + planner prompt rules in `agent.go`. Build/test
    green. (b)'s async/tiered approval refactor deferred to fold into Phase 3 when it forces the
    approval refactor.
-3. **All security mechanisms now documented** in [`security.md`](security.md) (threat→control map).
+3. **All security mechanisms now documented** in [`security.md`](../security.md) (threat→control map).
 4. ~~start **Phase 3a** (`ToolSpec` + `Registry`).~~ **DONE:** `internal/tools/spec.go`,
    `registry.go`, `registry_test.go`; all green, not wired to the loop. Tool-system design +
-   benefits/drawbacks in [`tools.md`](tools.md). `plan.md` 3a checked off.
+   benefits/drawbacks in [`tools.md`](../tools.md). `plan.md` 3a checked off.
 5. ~~**Phase 3b** — wire broker/sandbox/registry into the run flow.~~ **DONE:** `cmd/run.go`
    builds per-run `audit.jsonl` + persistent catalog; `NewExecutor` wires `Broker → LuaGlue →
    Registry`, shares the glue with `run_code`, resolves via `Agent.dispatch`, sets Trusted/Exposed.
@@ -599,7 +620,7 @@ approval in v1 (async = Phase 4). Integration model: keep `tools.Tool` for built
    `Observers`; `NewExecutor`/`NewPlanner` take `Observer` + `runID`; `cmd/run.go` composes them.
    Loop is grep-clean of stdout/stderr. `TestRun_EmitsEventSequence`. All green.
 10. **Phase 4c IN PROGRESS — `internal/api` transport.** Fork **settled: HTTP+SSE** (rationale +
-    JSON-RPC-addable design in [`api-transport.md`](api-transport.md)). **Vertical slice DONE:**
+    JSON-RPC-addable design in [`api-transport.md`](../api-transport.md)). **Vertical slice DONE:**
     transport-neutral core (`engine.go` `Engine.StartRun`/`Subscribe` over a `Runner`; `hub.go`
     per-run `Hub` = `agent.Observer` with history replay; `event.go` wire `Event`) + SSE adapter
     (`http.go`: `POST /runs`, `GET /runs/{id}/events`) + `cmd/serve.go` (`agent serve`). Tests in

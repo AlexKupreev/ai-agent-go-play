@@ -41,7 +41,7 @@ workspace change; giving it a different identity is a config-dir change.
 > **Deferred: named projects.** An earlier design added a third scope — a *project*, a named,
 > recallable sub-scope *within* a workspace that the agent could switch into mid-conversation
 > (with its own guideline overlay and artifact/session home). That feature has been set aside to
-> keep the model simple; its design is preserved in [`../deferred/projects.md`](../deferred/projects.md)
+> keep the model simple; its design is preserved in [`deferred/projects.md`](deferred/projects.md)
 > for a later revisit. Today there is exactly config-dir + workspace.
 
 ---

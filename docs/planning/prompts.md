@@ -1,14 +1,18 @@
 # Prompt composition — design & roadmap
 
 How the agent's system prompt is assembled, and how an operator customizes it. Adopts pi's
-`SYSTEM.md` / `AGENTS.md` mechanism as a **two-tier model** — global (config-dir) + project
-(workspace), project overriding global. The workspace tier depends on the concept defined in
+`SYSTEM.md` / `AGENTS.md` mechanism as a **two-tier model** — global (config-dir) + workspace, the
+workspace overriding global. The workspace tier depends on the concept defined in
 [`workspace.md`](workspace.md); this doc owns the prompt-composition mechanics. Companion to
 [`subagents.md`](subagents.md) (per-agent-type prompts share the same seam) and
-[`../usage.md`](../usage.md) (config-dir). **§0–§2 are built** (stages A–C): the `composeSystemPrompt`
-seam, config-dir + workspace `SYSTEM.md`/`AGENTS.md` (alias `CLAUDE.md`), the tier gate, and
-`--no-context-files` / `--context-file`. §3–§4 (per-agent-type prompts, sub-agent inheritance) remain
-roadmap.
+[`../usage.md`](../usage.md) (config-dir).
+
+**§0–§2 are built** (stages A–C): the `composeSystemPrompt` seam, config-dir + workspace
+`SYSTEM.md`/`AGENTS.md` (alias `CLAUDE.md`), the tier gate, and `--no-context-files` /
+`--context-file`. **Their behavior is now canonical in
+[`../environment.md`](../environment.md#prompt-customization-systemmd--agentsmd)** ("Prompt
+customization"); §0–§2 below are retained as the design/mechanics record. §3–§4 (per-agent-type
+prompts, sub-agent inheritance) remain roadmap.
 
 ---
 
@@ -46,18 +50,18 @@ that does not depend on this design.
 
 ## 2. Two-tier customization (config-dir + workspace)
 
-Two file mechanisms, each resolved at **both** tiers — global `<config-dir>/` and project
+Two file mechanisms, each resolved at **both** tiers — global `<config-dir>/` and workspace
 `<workspace>/` (see [`workspace.md`](workspace.md) for how the workspace root is found):
 
 | File | Effect | Maps to |
 |---|---|---|
 | `SYSTEM.md` | **replaces** the base prompt entirely (operator owns the whole prompt) | `replaceWith` |
-| `AGENTS.md` (alias `CLAUDE.md`) | **appended** as operator/project instructions | `appends` |
+| `AGENTS.md` (alias `CLAUDE.md`) | **appended** as operator/workspace instructions | `appends` |
 
-**Precedence — project over global** (pi's rule):
+**Precedence — workspace over global** (pi's rule):
 
 - `SYSTEM.md`: a workspace `SYSTEM.md` wins outright over a config-dir one (replace ⇒ last writer).
-- `AGENTS.md`: config-dir first, then workspace, **concatenated** (project has the last word). For the
+- `AGENTS.md`: config-dir first, then workspace, **concatenated** (workspace has the last word). For the
   CLI, the workspace tier collects files walking **up** parent dirs (bounded per `workspace.md` §6).
 - If both `AGENTS.md` and `CLAUDE.md` exist *in the same directory*, load one (prefer `AGENTS.md`) —
   don't silently concatenate two files that likely duplicate.
@@ -89,7 +93,7 @@ Same helper, so the three features are one code path.
 
 **Resolved (Stage D):** do sub-agents inherit the config-dir/workspace `AGENTS.md`? **`append` types do,
 `replace` specialists don't** — and this falls out of the composition seam for free: `parent.systemPrompt`
-already has the operator/project `AGENTS.md` bodies folded in at `NewExecutor` construction (stage A/C),
+already has the operator/workspace `AGENTS.md` bodies folded in at `NewExecutor` construction (stage A/C),
 so an `append` sub-agent that builds on `parent.systemPrompt` inherits them automatically, while a
 `replace` sub-agent (body only) does not. No extra plumbing; the default matches the proposal. So the
 built-in `general-purpose` (`append`) inherits the operator's instructions; `researcher` (`replace`)
@@ -102,7 +106,7 @@ stays narrow and self-contained.
 The workspace half of §2 rests on the [`workspace.md`](workspace.md) concept — how the workspace root
 is resolved (CLI: cwd + parent walk; `serve`: process cwd in v1, a per-run field as the extension) and
 how trust gates it. This doc consumes that concept; it doesn't redefine it. The only prompt-specific
-note: the workspace is the **first consumer** of the concept, so shipping project prompt files and
+note: the workspace is the **first consumer** of the concept, so shipping workspace prompt files and
 shipping the workspace resolver are the same unit of work.
 
 ---

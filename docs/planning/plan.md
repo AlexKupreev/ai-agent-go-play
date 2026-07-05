@@ -1,7 +1,7 @@
 # Implementation Plan
 
 The actionable, phased plan for evolving this repo from a ReAct CLI into the self-extending
-agent described in [`design.md`](design.md). Each phase is shippable on its own and leaves the
+agent described in [`design.md`](../design.md). Each phase is shippable on its own and leaves the
 agent working. Do them in order — the build-ordering rule in Phase 2 is hard.
 
 **How to read this:** each phase has a *Goal*, concrete *Tasks* (with the files they touch),
@@ -186,7 +186,7 @@ Only *authored* tools go through the sandbox/broker; built-ins are unchanged fro
     on single-user CLI. Native impls never persisted (skipped on save). Search = token-overlap
     (BM25-lite deferred to 3d).
 - [x] *Acceptance:* register/list/revoke/search round-trip + persistence reload, unit-tested; not
-    wired to the loop. Design + trade-offs documented in [`tools.md`](tools.md).
+    wired to the loop. Design + trade-offs documented in [`tools.md`](../tools.md).
 
 ### 3b — Live broker/sandbox wiring (activates Phase 2 in the run flow)  *(DONE)*
 
@@ -265,7 +265,7 @@ before the transport/frontend choices (real forks, settled when reached).
 ### Decisions to settle when reached (not blocking 4a–4b)
 
 - **Transport (4c):** ~~HTTP+SSE vs JSON-RPC/WebSocket.~~ **DECIDED: HTTP+SSE** (simplest, curl-able,
-    streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](api-transport.md).
+    streaming-friendly, single-binary). Rationale + how JSON-RPC stays addable: [`api-transport.md`](../api-transport.md).
 - **First frontend (4e):** ~~Telegram vs web.~~ **DECIDED: Telegram** (thin, good for the
     unattended/mobile approval case; web is more work for the same payoff first). Built in 4e-6 (bot
     logic behind a `Transport` interface; live transport via the `go-telegram-bot-api` SDK) — see
@@ -303,7 +303,7 @@ before the transport/frontend choices (real forks, settled when reached).
     direct stdout/stderr writes (grep-clean). `TestRun_EmitsEventSequence` asserts the event order;
     the API (4c) will attach its own observer to stream the same events.
 
-### 4c — `internal/api` transport  *(DONE — HTTP+SSE, see [`api-transport.md`](api-transport.md))*
+### 4c — `internal/api` transport  *(DONE — HTTP+SSE, see [`api-transport.md`](../api-transport.md))*
 
 Built as increments. Package is split so a JSON-RPC adapter can attach to the same core later.
 
@@ -319,7 +319,7 @@ Built as increments. Package is split so a JSON-RPC adapter can attach to the sa
     `GET /approvals` and `POST /approvals/{id}` endpoints; `serve` shares one queue between executor
     and endpoints. Tests:
     `approval_test.go` (park→list→resolve for approve/deny; unknown id = 404). Design in
-    [`api-transport.md`](api-transport.md).
+    [`api-transport.md`](../api-transport.md).
 - [x] **Tools over the API.** `internal/api/tools.go`: `GET /tools` (catalog in registration order)
     and `GET /tools/search?q=&k=` (relevance-ranked) over the `tools.Registry`; wire `ToolView`
     omits impl source. `serve` now builds **one** persistent registry shared between the executor and
@@ -343,7 +343,7 @@ API long-poll + send) when a bot token is in hand, then the remaining housekeepi
 push, markdownlint). *(4e-2, per-user data ownership, was dropped — the engine stays single-user; see
 the multi-user decision above.)*
 
-### 4d — Long-term memory  *(DONE — see [`memory.md`](memory.md))*
+### 4d — Long-term memory  *(DONE — see [`memory.md`](../memory.md))*
 
 - [x] `internal/memory`: `Store` interface (`Put/Get/Search/List/Delete`) + `MemoryStore`
     (in-memory, optional JSON-file persistence — atomic temp+rename, token-overlap `Search`),
@@ -667,8 +667,8 @@ tried by editing agent-type files, and prompt/model/organization variants can be
 **Next candidates** (pick per priority): **Stage G — docs consolidation** (surface workspace vs
 config-dir + the new `reload`/`eval` commands in `usage.md`/`README.md`, and the deferred
 `docs/environment.md`); the **UX & plumbing** cluster below (verbosity default, transcript location,
-unified human-in-the-loop); the **Projects** track ([`projects.md`](projects.md) — named, recallable
-workspaces for local chat: P1 marker + `list_projects` first); or pulling in **Phase 6d** (token
+unified human-in-the-loop); the **Projects** track (*built then reverted — deferred*,
+[`../deferred/projects.md`](../deferred/projects.md)); or pulling in **Phase 6d** (token
 budget dial + context-window awareness).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
@@ -694,20 +694,22 @@ is superseded.)*
   tiers. Not multi-tenant isolation — that remains a non-goal. Nothing built yet; the near-term
   buildable slice is **parallel read-only executors** (§4 of that doc).
 
-- **Prompt composition** (operator/project customization of the system prompt, after pi's
+- **Prompt composition** (operator/workspace customization of the system prompt, after pi's
   `SYSTEM.md`/`AGENTS.md`): design in [`prompts.md`](prompts.md). One `composeSystemPrompt` seam feeds
-  three features — the base prompt, config-dir+workspace `AGENTS.md`/`SYSTEM.md` (two-tier, project
+  three features — the base prompt, config-dir+workspace `AGENTS.md`/`SYSTEM.md` (two-tier, workspace
   overrides global), and per-agent-type prompts (`PromptMode`). Read once at construction to preserve
   prompt caching.
 
-- **Workspace** (the project the agent acts on, vs the config-dir = the agent's identity): concept in
+- **Workspace** (the target the agent acts on, vs the config-dir = the agent's identity): concept in
   [`workspace.md`](workspace.md). Two-tier, pi-compatible; today only a bare `workDir` (shell cwd)
   exists. CLI resolves the workspace as cwd + parent walk; `serve` uses the process cwd in v1 with a
   per-run `workspace` field as the designed-for extension. Workspace prompt files are **tier-gated**
   (an untrusted checkout can't inject into a `safe` agent). First consumer is prompt composition.
 
-- **Projects** (named, recallable workspaces — the conversational counterpart to the cwd model):
-  design in [`projects.md`](projects.md). A project is a workspace with a name + home so a local chat
+- **Projects** *(built P1–P5, then reverted in `a406e4f` — deferred; design preserved in
+  [`../deferred/projects.md`](../deferred/projects.md))* (named, recallable workspaces — the
+  conversational counterpart to the cwd model):
+  design in [`../deferred/projects.md`](../deferred/projects.md). A project is a workspace with a name + home so a local chat
   can recall it by *intent* (*"the articles from last time"*) and switch into it mid-session. Lives at
   `<home>/projects/<slug>-<uid>/` with a `.agent/project.md` marker — **the filesystem is the
   registry** (no separate index), the UID is stable identity (title is mutable metadata), trust comes

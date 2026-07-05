@@ -8,9 +8,14 @@ front of a stateless executor**, running the full clarify/refine → execute cyc
 Companion to [`plan.md`](plan.md) §4f (the chat REPL + persistent sessions this builds on),
 [`prompts.md`](prompts.md) (system-prompt composition) with [`../environment.md`](../environment.md)
 / [`../usage.md`](../usage.md) (the hot-reloadable `PLANNER.md` override), and
-[`workspace.md`](workspace.md) / [`projects.md`](projects.md) (the scratch-directory home for the
-artifact cache §D5). **Status: designed, not built.** This doc is the reviewable artifact agreed
-before code.
+[`workspace.md`](workspace.md) (the scratch-directory home for the artifact cache §D5).
+**Status: designed, not built.** This doc is the reviewable artifact agreed before code.
+
+> **Note:** the **project** scoping used below (§D5–§D7 — a project-scoped artifact cache, the
+> `list/create/switch_project` verbs) depends on the named-projects feature, which is currently
+> [**deferred**](../deferred/projects.md) (built then reverted to a two-scope model). Until it
+> returns, treat those parts as design that assumes it; the session/scratch (workspace-scoped) paths
+> stand on their own.
 
 ---
 
@@ -182,7 +187,7 @@ is (§4).
 Artifacts are **not deleted immediately**; they live in a **scratch cache** for reuse, scoped to the
 active workspace (D6) — a **session/scratch** run has a session-scoped cache; a **project** has a
 project-scoped one. The manifest is that cache's index and shares its scope. Ties into the existing
-workspace/projects machinery ([`workspace.md`](workspace.md), [`projects.md`](projects.md)) for
+workspace/projects machinery ([`workspace.md`](workspace.md), [`projects.md`](../deferred/projects.md)) for
 namespacing.
 
 - **The key safety rule:** every `artifact_ref` in a brief is **cache-with-fallback** — *"read
@@ -228,7 +233,7 @@ re-fed* — not a long-lived agent object.
 ### D7. Project switching, and proactive project proposals
 
 Only the executor holds the project verbs (`list_projects` / `create_project` / `switch_project`,
-[`projects.md`](projects.md) §4); the planner has web + `ask_user` only. Two interactions the
+[`projects.md`](../deferred/projects.md) §4); the planner has web + `ask_user` only. Two interactions the
 pipeline has to place:
 
 - **Switching mid-conversation.** Recognizing *"let's work on the heart-health project"* is an

@@ -36,17 +36,18 @@ This is the load-bearing context for §2 and §5: human-invoked / built-in tools
 **machine-authored** tools are sandboxed and brokered; the trusted users share one data domain
 without a hostile-isolation boundary.
 
-**Three scopes — identity, sandbox, sub-scope.** A run is layered from three nested directories, each
-inheriting the one above and able to override it: the **config-dir** is *who the agent is* (config,
+**Two scopes — identity and target.** A run is layered from two nested directories, the inner
+inheriting the outer and able to override it: the **config-dir** is *who the agent is* (config,
 tool catalog, memory, audit log, global prompt files and agent types — always trusted, the shared
 data domain above); the **workspace** is the sandbox it *acts in* (shell cwd, workspace-common prompt
-files and agent types); and a **project** is a named sub-scope *within* a workspace (its own prompt
-overrides, artifacts, and sessions). The workspace and project anchor context and targets, **never
-identity** — memory/tools/audit stay config-dir-scoped, so per-project separation means a second
-config-dir, not a second workspace. Unlike the config-dir, a workspace can be an untrusted checkout,
-so its prompt/agent files (they land *in* a system prompt) auto-load only above the `safe` tier unless
+files and agent types). The workspace anchors context and targets, **never identity** —
+memory/tools/audit stay config-dir-scoped, so per-workspace separation means a second config-dir,
+not a second workspace. Unlike the config-dir, a workspace can be an untrusted checkout, so its
+prompt/agent files (they land *in* a system prompt) auto-load only above the `safe` tier unless
 named explicitly. Full model in
-[`environment.md`](environment.md#two-scopes-config-dir-and-workspace).
+[`environment.md`](environment.md#two-scopes-config-dir-and-workspace). *(An earlier design added a
+third scope — a named **project** sub-scope within a workspace — since set aside; its design is
+preserved in [`deferred/projects.md`](deferred/projects.md).)*
 
 ---
 
