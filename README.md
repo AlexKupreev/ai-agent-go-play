@@ -74,7 +74,7 @@ eval <task> --models …` / `--variants file.yaml`.
 and switches into mid-chat (*"back to the articles from last time"*) via `list_projects` /
 `create_project` / `switch_project`, stored under `<workspace>/projects/`. Use `--no-project` for
 flat-repo mode (act on the checkout directly) or `--project <uid|title|path>` to open one at
-launch — see [`docs/environment.md`](docs/environment.md#projects--named-recallable-workspaces).
+launch — see [`docs/environment.md`](docs/environment.md#projects--named-sub-scopes-within-a-workspace).
 
 The full command list, trust tiers, approvals, authored tools, memory, audit log, running multiple
 agents, and the optional Telegram frontend are documented in **[`docs/usage.md`](docs/usage.md)**.

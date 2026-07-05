@@ -125,7 +125,7 @@ aliases](#engine-aliases)).
 ```
 
 Flags: `--model`, `--tier` (override config for this run), `--verbose`. The global
-`--workspace`, `--no-project`, and `--project` flags (see [Projects](#projects--named-recallable-workspaces))
+`--workspace`, `--no-project`, and `--project` flags (see [Projects](#projects--named-sub-scopes-within-a-workspace))
 apply here too.
 
 ### `agent chat`
@@ -322,15 +322,17 @@ the rest still report, and **Ctrl+C** stops after the current variant.
 
 ---
 
-## Projects — named, recallable workspaces
+## Projects — named sub-scopes within a workspace
 
 For conversational use (`chat`, `serve`, Telegram), the agent can keep work as **named
 projects** it recalls by intent and switches into mid-conversation — *"let's go back to the
-articles from last time"* — without you naming a path. Projects live under the workspace at
-`<workspace>/projects/<slug>-<uid>/`, each with a small `.agent/project.md` marker; **the
-filesystem is the registry** (no separate index). The full model is in
-[`environment.md`](environment.md#projects--named-recallable-workspaces); operationally the agent
-drives it through three tools:
+articles from last time"* — without you naming a path. A project is a named sub-scope *within* the
+workspace: it inherits the workspace's common guidelines and adds its own, and keeps its own
+artifacts and sessions. Projects live under the workspace at `<workspace>/projects/<slug>-<uid>/`,
+each with a small `.agent/project.md` marker; **the filesystem is the registry** (no separate
+index). The full model is in
+[`environment.md`](environment.md#projects--named-sub-scopes-within-a-workspace); operationally the
+agent drives it through three tools:
 
 - **`list_projects`** — what projects exist (uid, title, description, recency).
 - **`create_project`** — mint and switch into a new project (**asks first**, and is audited);

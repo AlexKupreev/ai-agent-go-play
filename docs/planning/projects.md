@@ -1,16 +1,19 @@
 # Projects — concept & roadmap
 
-A **project** is a named, persistent workspace the agent can *recall by intent* and *switch into*
-mid-conversation — the thing that lets a local chat answer *"let's discuss the articles I shared last
-time"* or *"now let's write a script for health analysis"* without the user ever naming a path. It is
-the conversational counterpart to [`workspace.md`](workspace.md)'s cwd model: a workspace answers
-*what the agent is acting on*, and a project is a workspace that has been **given a name and a home so
-it can be found again**. Companion to [`workspace.md`](workspace.md) (the anchor a project *is*),
-[`prompts.md`](prompts.md) (a project carries the project prompt tier), and
-[`subagents.md`](subagents.md) (a scout / worktree operates on the active project). **Status:
-built — P1–P5 complete** (registry read, create/promote, mid-session switch, CLI flags, docs; see
-§9). This doc resolves the mid-session-switch and "who vouches for a workspace" open questions left
-in [`workspace.md`](workspace.md) §6.
+A **project** is a named, persistent **sub-scope within a workspace** the agent can *recall by intent*
+and *switch into* mid-conversation — the thing that lets a local chat answer *"let's discuss the
+articles I shared last time"* or *"now let's write a script for health analysis"* without the user ever
+naming a path. It is the innermost of the **three-scope model** (config-dir → workspace → project;
+canonical in [`../environment.md`](../environment.md)): the [`workspace.md`](workspace.md) is the
+sandbox the agent lives in, and a project is a named corner of it that **inherits the workspace's
+common guidelines and adds its own**, keeping its own artifacts and sessions. Companion to
+[`workspace.md`](workspace.md) (the container a project lives in), [`prompts.md`](prompts.md) (a
+project carries the innermost prompt tier), and [`subagents.md`](subagents.md) (a scout / worktree
+operates on the active project). **Status: built — P1–P5 complete** (registry read, create/promote,
+mid-session switch, CLI flags, docs; see §9) — the **guideline inheritance** from the enclosing
+workspace is specified but not yet wired ([`workspace.md`](workspace.md) §3). This doc resolves
+the mid-session-switch and "who vouches for a workspace" open questions left in
+[`workspace.md`](workspace.md) §6.
 
 ---
 
@@ -21,8 +24,9 @@ project. When work is worth keeping, the agent **promotes** it to a project: a f
 `<home>/projects/<slug>-<uid>/` with a small `.agent/project.md` marker (title + description). The
 **filesystem *is* the registry** — `list_projects` is a directory listing, no separate index to keep
 in sync. Later the agent **recalls** a project by matching the user's intent against those titles /
-descriptions, and **switches** into it with a tier-gated `switch_project` (which re-anchors the
-workspace and reloads the project prompt tier). For the CLI-launched-in-a-repo case, projects are
+descriptions, and **switches** into it with a tier-gated `switch_project` (which re-anchors the active
+working directory to the project — within the workspace — and layers its prompt tier on top). For the
+CLI-launched-in-a-repo case, projects are
 opt-out (`--no-project`) or redirectable (`--project`). The loop is: **scratch → promote → recall →
 switch.**
 
@@ -172,9 +176,13 @@ session's active project is switchable state, and the vouch is the user's in-con
   `AGENTS.md`'s first line is cheaper but conflates the two. Leaning dedicated marker.
 - **UID scheme.** Random base32 (no ordering, trivially unique) vs. time-sortable (ULID-ish, leaks
   creation order). Leaning random — recency already comes from `last_active`.
-- **Nesting.** A project *is* a workspace, so the mechanism is uniform and a project could hold its
-  own `projects/`. Default UX is **one level** (projects are leaves; the agent doesn't create nesting
-  unless asked) — uniform mechanism, simple surface.
+- **Nesting — projects are leaves.** Only a **workspace** hosts projects; a project does not host
+  sub-projects. A project is a *sub-scope within* a workspace — it inherits the workspace's guidelines
+  and adds its own; it doesn't replace the workspace or nest under another project. The three-scope
+  model is deliberately three flat levels (config-dir → workspace → project), not a recursive tree, so
+  recall / switch / `list_projects` stay a single enumeration of `<workspace>/projects/*/` and
+  guideline inheritance is a fixed depth. (If a genuine grouping need appears, it's a separate future
+  decision, not a default.)
 - **Scratch persistence across sessions.** Is the home-workspace scratch area durable (survives
   between chats) or cleared? Durable is friendlier for *"last time"* recall of un-promoted work, but
   blurs the promote boundary.

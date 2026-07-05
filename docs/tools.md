@@ -126,7 +126,7 @@ keeps its `seq` (preserves position) and bumps `Version`.
 The catalog is **config-dir-scoped**, not workspace-scoped: it is part of the agent's identity
 (`<config-dir>/tools.json`), shared across every project the agent works on, and unaffected by
 `--workspace`. This is the same identity-vs-target split memory and the audit log follow — see
-[`environment.md`](environment.md#two-anchors-config-dir-vs-workspace). (Declarative **sub-agent
+[`environment.md`](environment.md#three-scopes-config-dir-workspace-project). (Declarative **sub-agent
 types**, by contrast, *are* read from both the config-dir and the workspace — `agents/*.md`,
 project-over-global — because a type is prompt/config, not persisted authored state.)
 
