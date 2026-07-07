@@ -15,11 +15,11 @@ import (
 // returns a client pointing at it, so the remote-chat helpers exercise the actual wire.
 func newSessionTestClient(t *testing.T) *api.Client {
 	t.Helper()
-	e := api.NewEngine(api.RunnerFunc(func(context.Context, string, string, agent.Observer) (string, error) {
+	e := api.NewEngine(api.RunnerFunc(func(context.Context, string, string, api.RunOptions, agent.Observer) (string, error) {
 		return "ok", nil
 	}))
 	e.EnableSessions(session.NewFileStore(t.TempDir()),
-		api.TurnRunnerFunc(func(_ context.Context, _, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
+		api.TurnRunnerFunc(func(_ context.Context, _, _ string, prior []provider.Message, text string, _ api.RunOptions, _ agent.Observer) (string, []provider.Message, error) {
 			return "ok", append(prior, provider.UserText(text)), nil
 		}))
 	srv := httptest.NewServer(api.NewServer(e, nil, nil, nil, nil))

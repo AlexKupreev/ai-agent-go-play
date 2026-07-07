@@ -14,7 +14,7 @@ import (
 // TestCancelStopsRun is the kill switch: a blocked run is cancelled mid-flight and
 // ends in the error state via context cancellation.
 func TestCancelStopsRun(t *testing.T) {
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 		<-ctx.Done() // block until the kill switch cancels the run context
 		return "", ctx.Err()
@@ -24,7 +24,7 @@ func TestCancelStopsRun(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	ctx := context.Background()
-	runID, err := c.StartRun(ctx, "loop forever")
+	runID, err := c.StartRun(ctx, "loop forever", RunOptions{})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestUnknownRunStatusIs404(t *testing.T) {
 // history), while running runs are never evicted regardless of age.
 func TestFinishedRunEviction(t *testing.T) {
 	release := make(chan struct{})
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		if task == "block" {
 			select {
 			case <-release:
@@ -73,11 +73,11 @@ func TestFinishedRunEviction(t *testing.T) {
 	e := NewEngine(runner)
 	e.maxFinished = 2
 
-	blocked := e.StartRun("block") // oldest run of all, but still running
+	blocked := e.StartRun("block", RunOptions{}) // oldest run of all, but still running
 
 	ids := make([]string, 4)
 	for i := range ids {
-		ids[i] = e.StartRun("quick")
+		ids[i] = e.StartRun("quick", RunOptions{})
 		waitRunState(t, e, ids[i], StateDone)
 	}
 
@@ -123,18 +123,18 @@ func (m *memRunStore) Load(id string) (RunInfo, bool) {
 // TestRunStoreSurvivesEviction proves §3.2: a run's metadata is persisted on completion, so
 // RunStatus still returns it (task, state, result) after the engine has evicted the run.
 func TestRunStoreSurvivesEviction(t *testing.T) {
-	e := NewEngine(RunnerFunc(func(_ context.Context, _, task string, _ agent.Observer) (string, error) {
+	e := NewEngine(RunnerFunc(func(_ context.Context, _, task string, _ RunOptions, _ agent.Observer) (string, error) {
 		return "answer for " + task, nil
 	}))
 	e.maxFinished = 1
 	store := newMemRunStore()
 	e.SetRunStore(store)
 
-	first := e.StartRun("first")
+	first := e.StartRun("first", RunOptions{})
 	waitRunState(t, e, first, StateDone)
 	// A second finished run pushes the first out of the in-memory map (cap = 1). Poll the
 	// live map directly (lookup, not RunStatus — the latter now falls back to the store).
-	second := e.StartRun("second")
+	second := e.StartRun("second", RunOptions{})
 	waitRunState(t, e, second, StateDone)
 	deadline := time.Now().Add(2 * time.Second)
 	for {

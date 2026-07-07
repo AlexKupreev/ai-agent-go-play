@@ -56,6 +56,30 @@ func ParseTier(s string) (Tier, error) {
 	}
 }
 
+// rank orders tiers by looseness: safe (most restrictive) < balanced < permissive. An
+// unknown tier ranks as safe, the fail-closed choice.
+func (t Tier) rank() int {
+	switch t {
+	case TierPermissive:
+		return 2
+	case TierBalanced:
+		return 1
+	default: // TierSafe and any unknown value
+		return 0
+	}
+}
+
+// ClampTier returns requested unless it is looser than ceiling, in which case ceiling. It
+// lets a serve-configured tier act as a hard ceiling on a per-request tier override: a
+// caller may ask for the same tier or a safer one, but never a looser one than the operator
+// started the engine with.
+func ClampTier(requested, ceiling Tier) Tier {
+	if requested.rank() > ceiling.rank() {
+		return ceiling
+	}
+	return requested
+}
+
 // AutoApproves reports whether a capability of this kind may be granted to an
 // agent-authored tool WITHOUT a human prompt at this tier. It is the policy that
 // decides which escalations the approval gate (author_tool) waves through versus

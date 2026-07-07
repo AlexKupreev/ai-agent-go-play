@@ -41,9 +41,10 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	return http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 }
 
-// StartRun starts a run and returns its id.
-func (c *Client) StartRun(ctx context.Context, task string) (string, error) {
-	body, _ := json.Marshal(startRunRequest{Task: task})
+// StartRun starts a run and returns its id. opts carries optional per-request model/tier
+// overrides (the zero value inherits the engine's defaults).
+func (c *Client) StartRun(ctx context.Context, task string, opts RunOptions) (string, error) {
+	body, _ := json.Marshal(startRunRequest{Task: task, RunOptions: opts})
 	req, err := c.newRequest(ctx, http.MethodPost, "/runs", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -311,9 +312,11 @@ func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// PostTurn submits a turn to a session and returns the run id to stream for its reply.
-func (c *Client) PostTurn(ctx context.Context, sessionID, text string) (string, error) {
-	body, _ := json.Marshal(postTurnRequest{Text: text})
+// PostTurn submits a turn to a session and returns the run id to stream for its reply. opts
+// carries an optional per-turn model/tier override (the zero value inherits the session /
+// engine defaults).
+func (c *Client) PostTurn(ctx context.Context, sessionID, text string, opts RunOptions) (string, error) {
+	body, _ := json.Marshal(postTurnRequest{Text: text, RunOptions: opts})
 	req, err := c.newRequest(ctx, http.MethodPost, "/sessions/"+sessionID+"/turns", bytes.NewReader(body))
 	if err != nil {
 		return "", err

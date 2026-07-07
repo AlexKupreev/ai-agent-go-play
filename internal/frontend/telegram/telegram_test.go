@@ -98,7 +98,7 @@ func (c *fakeClient) StartSession(context.Context) (string, error) {
 	return "sess1", nil
 }
 
-func (c *fakeClient) PostTurn(_ context.Context, sessionID, text string) (string, error) {
+func (c *fakeClient) PostTurn(_ context.Context, sessionID, text string, _ api.RunOptions) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.turnCalls++

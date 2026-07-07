@@ -46,14 +46,14 @@ const maxFinishedRuns = 100
 // executor so the session dir, event stream, audit records, and parked approvals all
 // key off one id (which is what routes approval escalations back to this run's hub).
 type Runner interface {
-	Run(ctx context.Context, runID, task string, obs agent.Observer) (string, error)
+	Run(ctx context.Context, runID, task string, opts RunOptions, obs agent.Observer) (string, error)
 }
 
 // RunnerFunc adapts a plain function to Runner.
-type RunnerFunc func(ctx context.Context, runID, task string, obs agent.Observer) (string, error)
+type RunnerFunc func(ctx context.Context, runID, task string, opts RunOptions, obs agent.Observer) (string, error)
 
-func (f RunnerFunc) Run(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
-	return f(ctx, runID, task, obs)
+func (f RunnerFunc) Run(ctx context.Context, runID, task string, opts RunOptions, obs agent.Observer) (string, error) {
+	return f(ctx, runID, task, opts, obs)
 }
 
 // TurnRunner runs one conversation turn: it builds an executor seeded with prior
@@ -61,14 +61,24 @@ func (f RunnerFunc) Run(ctx context.Context, runID, task string, obs agent.Obser
 // answer plus the updated history for the session layer to persist. It is the session
 // analogue of Runner (a run whose executor carries prior context).
 type TurnRunner interface {
-	RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (answer string, updated []provider.Message, err error)
+	RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, opts RunOptions, obs agent.Observer) (answer string, updated []provider.Message, err error)
 }
 
 // TurnRunnerFunc adapts a plain function to TurnRunner.
-type TurnRunnerFunc func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error)
+type TurnRunnerFunc func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, opts RunOptions, obs agent.Observer) (string, []provider.Message, error)
 
-func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
-	return f(ctx, runID, sessionID, prior, text, obs)
+func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, opts RunOptions, obs agent.Observer) (string, []provider.Message, error) {
+	return f(ctx, runID, sessionID, prior, text, opts, obs)
+}
+
+// RunOptions carries optional per-request overrides from a caller. An empty field inherits
+// the engine's configured default. The engine passes these straight through to the
+// Runner/TurnRunner; resolving them — applying defaults and clamping the tier to the serve
+// ceiling — is the cmd layer's job, so the engine core stays free of that policy. Grown by
+// adding fields (e.g. per-role models later), never by widening the run/turn signatures.
+type RunOptions struct {
+	Model string `json:"model,omitempty"` // model for this run's agents; "" ⇒ engine default
+	Tier  string `json:"tier,omitempty"`  // requested tier, clamped to ≤ the serve tier; "" ⇒ engine default
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -194,9 +204,9 @@ func (e *Engine) SetMaxFinishedRuns(n int) {
 // request that started it (an HTTP handler's context is cancelled when the handler
 // returns, which would abort the run mid-flight — e.g. while it waits for an
 // approval). The stored cancel is the per-run kill switch (StopRun).
-func (e *Engine) StartRun(task string) string {
+func (e *Engine) StartRun(task string, opts RunOptions) string {
 	return e.launch(task, "", func(ctx context.Context, id string, obs agent.Observer) (string, error) {
-		return e.runner.Run(ctx, id, task, obs)
+		return e.runner.Run(ctx, id, task, opts, obs)
 	})
 }
 
@@ -314,7 +324,7 @@ func (e *Engine) CloseSession(id string) error {
 // run endpoints) that loads the session's history, runs text seeded with it, and
 // persists the updated history. Turns within a session are serialized so the history
 // can't interleave. Returns the run id, or session.ErrNotFound if the session is gone.
-func (e *Engine) PostTurn(sessionID, text string) (string, error) {
+func (e *Engine) PostTurn(sessionID, text string, opts RunOptions) (string, error) {
 	if !e.SessionsEnabled() {
 		return "", ErrSessionsDisabled
 	}
@@ -331,7 +341,7 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		if err != nil {
 			return "", err // closed between accept and execution
 		}
-		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, obs)
+		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, opts, obs)
 		if err != nil {
 			return "", err
 		}

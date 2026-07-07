@@ -16,6 +16,8 @@ import (
 )
 
 var clientAddrFlag string
+var clientModelFlag string
+var clientTierFlag string
 
 var clientCmd = &cobra.Command{
 	Use:   "client <task>",
@@ -33,7 +35,7 @@ var clientCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		runID, err := c.StartRun(ctx, task)
+		runID, err := c.StartRun(ctx, task, api.RunOptions{Model: clientModelFlag, Tier: clientTierFlag})
 		if err != nil {
 			return fmt.Errorf("start run: %w", err)
 		}
@@ -184,5 +186,7 @@ func watchApprovalsScan(ctx context.Context, c *api.Client, stdin *bufio.Scanner
 
 func init() {
 	clientCmd.Flags().StringVar(&clientAddrFlag, "addr", "127.0.0.1:8080", "engine address to connect to")
+	clientCmd.Flags().StringVar(&clientModelFlag, "model", "", "per-run model override (empty ⇒ the engine's default)")
+	clientCmd.Flags().StringVar(&clientTierFlag, "tier", "", "per-run trust tier override, clamped to no looser than the engine's tier (empty ⇒ the engine's default)")
 	stopCmd.Flags().StringVar(&clientAddrFlag, "addr", "127.0.0.1:8080", "engine address to connect to")
 }

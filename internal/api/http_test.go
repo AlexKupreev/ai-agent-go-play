@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/provider"
@@ -16,13 +17,41 @@ import (
 
 // fakeRunner emits a representative event sequence, then returns a final answer —
 // standing in for the real executor so the transport is tested without a provider.
-func fakeRunner(_ context.Context, _, task string, obs agent.Observer) (string, error) {
+func fakeRunner(_ context.Context, _, task string, _ RunOptions, obs agent.Observer) (string, error) {
 	obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 	obs.Emit(agent.Event{Kind: agent.EvResponse, Iteration: 0, Text: "thinking"})
 	call := provider.ToolCall{Name: "shell", ID: "c1", Input: []byte(`{"cmd":"ls"}`)}
 	obs.Emit(agent.Event{Kind: agent.EvToolStart, Call: &call})
 	obs.Emit(agent.Event{Kind: agent.EvToolResult, Call: &call, Result: "file.txt"})
 	return "all done", nil
+}
+
+// TestHTTP_StartRunPassesOptions proves a per-request model/tier in the POST /runs body
+// reaches the Runner (the seam the cmd layer resolves + clamps).
+func TestHTTP_StartRunPassesOptions(t *testing.T) {
+	got := make(chan RunOptions, 1)
+	runner := RunnerFunc(func(_ context.Context, _, _ string, opts RunOptions, _ agent.Observer) (string, error) {
+		got <- opts
+		return "ok", nil
+	})
+	srv := httptest.NewServer(NewServer(NewEngine(runner), nil, nil, nil, nil))
+	defer srv.Close()
+
+	body, _ := json.Marshal(startRunRequest{Task: "x", RunOptions: RunOptions{Model: "gpt-4o", Tier: "safe"}})
+	resp, err := http.Post(srv.URL+"/runs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /runs: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case opts := <-got:
+		if opts.Model != "gpt-4o" || opts.Tier != "safe" {
+			t.Fatalf("runner got opts %+v, want model gpt-4o tier safe", opts)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked with the options")
+	}
 }
 
 func TestHTTP_StartRunAndStreamEvents(t *testing.T) {

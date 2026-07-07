@@ -55,7 +55,8 @@ func runErrStatus(w http.ResponseWriter, err error) {
 }
 
 type startRunRequest struct {
-	Task string `json:"task"`
+	Task       string `json:"task"`
+	RunOptions        // optional per-request "model"/"tier" (flattened into the body)
 }
 
 type startRunResponse struct {
@@ -73,7 +74,7 @@ func handleStartRun(e *Engine) http.HandlerFunc {
 			http.Error(w, "task is required", http.StatusBadRequest)
 			return
 		}
-		id := e.StartRun(req.Task)
+		id := e.StartRun(req.Task, req.RunOptions)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(startRunResponse{RunID: id})
 	}

@@ -30,7 +30,7 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 
 			// The runner asks the queue to approve a destructive action, mirroring
 			// what shell/author_tool do through the Approver seam.
-			runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+			runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 				ok, err := q.Approve(ctx, tools.ApprovalRequest{
 					Kind:   "shell.destructive",
 					Title:  "rm -rf build",
@@ -81,7 +81,7 @@ func TestHTTP_ApprovalParksAndResolves(t *testing.T) {
 // approval_resolved (ordered ahead of the terminal done) — no polling required.
 func TestApprovalEmitter_PushesOntoRunStream(t *testing.T) {
 	q := NewApprovalQueue()
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		ok, err := q.Approve(ctx, tools.ApprovalRequest{
 			Kind:   "shell.destructive",
 			Title:  "rm -rf build",
@@ -99,7 +99,7 @@ func TestApprovalEmitter_PushesOntoRunStream(t *testing.T) {
 	e := NewEngine(runner)
 	q.SetEmitter(e.PublishToRun)
 
-	id := e.StartRun("clean")
+	id := e.StartRun("clean", RunOptions{})
 	ch, cancel, err := e.Subscribe(id)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -151,7 +151,7 @@ func TestApprovalEmitter_PushesOntoRunStream(t *testing.T) {
 // POST /approvals/{id} with an answer unblocks the run with the typed text.
 func TestHTTP_QuestionParksAndAnswers(t *testing.T) {
 	q := NewApprovalQueue()
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		ans, err := q.Ask(ctx, tools.Question{Prompt: "which environment?", RunID: runID})
 		if err != nil {
 			return "", err

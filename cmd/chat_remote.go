@@ -142,7 +142,8 @@ func runRemoteTurn(sigCh <-chan os.Signal, c *api.Client, sessionID, line string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	runID, err := c.PostTurn(ctx, sessionID, line)
+	// Remote chat carries no per-turn override yet (Phase 2 wires /model & /tier here).
+	runID, err := c.PostTurn(ctx, sessionID, line, api.RunOptions{})
 	if err != nil {
 		return err
 	}

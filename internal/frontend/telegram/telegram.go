@@ -67,7 +67,7 @@ type Transport interface {
 // terms of sessions (persistent conversations), so each chat is a running dialogue.
 type Client interface {
 	StartSession(ctx context.Context) (string, error)
-	PostTurn(ctx context.Context, sessionID, text string) (runID string, err error)
+	PostTurn(ctx context.Context, sessionID, text string, opts api.RunOptions) (runID string, err error)
 	CloseSession(ctx context.Context, sessionID string) error
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
@@ -166,7 +166,8 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 		_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
 		return
 	}
-	runID, err := b.client.PostTurn(ctx, sessionID, m.Text)
+	// Telegram sets no per-turn model/tier override (it uses the session/engine defaults).
+	runID, err := b.client.PostTurn(ctx, sessionID, m.Text, api.RunOptions{})
 	if err != nil {
 		_ = b.transport.Send(ctx, m.ChatID, "failed to run turn: "+err.Error(), nil)
 		return

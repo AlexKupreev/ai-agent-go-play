@@ -107,3 +107,22 @@ func TestParseTier(t *testing.T) {
 		}
 	}
 }
+
+// TestClampTier verifies the ceiling semantics: a request may match or go safer than the
+// ceiling, but a looser request is clamped down to it.
+func TestClampTier(t *testing.T) {
+	for _, tc := range []struct {
+		requested, ceiling, want Tier
+	}{
+		{TierPermissive, TierBalanced, TierBalanced}, // looser than ceiling ⇒ clamped
+		{TierPermissive, TierSafe, TierSafe},         // clamped all the way down
+		{TierSafe, TierBalanced, TierSafe},           // safer than ceiling ⇒ allowed
+		{TierBalanced, TierBalanced, TierBalanced},   // equal ⇒ unchanged
+		{TierBalanced, TierPermissive, TierBalanced}, // request wins when under a looser ceiling
+		{TierPermissive, TierPermissive, TierPermissive},
+	} {
+		if got := ClampTier(tc.requested, tc.ceiling); got != tc.want {
+			t.Errorf("ClampTier(%q, ceiling %q) = %q, want %q", tc.requested, tc.ceiling, got, tc.want)
+		}
+	}
+}

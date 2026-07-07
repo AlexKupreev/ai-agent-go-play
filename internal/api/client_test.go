@@ -16,7 +16,7 @@ import (
 // streaming, and confirm the streamed terminal event reflects the decision.
 func TestClient_DrivesRunWithApproval(t *testing.T) {
 	q := NewApprovalQueue()
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 		ok, err := q.Approve(ctx, tools.ApprovalRequest{Kind: "shell.destructive", Title: "rm", Detail: "rm -rf x", RunID: task})
 		if err != nil {
@@ -33,7 +33,7 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 	c := NewClient(srv.URL)
 	ctx := context.Background()
 
-	runID, err := c.StartRun(ctx, "clean")
+	runID, err := c.StartRun(ctx, "clean", RunOptions{})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestClient_DrivesRunWithApproval(t *testing.T) {
 // answer via Answer, which unblocks the run.
 func TestClient_AnswersQuestion(t *testing.T) {
 	q := NewApprovalQueue()
-	runner := RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(ctx context.Context, runID, task string, _ RunOptions, obs agent.Observer) (string, error) {
 		ans, err := q.Ask(ctx, tools.Question{Prompt: "which env?", RunID: task})
 		if err != nil {
 			return "", err
@@ -89,7 +89,7 @@ func TestClient_AnswersQuestion(t *testing.T) {
 	c := NewClient(srv.URL)
 	ctx := context.Background()
 
-	runID, err := c.StartRun(ctx, "deploy")
+	runID, err := c.StartRun(ctx, "deploy", RunOptions{})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestClient_StartRunErrorsOnBadStatus(t *testing.T) {
 	c := NewClient(srv.URL)
 
 	// Empty task is rejected with 400 by the server.
-	if _, err := c.StartRun(context.Background(), ""); err == nil {
+	if _, err := c.StartRun(context.Background(), "", RunOptions{}); err == nil {
 		t.Fatal("expected error for empty task, got nil")
 	}
 }

@@ -14,7 +14,7 @@ import (
 // echoTurns is a TurnRunner that appends the user turn to the prior history and
 // returns it, so a test can prove prior context is threaded and persisted.
 func echoTurns() TurnRunnerFunc {
-	return func(_ context.Context, _, _ string, prior []provider.Message, text string, _ agent.Observer) (string, []provider.Message, error) {
+	return func(_ context.Context, _, _ string, prior []provider.Message, text string, _ RunOptions, _ agent.Observer) (string, []provider.Message, error) {
 		updated := append(append([]provider.Message{}, prior...), provider.UserText(text))
 		return "ok:" + text, updated, nil
 	}
@@ -43,13 +43,13 @@ func TestEngine_SessionTurnsRetainAndPersist(t *testing.T) {
 		t.Fatalf("StartSession: %v", err)
 	}
 
-	r1, err := e.PostTurn(sid, "one")
+	r1, err := e.PostTurn(sid, "one", RunOptions{})
 	if err != nil {
 		t.Fatalf("PostTurn 1: %v", err)
 	}
 	waitRunState(t, e, r1, StateDone)
 
-	r2, err := e.PostTurn(sid, "two")
+	r2, err := e.PostTurn(sid, "two", RunOptions{})
 	if err != nil {
 		t.Fatalf("PostTurn 2: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestCloseSessionFreesTurnLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	runID, err := e.PostTurn(sid, "hi")
+	runID, err := e.PostTurn(sid, "hi", RunOptions{})
 	if err != nil {
 		t.Fatalf("PostTurn: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEngine_PostTurnUnknownSession(t *testing.T) {
 	e := NewEngine(RunnerFunc(fakeRunner))
 	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
 
-	if _, err := e.PostTurn("nope", "hi"); !errors.Is(err, session.ErrNotFound) {
+	if _, err := e.PostTurn("nope", "hi", RunOptions{}); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("PostTurn unknown = %v, want ErrNotFound", err)
 	}
 
@@ -135,7 +135,7 @@ func TestEngine_PostTurnUnknownSession(t *testing.T) {
 	if err := e.CloseSession(sid); err != nil {
 		t.Fatalf("CloseSession: %v", err)
 	}
-	if _, err := e.PostTurn(sid, "hi"); !errors.Is(err, session.ErrNotFound) {
+	if _, err := e.PostTurn(sid, "hi", RunOptions{}); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("PostTurn after close = %v, want ErrNotFound", err)
 	}
 }

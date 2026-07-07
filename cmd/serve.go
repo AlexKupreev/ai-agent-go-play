@@ -259,18 +259,39 @@ func (d serveDeps) openTurnIO(runID string, obs agent.Observer) (turnIO, error) 
 	}, nil
 }
 
-// newExecutor builds a fresh executor over already-open per-turn IO (rec + obs). manifest +
-// scratchDir wire the artifact cache (nil/"" for the plain, non-deliberate path). It opens no
-// files, so it is safe to call repeatedly within one turn (the deliberate pipeline does).
-func (d serveDeps) newExecutor(runID, sessionID string, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) *agent.Agent {
+// resolveOpts applies a request's per-run overrides over the serve defaults: model falls back
+// to d.model, and an explicit tier is validated and CLAMPED to no looser than d.tier (the
+// serve-configured ceiling). An empty tier inherits d.tier; an invalid one is an error. This
+// is where the trust policy lives — the engine passes RunOptions through untouched.
+func (d serveDeps) resolveOpts(opts api.RunOptions) (model string, tier capability.Tier, err error) {
+	model = d.model
+	if opts.Model != "" {
+		model = opts.Model
+	}
+	tier = d.tier
+	if opts.Tier != "" {
+		req, perr := capability.ParseTier(opts.Tier)
+		if perr != nil {
+			return "", "", perr
+		}
+		tier = capability.ClampTier(req, d.tier)
+	}
+	return model, tier, nil
+}
+
+// newExecutor builds a fresh executor over already-open per-turn IO (rec + obs), using the
+// resolved model + tier for this run. manifest + scratchDir wire the artifact cache (nil/""
+// for the plain, non-deliberate path). It opens no files, so it is safe to call repeatedly
+// within one turn (the deliberate pipeline does).
+func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.Tier, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) *agent.Agent {
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
 	// Snapshot the current prompts + catalog once, so a concurrent /reload can't change the
 	// executor's prompt mid-run (prompts.md §0).
 	prompts, catalog := d.prompts.snapshot()
 	return agent.NewExecutor(agent.ExecutorConfig{
-		Provider: d.prov, WorkDir: d.workDir, Model: d.model, RunID: runID,
+		Provider: d.prov, WorkDir: d.workDir, Model: model, RunID: runID,
 		Observer: obs, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
-		Audit: rec, Tier: d.tier, Gate: d.gate,
+		Audit: rec, Tier: tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
@@ -280,20 +301,25 @@ func (d serveDeps) newExecutor(runID, sessionID string, manifest *artifact.Manif
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's runID
-// (so the transcript, audit Run field, and parked approvals share one id). It returns a
-// cleanup to defer. Shared by the plain runner and the non-deliberate session turn runner.
-func (d serveDeps) buildExecutor(runID, sessionID string, obs agent.Observer) (*agent.Agent, func(), error) {
+// (so the transcript, audit Run field, and parked approvals share one id) and using the
+// resolved model + tier. It returns a cleanup to defer. Shared by the plain runner and the
+// non-deliberate session turn runner.
+func (d serveDeps) buildExecutor(runID, sessionID, model string, tier capability.Tier, obs agent.Observer) (*agent.Agent, func(), error) {
 	io, err := d.openTurnIO(runID, obs)
 	if err != nil {
 		return nil, nil, err
 	}
-	return d.newExecutor(runID, sessionID, nil, "", io.rec, io.obsAll), io.cleanup, nil
+	return d.newExecutor(runID, sessionID, model, tier, nil, "", io.rec, io.obsAll), io.cleanup, nil
 }
 
 // runner drives a single-shot run: a fresh executor with no prior context.
 func (d serveDeps) runner() api.Runner {
-	return api.RunnerFunc(func(ctx context.Context, runID, task string, obs agent.Observer) (string, error) {
-		ex, cleanup, err := d.buildExecutor(runID, "", obs)
+	return api.RunnerFunc(func(ctx context.Context, runID, task string, opts api.RunOptions, obs agent.Observer) (string, error) {
+		model, tier, err := d.resolveOpts(opts)
+		if err != nil {
+			return "", err
+		}
+		ex, cleanup, err := d.buildExecutor(runID, "", model, tier, obs)
 		if err != nil {
 			return "", err
 		}
@@ -305,8 +331,12 @@ func (d serveDeps) runner() api.Runner {
 // turnRunner drives one session turn: a fresh executor seeded with the session's
 // prior history, returning the updated history for the engine to persist.
 func (d serveDeps) turnRunner() api.TurnRunner {
-	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
-		ex, cleanup, err := d.buildExecutor(runID, sessionID, obs)
+	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, opts api.RunOptions, obs agent.Observer) (string, []provider.Message, error) {
+		model, tier, err := d.resolveOpts(opts)
+		if err != nil {
+			return "", nil, err
+		}
+		ex, cleanup, err := d.buildExecutor(runID, sessionID, model, tier, obs)
 		if err != nil {
 			return "", nil, err
 		}
@@ -330,7 +360,11 @@ func (d serveDeps) turnRunner() api.TurnRunner {
 // no executor tool-call cruft. Working data lives in the session scratch dir + manifest,
 // which persist across turns and restarts, keyed by session id.
 func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish func(runID string, ev api.Event)) api.TurnRunner {
-	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, obs agent.Observer) (string, []provider.Message, error) {
+	return api.TurnRunnerFunc(func(ctx context.Context, runID, sessionID string, prior []provider.Message, text string, opts api.RunOptions, obs agent.Observer) (string, []provider.Message, error) {
+		model, tier, err := d.resolveOpts(opts)
+		if err != nil {
+			return "", nil, err
+		}
 		io, err := d.openTurnIO(runID, obs)
 		if err != nil {
 			return "", nil, err
@@ -358,17 +392,18 @@ func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish
 		internal := agent.Internalized(io.obsAll)
 		deps := deliberateDeps{
 			buildExecutor: func() (*agent.Agent, error) {
-				return d.newExecutor(runID, sessionID, manifest, scratchDir, io.rec, io.obsAll), nil
+				return d.newExecutor(runID, sessionID, model, tier, manifest, scratchDir, io.rec, io.obsAll), nil
 			},
 			buildPlanner: func(environment, manifestView string) (*agent.Agent, error) {
 				prompts, _ := d.prompts.snapshot()
 				// The planner's ask_user shares the engine gate + runID, so a clarification
-				// routes to the session's frontend (not server stdin).
-				return agent.NewPlanner(d.prov, d.model, prompts.PlannerOverride, environment, manifestView, d.gate, runID, internal), nil
+				// routes to the session's frontend (not server stdin). It runs on the resolved
+				// model like the executor (tier is executor-only — the planner has no broker).
+				return agent.NewPlanner(d.prov, model, prompts.PlannerOverride, environment, manifestView, d.gate, runID, internal), nil
 			},
 			buildCritic: func() (*agent.Agent, error) {
 				prompts, _ := d.prompts.snapshot()
-				return agent.NewCritic(d.prov, d.model, prompts.CriticOverride, internal), nil
+				return agent.NewCritic(d.prov, model, prompts.CriticOverride, internal), nil
 			},
 			manifest:     manifest,
 			critique:     critique,

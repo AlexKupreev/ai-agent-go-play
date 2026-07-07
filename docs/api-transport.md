@@ -23,7 +23,8 @@ format, the same selective divergence we applied to the sandbox tier.
 Plain `net/http` JSON endpoints for requests; run events streamed over **Server-Sent
 Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 
-- `POST /runs` → `{run_id}`
+- `POST /runs` `{task, model?, tier?}` → `{run_id}` (optional `model`/`tier` override this run;
+  `tier` is clamped to no looser than the serve-configured tier, an invalid one fails the run)
 - `GET /runs`, `GET /runs/{id}` → list runs / one run's status (metadata)
 - `GET /runs/{id}/events` → SSE stream of run events
 - `POST /runs/{id}/cancel` → kill switch (cancel a run mid-flight)
@@ -35,7 +36,8 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
 - `POST /sessions` → `{session_id}`; `GET /sessions` → list; `DELETE /sessions/{id}` → close
   (archives the conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
-  `POST /sessions/{id}/turns` `{text}` → `{run_id}` (stream the reply via `GET /runs/{run_id}/events`)
+  `POST /sessions/{id}/turns` `{text, model?, tier?}` → `{run_id}` (optional per-turn override,
+  same clamp; stream the reply via `GET /runs/{run_id}/events`)
 - `POST /reload` → re-read the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) + `agents/*.md`
   from disk (400 on a malformed file, keeping the current config); the next run picks up the change
 
@@ -47,6 +49,16 @@ Parked approvals are also **pushed onto the run's event stream** (`approval_requ
 `approval_resolved` events carrying `approval_id`), so a streaming frontend need not poll `/approvals`;
 `POST /approvals/{id}` still resolves. This relies on the engine's run id being threaded through the
 runner into the executor, so the escalation's `RunID` routes back to the right stream.
+
+**Per-request overrides (`RunOptions`).** `POST /runs` and `POST /sessions/{id}/turns` accept an
+optional `model` and `tier` alongside the task/text. The engine carries these through the
+`Runner`/`TurnRunner` seam untouched (an `api.RunOptions` param); the **cmd layer** resolves them —
+model falls back to the serve default, and an explicit tier is **clamped** to no looser than the
+serve-configured tier (`capability.ClampTier`), so the `serve --tier` flag is a hard ceiling a client
+cannot exceed. An invalid tier fails the run. This keeps the trust policy in cmd and the engine core
+free of it. The struct is grown by adding fields (e.g. per-role models later), never by widening the
+run/turn signatures again. *(Per-session sticky model/tier — settable at `POST /sessions` and via a
+`PATCH` — is a planned follow-up; today the override is per-request.)*
 
 **No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
 approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an

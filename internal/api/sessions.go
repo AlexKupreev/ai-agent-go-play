@@ -52,7 +52,8 @@ func handleCloseSession(e *Engine) http.HandlerFunc {
 }
 
 type postTurnRequest struct {
-	Text string `json:"text"`
+	Text       string `json:"text"`
+	RunOptions        // optional per-turn "model"/"tier" override (flattened into the body)
 }
 
 type postTurnResponse struct {
@@ -70,7 +71,7 @@ func handlePostTurn(e *Engine) http.HandlerFunc {
 			http.Error(w, "text is required", http.StatusBadRequest)
 			return
 		}
-		runID, err := e.PostTurn(r.PathValue("id"), req.Text)
+		runID, err := e.PostTurn(r.PathValue("id"), req.Text, req.RunOptions)
 		if err != nil {
 			sessionErrStatus(w, err)
 			return

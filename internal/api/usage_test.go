@@ -15,7 +15,7 @@ import (
 func TestRunUsage_AggregatedIntoInfoAndAudit(t *testing.T) {
 	// A runner that emits two model responses carrying usage, then finishes. The
 	// engine fans a UsageObserver alongside the hub, so these are accumulated.
-	runner := RunnerFunc(func(_ context.Context, _ string, _ string, obs agent.Observer) (string, error) {
+	runner := RunnerFunc(func(_ context.Context, _ string, _ string, _ RunOptions, obs agent.Observer) (string, error) {
 		obs.Emit(agent.Event{Kind: agent.EvResponse, Usage: provider.Usage{InputTokens: 1000, OutputTokens: 200, CachedTokens: 64}})
 		obs.Emit(agent.Event{Kind: agent.EvResponse, Usage: provider.Usage{InputTokens: 30, OutputTokens: 8}})
 		return "final answer", nil
@@ -25,7 +25,7 @@ func TestRunUsage_AggregatedIntoInfoAndAudit(t *testing.T) {
 	e := NewEngine(runner)
 	e.SetAuditRecorder(rec)
 
-	id := e.StartRun("do the thing")
+	id := e.StartRun("do the thing", RunOptions{})
 	waitRunState(t, e, id, StateDone)
 
 	info, err := e.RunStatus(id)
