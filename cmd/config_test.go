@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/capability"
 
 	"github.com/spf13/cobra"
@@ -175,6 +179,51 @@ func TestResolveOpenAIBaseURL(t *testing.T) {
 			t.Fatalf("resolveOpenAIBaseURL = %q, want empty (SDK default)", got)
 		}
 	})
+}
+
+// TestResolveAgentLimits checks the ConfigLimits → agent.Limits mapping: seconds become a
+// Duration, other fields pass through, and an unset field stays zero (so the agent defaults it).
+func TestResolveAgentLimits(t *testing.T) {
+	got := resolveAgentLimits(Config{Limits: ConfigLimits{
+		MaxIterations: 40, ScriptTimeoutS: 8, MaxInlineTools: 20, MaxHTTPBytes: 5 << 20,
+	}})
+	if got.MaxIterations != 40 || got.ScriptTimeout != 8*time.Second || got.MaxInlineTools != 20 || got.MaxHTTPBytes != 5<<20 {
+		t.Fatalf("resolveAgentLimits mapped wrong: %+v", got)
+	}
+	// An empty ConfigLimits maps to a zero agent.Limits (the agent then applies its defaults).
+	if z := resolveAgentLimits(Config{}); z != (agent.Limits{}) {
+		t.Fatalf("empty config should map to zero Limits, got %+v", z)
+	}
+}
+
+// TestResolveSpawnDepth: configured value wins; unset falls back to defaultSpawnDepth.
+func TestResolveSpawnDepth(t *testing.T) {
+	if got := resolveSpawnDepth(Config{Limits: ConfigLimits{SpawnDepth: 3}}); got != 3 {
+		t.Fatalf("resolveSpawnDepth(configured) = %d, want 3", got)
+	}
+	if got := resolveSpawnDepth(Config{}); got != defaultSpawnDepth {
+		t.Fatalf("resolveSpawnDepth(unset) = %d, want %d", got, defaultSpawnDepth)
+	}
+}
+
+// TestConfigLimitsOmitzero: an all-default Limits is dropped from the persisted config, so
+// `config set-*` doesn't write a noisy empty "limits" block.
+func TestConfigLimitsOmitzero(t *testing.T) {
+	orig := configDirFlag
+	t.Cleanup(func() { configDirFlag = orig })
+	configDirFlag = t.TempDir()
+	t.Setenv(envConfigDir, "")
+	if err := saveConfig(Config{OpenAIKey: "sk-x"}); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := configPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "limits") {
+		t.Fatalf("empty limits should be omitted from config.json; got:\n%s", data)
+	}
 }
 
 // TestConfigDirPrecedence checks the resolution order: --config-dir flag beats the

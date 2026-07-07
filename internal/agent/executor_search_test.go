@@ -53,8 +53,8 @@ func TestSelectRegistryTools_LargeCatalogTopK(t *testing.T) {
 	names := a.registryToolNames(a.buildToolDefs())
 
 	// Large catalog must not flood: far fewer than the 16 registered.
-	if len(names) > maxInlineTools {
-		t.Errorf("offered %d registry tools, want <= %d: %v", len(names), maxInlineTools, names)
+	if len(names) > defaultMaxInlineTools {
+		t.Errorf("offered %d registry tools, want <= %d: %v", len(names), defaultMaxInlineTools, names)
 	}
 	if !slices.Contains(names, "weatherbot") {
 		t.Errorf("relevant tool weatherbot not surfaced: %v", names)

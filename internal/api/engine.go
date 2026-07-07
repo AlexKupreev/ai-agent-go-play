@@ -176,6 +176,17 @@ func (e *Engine) SetSessionCloseHook(fn func(sessionID string)) { e.onSessionClo
 // it back as a RunStatus fallback once the run is evicted. Optional. See RunStore.
 func (e *Engine) SetRunStore(rs RunStore) { e.runStore = rs }
 
+// SetMaxFinishedRuns tunes how many finished runs the engine retains in memory (a positive n;
+// non-positive is ignored, keeping the default). Lets a small box run a tighter cap without a
+// rebuild. See maxFinishedRuns.
+func (e *Engine) SetMaxFinishedRuns(n int) {
+	if n > 0 {
+		e.mu.Lock()
+		e.maxFinished = n
+		e.mu.Unlock()
+	}
+}
+
 // StartRun begins a run in the background and returns its id. Events flow to the
 // run's Hub, which callers reach via Subscribe; the hub closes when the run ends.
 //

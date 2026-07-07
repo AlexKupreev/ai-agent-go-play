@@ -60,6 +60,25 @@ func TestBrokerHTTPGet_AllowedAndDenied(t *testing.T) {
 	}
 }
 
+// TestBrokerHTTPGet_MaxBytesCap proves the configurable body cap truncates a large response;
+// the default (unset MaxHTTPBytes) applies when zero.
+func TestBrokerHTTPGet_MaxBytesCap(t *testing.T) {
+	b := NewBroker(&audit.MemoryRecorder{}, nil)
+	b.HTTP = fakeHTTP("0123456789") // 10-byte body
+	b.MaxHTTPBytes = 4              // cap below the body length
+
+	grant := &GrantContext{Run: "r1", Granted: []Capability{
+		{Kind: HTTPGet, Hosts: []string{"example.com"}},
+	}}
+	out, err := b.HTTPGet(context.Background(), grant, "https://example.com/x")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	if out != "0123" {
+		t.Fatalf("body = %q, want it capped to 4 bytes (%q)", out, "0123")
+	}
+}
+
 func TestBrokerHTTPGet_RedirectToDisallowedHostBlocked(t *testing.T) {
 	rec := &audit.MemoryRecorder{}
 	b := NewBroker(rec, nil)

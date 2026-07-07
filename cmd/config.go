@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/capability"
@@ -41,6 +42,22 @@ type Config struct {
 	// commands can say `--addr alex` instead of `--addr 127.0.0.1:8081`. An --addr
 	// value that is not a known alias is used verbatim (see resolveAddr).
 	Engines map[string]string `json:"engines,omitempty"`
+
+	// Limits tunes the built-in bounds without a rebuild (0/unset ⇒ the built-in default).
+	// omitzero (not omitempty) so an all-default Limits is dropped from config.json entirely.
+	Limits ConfigLimits `json:"limits,omitzero"`
+}
+
+// ConfigLimits are the on-disk, tunable bounds (config.json "limits"). A zero/absent field
+// keeps the built-in default. These are experiment knobs — deeper ReAct loops, longer sandbox
+// runs, a tighter run-retention cap on a small box — that otherwise needed a rebuild.
+type ConfigLimits struct {
+	MaxIterations   int   `json:"max_iterations,omitempty"`         // ReAct model-call iterations (default 20)
+	ScriptTimeoutS  int   `json:"script_timeout_seconds,omitempty"` // per sandboxed script (default 5)
+	MaxInlineTools  int   `json:"max_inline_tools,omitempty"`       // catalog size before search-gating (default 12)
+	MaxHTTPBytes    int64 `json:"max_http_bytes,omitempty"`         // brokered HTTP response cap (default 1 MiB)
+	MaxFinishedRuns int   `json:"max_finished_runs,omitempty"`      // engine in-memory finished-run retention (default 100)
+	SpawnDepth      int   `json:"spawn_depth,omitempty"`            // sub-agent delegation budget (default 1)
 }
 
 var configCmd = &cobra.Command{
@@ -414,6 +431,28 @@ func resolveOpenAIBaseURL(cfg Config) string {
 // call site.
 func newProvider(cfg Config) *openaiprovider.Client {
 	return openaiprovider.New(cfg.OpenAIKey, resolveOpenAIBaseURL(cfg))
+}
+
+// resolveAgentLimits maps the on-disk ConfigLimits to agent.Limits (seconds → Duration). A
+// zero field stays zero, so the agent applies its own built-in default — this never forces a
+// value, it only carries an operator override through.
+func resolveAgentLimits(cfg Config) agent.Limits {
+	l := cfg.Limits
+	return agent.Limits{
+		MaxIterations:  l.MaxIterations,
+		ScriptTimeout:  time.Duration(l.ScriptTimeoutS) * time.Second,
+		MaxInlineTools: l.MaxInlineTools,
+		MaxHTTPBytes:   l.MaxHTTPBytes,
+	}
+}
+
+// resolveSpawnDepth returns the configured sub-agent delegation budget, or defaultSpawnDepth
+// when unset.
+func resolveSpawnDepth(cfg Config) int {
+	if cfg.Limits.SpawnDepth > 0 {
+		return cfg.Limits.SpawnDepth
+	}
+	return defaultSpawnDepth
 }
 
 // resolveModel applies model precedence: the --model flag wins, then AI_AGENT_MODEL, then

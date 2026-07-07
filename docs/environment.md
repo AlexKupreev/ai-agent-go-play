@@ -152,8 +152,31 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
 | `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
 | `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
+| `limits` | — | Tunable bounds (object; any field 0/absent ⇒ its built-in default). See below. |
 
 Precedence everywhere: **flag > env > config value > built-in default**.
+
+### Tunable limits (`limits`)
+
+The `limits` object in `config.json` lets experiments vary bounds that otherwise need a rebuild.
+Edit `config.json` directly (there is no `config set-` for these yet); any field left out keeps
+its built-in default, and an all-default `limits` is omitted from the file.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_iterations` | 20 | ReAct model-call iterations before a run gives up. |
+| `script_timeout_seconds` | 5 | Wall-clock cap on a single sandboxed script (`run_code` / an authored tool). |
+| `max_inline_tools` | 12 | Catalog size below which every authored tool is offered; above it, search-gated. |
+| `max_http_bytes` | 1048576 | Cap on a brokered `http_get` response body (authored tools). |
+| `max_finished_runs` | 100 | `serve` in-memory finished-run retention (evicted runs fall back to `info.json`). |
+| `spawn_depth` | 1 | Sub-agent delegation budget (`spawn_agent`). |
+
+```json
+{
+  "openai_key": "sk-…",
+  "limits": { "max_iterations": 40, "script_timeout_seconds": 15 }
+}
+```
 
 ---
 

@@ -20,21 +20,47 @@ import (
 	"ai-agent-go-play/internal/tools"
 )
 
-const maxIterations = 20
+// Built-in defaults for the per-run limits (used when Limits leaves a field zero). Each is
+// overridable via ExecutorConfig.Limits so experiments can vary them without a rebuild.
+const (
+	defaultMaxIterations = 20
+	// defaultScriptTimeout bounds any single sandboxed script execution (run_code and
+	// authored Script tools).
+	defaultScriptTimeout = 5 * time.Second
+	// defaultMaxInlineTools is the catalog size below which every registry tool is offered
+	// to the model. Above it, only the top matches for the current task are included so a
+	// large catalog cannot flood the context window.
+	defaultMaxInlineTools = 12
+)
 
 // DefaultModel is the built-in default model id, used when neither a flag, env, nor config
 // value sets one. Exported so the cmd layer can render it in flag help without duplicating
 // the literal.
 const DefaultModel = "gpt-4o-mini"
 
-// scriptTimeout bounds any single sandboxed script execution (run_code and
-// authored Script tools).
-const scriptTimeout = 5 * time.Second
+// Limits are the tunable per-run bounds. A zero field falls back to its built-in default
+// (above), so a caller sets only what it wants to change. Threaded via ExecutorConfig.Limits.
+type Limits struct {
+	MaxIterations  int           // model-call iterations before giving up
+	ScriptTimeout  time.Duration // per sandboxed-script execution
+	MaxInlineTools int           // catalog size below which all registry tools are offered
+	MaxHTTPBytes   int64         // cap on a brokered HTTP response body (0 ⇒ broker default)
+}
 
-// maxInlineTools is the catalog size below which every registry tool is offered
-// to the model. Above it, only the top matches for the current task are included
-// so a large catalog cannot flood the context window.
-const maxInlineTools = 12
+// withDefaults returns l with any zero field replaced by its built-in default. MaxHTTPBytes
+// is left as-is (0 ⇒ the capability broker applies its own default).
+func (l Limits) withDefaults() Limits {
+	if l.MaxIterations <= 0 {
+		l.MaxIterations = defaultMaxIterations
+	}
+	if l.ScriptTimeout <= 0 {
+		l.ScriptTimeout = defaultScriptTimeout
+	}
+	if l.MaxInlineTools <= 0 {
+		l.MaxInlineTools = defaultMaxInlineTools
+	}
+	return l
+}
 
 // exposedBuiltins are the only trusted built-ins reachable from sandboxed code
 // via call_tool. Both are read-only and confirm-free, so design §5 rule (b) is
@@ -333,6 +359,7 @@ type Agent struct {
 	tier     capability.Tier
 	runID    string
 	task     string // the current turn's task, used as the tool-search query
+	limits   Limits // per-run bounds (defaults already applied); planner leaves it zero
 
 	// spawnDepth is the remaining sub-agent spawn budget (subagents.md §3): spawn_agent
 	// refuses at ≤0 and hands the child spawnDepth-1, so "an agent that spawns agents" is
@@ -377,6 +404,9 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 		tools:        agentTools,
 		byName:       byName,
 		obs:          obs,
+		// Default limits for every agent (planner/critic/sub-agents); NewExecutor overrides
+		// them from ExecutorConfig.Limits. Without this the loop bound would be zero.
+		limits: Limits{}.withDefaults(),
 	}
 }
 
@@ -409,6 +439,11 @@ type ExecutorConfig struct {
 	// catalog, memory, audit), surfaced by the status tool's disk-usage section. The cmd
 	// layer resolves them (internal/agent/tools resolve no paths); empty ⇒ section omitted.
 	StatusDirs []tools.StateDir
+
+	// Limits tunes the per-run bounds (ReAct iterations, sandbox-script timeout, inline-tool
+	// count, HTTP response cap). Any zero field falls back to its built-in default, so the
+	// zero Limits is the current behavior. See Limits.
+	Limits Limits
 
 	// Manifest + ScratchDir wire the chat planner's artifact cache (docs/planning/
 	// chat-planner.md §D3–D4). When Manifest is non-nil the executor gains the
@@ -445,10 +480,15 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	if gate == nil {
 		gate = tools.StdinGate{}
 	}
+	// Resolve limits once (zero fields → built-in defaults), used for run_code's timeout
+	// (built below, before the agent exists), the broker's response cap, and stored on the
+	// agent for the loop/sandbox/tool-selection bounds.
+	limits := cfg.Limits.withDefaults()
 	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
 	// caller is assigned after the agent exists, breaking the broker⇄dispatch
 	// cycle; the broker only invokes it at run time.
 	broker := capability.NewBroker(rec, nil)
+	broker.MaxHTTPBytes = cfg.Limits.MaxHTTPBytes // 0 ⇒ broker applies its own default
 	glue := sandbox.NewLuaGlue(broker)
 
 	// Working-directory anchor: the shell reads it live at each command (a mutable anchor that
@@ -466,7 +506,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 
 	builtins := []tools.Tool{
 		tools.NewShellIn(ws, gate),
-		tools.NewRunCode(glue, scriptTimeout),
+		tools.NewRunCode(glue, limits.ScriptTimeout),
 		tools.WebSearchDDG,
 		tools.WebFetch,
 		authorTool,
@@ -540,6 +580,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	a.glue = glue
 	a.tier = tier
 	a.runID = runID
+	a.limits = limits
 	a.ws = ws
 	a.docsPromptNote = docsNote
 	a.tierPolicyNote = policyNote
@@ -669,7 +710,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	// The conversation (a.messages) excludes the system prompt; append the user turn.
 	a.messages = append(a.messages, provider.UserText(userInput))
 
-	for i := range maxIterations {
+	for i := range a.limits.MaxIterations {
 		// Recompute each iteration so a tool authored mid-run becomes callable on
 		// the next step. The list is append-only and stable, so the serialized
 		// prefix is unchanged until a tool is added — cache stays warm.
@@ -717,7 +758,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("reached max iterations (%d) without a final answer", maxIterations)
+	return "", fmt.Errorf("reached max iterations (%d) without a final answer", a.limits.MaxIterations)
 }
 
 func (a *Agent) executeTool(ctx context.Context, call provider.ToolCall) (string, error) {
@@ -760,7 +801,7 @@ func (a *Agent) runRegistered(ctx context.Context, spec tools.ToolSpec, args map
 			return "", fmt.Errorf("tool %q: no sandbox available", spec.Name)
 		}
 		grant := &capability.GrantContext{Run: a.runID, Granted: spec.RequiredCaps, Tier: a.tier}
-		return a.glue.Run(ctx, tools.WrapScript(spec.Impl.Source), args, grant, scriptTimeout)
+		return a.glue.Run(ctx, tools.WrapScript(spec.Impl.Source), args, grant, a.limits.ScriptTimeout)
 	default:
 		return "", fmt.Errorf("tool %q: unknown impl kind %q", spec.Name, spec.Impl.Kind)
 	}
@@ -818,12 +859,12 @@ func (a *Agent) selectRegistryTools() []tools.ToolSpec {
 		return nil
 	}
 	all := a.registry.List(tools.ScopeAny)
-	if len(all) <= maxInlineTools {
+	if len(all) <= a.limits.MaxInlineTools {
 		return all
 	}
 
 	keep := map[string]bool{}
-	for _, s := range a.registry.Search(a.task, maxInlineTools) {
+	for _, s := range a.registry.Search(a.task, a.limits.MaxInlineTools) {
 		keep[s.Name] = true
 	}
 	// Always keep ephemeral (run-local) tools so same-run authoring works even in

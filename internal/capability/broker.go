@@ -29,6 +29,10 @@ type Broker struct {
 	Clock   func() time.Time
 	RandSrc io.Reader
 
+	// MaxHTTPBytes caps a single brokered HTTP response body. 0 ⇒ maxHTTPBytes (1 MiB).
+	// Tunable so a data-heavy deployment can raise it without a rebuild.
+	MaxHTTPBytes int64
+
 	// Trusted reports whether a tool name runs with ambient authority — a
 	// built-in like shell that is itself NOT sandboxed. call_tool from authored
 	// code must not reach such a tool transitively, or the sandbox leaks: an
@@ -122,7 +126,11 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBytes))
+	limit := b.MaxHTTPBytes
+	if limit <= 0 {
+		limit = maxHTTPBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return "", err
 	}

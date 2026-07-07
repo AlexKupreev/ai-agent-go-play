@@ -132,8 +132,8 @@ var runCmd = &cobra.Command{
 			Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-			StatusDirs: agentStateDirs(),
+			AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
+			StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
 		})
 
 		// run has no artifact manifest (no scratch cache today, chat-planner.md Q9c) ⇒ "".

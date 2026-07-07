@@ -118,17 +118,19 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		deps := serveDeps{
-			prov:     newProvider(cfg),
-			workDir:  workDir,
-			model:    resolveModel(modelFlag, cfg),
-			tier:     tier,
-			gate:     approvals,
-			registry: registry,
-			mem:      mem,
-			central:  rec,
-			ledger:   usage.NewLedger(rec), // rec is the process-wide log (a Reader)
-			reader:   rec,                  // same log, read side, for recent_activity
-			prompts:  promptSrc,
+			prov:       newProvider(cfg),
+			workDir:    workDir,
+			model:      resolveModel(modelFlag, cfg),
+			tier:       tier,
+			gate:       approvals,
+			registry:   registry,
+			mem:        mem,
+			central:    rec,
+			ledger:     usage.NewLedger(rec), // rec is the process-wide log (a Reader)
+			reader:     rec,                  // same log, read side, for recent_activity
+			prompts:    promptSrc,
+			limits:     resolveAgentLimits(cfg),
+			spawnDepth: resolveSpawnDepth(cfg),
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -146,6 +148,8 @@ var serveCmd = &cobra.Command{
 			turns = deps.deliberateTurnRunner(critique, serveMaxRevisionsFlag, engine.PublishToRun)
 		}
 		engine.EnableSessions(sessions, turns)
+		// Tune the in-memory finished-run retention cap if configured (0 ⇒ keep the default).
+		engine.SetMaxFinishedRuns(cfg.Limits.MaxFinishedRuns)
 		// Record a run_usage event per completed run/turn into the process-wide log,
 		// so token spend is browsable over GET /audit alongside every other effect.
 		engine.SetAuditRecorder(rec)
@@ -206,17 +210,19 @@ var serveCmd = &cobra.Command{
 // process-wide state (catalog, gate, memory, central audit) is consistent across
 // runs and with the API; per-run state (transcript, session audit file) is fresh.
 type serveDeps struct {
-	prov     *openaiprovider.Client
-	workDir  string
-	model    string
-	tier     capability.Tier
-	gate     tools.HumanGate
-	registry tools.Registry
-	mem      memory.Store
-	central  audit.Recorder
-	ledger   tools.UsageLedger // durable session/day token totals for the usage tool
-	reader   audit.Reader      // process-wide log, for the recent_activity tool
-	prompts  *promptState      // reloadable prompt customization + agent-type catalog
+	prov       *openaiprovider.Client
+	workDir    string
+	model      string
+	tier       capability.Tier
+	gate       tools.HumanGate
+	registry   tools.Registry
+	mem        memory.Store
+	central    audit.Recorder
+	ledger     tools.UsageLedger // durable session/day token totals for the usage tool
+	reader     audit.Reader      // process-wide log, for the recent_activity tool
+	prompts    *promptState      // reloadable prompt customization + agent-type catalog
+	limits     agent.Limits      // per-run bounds (from config)
+	spawnDepth int               // sub-agent delegation budget (from config)
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -267,9 +273,9 @@ func (d serveDeps) newExecutor(runID, sessionID string, manifest *artifact.Manif
 		Audit: rec, Tier: d.tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-		StatusDirs: agentStateDirs(),
-		Manifest:   manifest, ScratchDir: scratchDir,
+		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
+		StatusDirs: agentStateDirs(), Limits: d.limits,
+		Manifest: manifest, ScratchDir: scratchDir,
 	})
 }
 

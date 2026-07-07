@@ -165,6 +165,23 @@ func TestRunStoreSurvivesEviction(t *testing.T) {
 	}
 }
 
+// TestSetMaxFinishedRuns: a positive value tunes the retention cap; a non-positive value is
+// ignored so the default stands.
+func TestSetMaxFinishedRuns(t *testing.T) {
+	e := NewEngine(RunnerFunc(fakeRunner))
+	if e.maxFinished != maxFinishedRuns {
+		t.Fatalf("default maxFinished = %d, want %d", e.maxFinished, maxFinishedRuns)
+	}
+	e.SetMaxFinishedRuns(5)
+	if e.maxFinished != 5 {
+		t.Fatalf("after Set(5), maxFinished = %d, want 5", e.maxFinished)
+	}
+	e.SetMaxFinishedRuns(0)
+	if e.maxFinished != 5 {
+		t.Fatalf("Set(0) should be ignored; maxFinished = %d, want 5", e.maxFinished)
+	}
+}
+
 // waitEvicted polls until runID is no longer known to the engine (eviction happens on
 // the finishing run's goroutine, so it is eventually consistent with run completion).
 func waitEvicted(t *testing.T, e *Engine, runID string) {

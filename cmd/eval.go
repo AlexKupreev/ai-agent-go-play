@@ -217,8 +217,8 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-		StatusDirs: agentStateDirs(),
+		AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
+		StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied
 
