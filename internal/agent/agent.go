@@ -637,6 +637,11 @@ func (a *Agent) Messages() []provider.Message {
 // display.
 func (a *Agent) Model() string { return a.model }
 
+// SystemPrompt returns the composed system-prompt prefix this agent sends each request
+// (the stable part — the per-request date line in systemMessage is not included). It backs
+// `agent prompts show`, letting an operator inspect the effective prompt without a run.
+func (a *Agent) SystemPrompt() string { return a.systemPrompt }
+
 // systemMessage builds the system message for a request: the base prompt plus the
 // current date, so the agent always knows "today" without a tool call (it can't get the
 // clock from run_code — the Lua sandbox strips os). Day granularity keeps the prompt

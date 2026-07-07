@@ -117,6 +117,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent serve` | Start the headless HTTP+SSE engine. Deliberate session turns by default (`--no-plan`/`--no-critique`/`--max-revisions`). |
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
 | `agent eval <task>` | Run one task under N config variants and compare outputs + token usage. |
+| `agent prompts show` | Print the composed effective prompt (executor by default; `--planner`/`--critic`/`--all`) without a run — honors `--workspace`/`--tier`/`--context-file`/`--no-context-files`. |
 | `agent reload` | Tell a running engine to re-read its prompt + agent-type files (no restart). |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the engine's audit log. |
@@ -360,6 +361,16 @@ tier gate live in [`environment.md`](environment.md); the operational summary:
 
 The workspace tier is **tier-gated**: on `safe`, workspace files (a possibly-hostile checkout)
 don't auto-load unless you pass `--workspace` explicitly. Config-dir files always load.
+
+To see the **composed** prompt a given configuration actually produces — base + tier policy +
+tool roster + your `SYSTEM.md`/`AGENTS.md` layers, assembled exactly as a run would but without
+calling the model — use `agent prompts show` (add `--planner` / `--critic` / `--all`; it honors
+`--workspace` / `--tier` / `--context-file` / `--no-context-files`):
+
+```bash
+./agent prompts show --tier safe            # the executor prompt as `safe` composes it
+./agent --workspace ~/proj prompts show --all   # executor + planner + critic for that workspace
+```
 
 ### Hot-reload — no restart
 
