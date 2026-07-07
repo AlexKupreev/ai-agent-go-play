@@ -51,13 +51,38 @@ type Config struct {
 // ConfigLimits are the on-disk, tunable bounds (config.json "limits"). A zero/absent field
 // keeps the built-in default. These are experiment knobs — deeper ReAct loops, longer sandbox
 // runs, a tighter run-retention cap on a small box — that otherwise needed a rebuild.
+// The yaml tags let the same type appear in an `agent eval` variant (see cmd/eval.go).
 type ConfigLimits struct {
-	MaxIterations   int   `json:"max_iterations,omitempty"`         // ReAct model-call iterations (default 20)
-	ScriptTimeoutS  int   `json:"script_timeout_seconds,omitempty"` // per sandboxed script (default 5)
-	MaxInlineTools  int   `json:"max_inline_tools,omitempty"`       // catalog size before search-gating (default 12)
-	MaxHTTPBytes    int64 `json:"max_http_bytes,omitempty"`         // brokered HTTP response cap (default 1 MiB)
-	MaxFinishedRuns int   `json:"max_finished_runs,omitempty"`      // engine in-memory finished-run retention (default 100)
-	SpawnDepth      int   `json:"spawn_depth,omitempty"`            // sub-agent delegation budget (default 1)
+	MaxIterations   int   `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`                 // ReAct model-call iterations (default 20)
+	ScriptTimeoutS  int   `json:"script_timeout_seconds,omitempty" yaml:"script_timeout_seconds,omitempty"` // per sandboxed script (default 5)
+	MaxInlineTools  int   `json:"max_inline_tools,omitempty" yaml:"max_inline_tools,omitempty"`             // catalog size before search-gating (default 12)
+	MaxHTTPBytes    int64 `json:"max_http_bytes,omitempty" yaml:"max_http_bytes,omitempty"`                 // brokered HTTP response cap (default 1 MiB)
+	MaxFinishedRuns int   `json:"max_finished_runs,omitempty" yaml:"max_finished_runs,omitempty"`           // engine in-memory finished-run retention (default 100)
+	SpawnDepth      int   `json:"spawn_depth,omitempty" yaml:"spawn_depth,omitempty"`                       // sub-agent delegation budget (default 1)
+}
+
+// merge returns c with any non-zero field of o overriding it. Used to layer an eval variant's
+// limits over the ambient config limits.
+func (c ConfigLimits) merge(o ConfigLimits) ConfigLimits {
+	if o.MaxIterations != 0 {
+		c.MaxIterations = o.MaxIterations
+	}
+	if o.ScriptTimeoutS != 0 {
+		c.ScriptTimeoutS = o.ScriptTimeoutS
+	}
+	if o.MaxInlineTools != 0 {
+		c.MaxInlineTools = o.MaxInlineTools
+	}
+	if o.MaxHTTPBytes != 0 {
+		c.MaxHTTPBytes = o.MaxHTTPBytes
+	}
+	if o.MaxFinishedRuns != 0 {
+		c.MaxFinishedRuns = o.MaxFinishedRuns
+	}
+	if o.SpawnDepth != 0 {
+		c.SpawnDepth = o.SpawnDepth
+	}
+	return c
 }
 
 var configCmd = &cobra.Command{

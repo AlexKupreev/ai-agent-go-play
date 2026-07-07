@@ -46,6 +46,56 @@ func TestLoadEvalVariants(t *testing.T) {
 	}
 }
 
+// TestLoadEvalVariants_NewFields parses the §2.5 additions: inline prompts, per-variant
+// limits (via the shared ConfigLimits yaml tags), and spawn_depth.
+func TestLoadEvalVariants_NewFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "variants.yaml")
+	content := "" +
+		"- name: inline\n" +
+		"  system_prompt: |\n" +
+		"    You are terse.\n" +
+		"  agents_md: |\n" +
+		"    Prefer tables.\n" +
+		"- name: deeper\n" +
+		"  spawn_depth: 3\n" +
+		"  limits:\n" +
+		"    max_iterations: 40\n" +
+		"    script_timeout_seconds: 12\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := loadEvalVariants(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) != 2 {
+		t.Fatalf("got %d variants, want 2", len(vs))
+	}
+	if vs[0].SystemPrompt != "You are terse.\n" || vs[0].AgentsMD != "Prefer tables.\n" {
+		t.Errorf("inline prompts not parsed: %+v", vs[0])
+	}
+	if vs[1].SpawnDepth != 3 || vs[1].Limits.MaxIterations != 40 || vs[1].Limits.ScriptTimeoutS != 12 {
+		t.Errorf("limits/spawn_depth not parsed: %+v", vs[1])
+	}
+}
+
+// TestConfigLimitsMerge: a variant's non-zero fields override the ambient config; zero fields
+// inherit.
+func TestConfigLimitsMerge(t *testing.T) {
+	base := ConfigLimits{MaxIterations: 20, ScriptTimeoutS: 5, SpawnDepth: 1}
+	got := base.merge(ConfigLimits{MaxIterations: 40, MaxHTTPBytes: 2 << 20})
+	if got.MaxIterations != 40 { // overridden
+		t.Errorf("MaxIterations = %d, want 40", got.MaxIterations)
+	}
+	if got.ScriptTimeoutS != 5 || got.SpawnDepth != 1 { // inherited
+		t.Errorf("inherited fields lost: %+v", got)
+	}
+	if got.MaxHTTPBytes != 2<<20 { // added
+		t.Errorf("MaxHTTPBytes = %d, want %d", got.MaxHTTPBytes, 2<<20)
+	}
+}
+
 func TestLoadEvalVariants_EmptyFileErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.yaml")
 	if err := os.WriteFile(path, []byte("[]\n"), 0o600); err != nil {

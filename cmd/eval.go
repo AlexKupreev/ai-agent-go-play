@@ -39,6 +39,17 @@ type evalVariant struct {
 	Workspace      string   `yaml:"workspace"`
 	ContextFiles   []string `yaml:"context_files"`
 	NoContextFiles bool     `yaml:"no_context_files"`
+
+	// Inline prompt overrides, so a variant needn't ship a file: SystemPrompt replaces the
+	// base executor prompt (like a SYSTEM.md), AgentsMD is appended (like an AGENTS.md). They
+	// layer over any file-based prompts resolved for the variant's workspace.
+	SystemPrompt string `yaml:"system_prompt"`
+	AgentsMD     string `yaml:"agents_md"`
+
+	// Per-variant limit + delegation overrides, layered over the ambient config limits (a
+	// zero field inherits). Lets a sweep vary max_iterations, script_timeout_seconds, etc.
+	Limits     ConfigLimits `yaml:"limits"`
+	SpawnDepth int          `yaml:"spawn_depth"`
 }
 
 // evalResult is the outcome of running the task under one variant.
@@ -56,19 +67,22 @@ var evalCmd = &cobra.Command{
 	Use:   "eval <task>",
 	Short: "Run one task under N config variants and compare outputs + token usage",
 	Long: "The experimentation harness: run the same task under several configurations " +
-		"(model / prompt files / agent-type set) and print their outputs and token usage side " +
-		"by side, so prompt and organization experiments can be measured, not guessed.\n\n" +
+		"and print their outputs and token usage side by side, so prompt and organization " +
+		"experiments can be measured, not guessed.\n\n" +
 		"Variants come from a YAML file (--variants) and/or a quick model sweep (--models, one " +
 		"variant per model). A variant overrides the ambient defaults with any of: model, tier, " +
-		"workspace, context_files, no_context_files.\n\n" +
+		"workspace, context_files, no_context_files, inline system_prompt / agents_md, per-variant " +
+		"limits (max_iterations, script_timeout_seconds, …), and spawn_depth.\n\n" +
 		"Each variant runs the executor directly (no planner) with a fresh context, sharing this " +
 		"agent's tool catalog and memory. Ctrl+C stops after the current variant.\n\n" +
 		"Example variants.yaml:\n" +
 		"  - name: baseline\n" +
-		"  - name: with-project-prompt\n" +
-		"    context_files: [./PROMPT.md]\n" +
-		"  - name: bigger-model\n" +
-		"    model: gpt-4o",
+		"  - name: inline-prompt\n" +
+		"    system_prompt: |\n" +
+		"      You are a terse assistant. Answer in one sentence.\n" +
+		"  - name: deeper-loops\n" +
+		"    model: gpt-4o\n" +
+		"    limits: { max_iterations: 40 }",
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -189,6 +203,21 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		res.Err = err
 		return res
 	}
+	// Inline prompt overrides layer over the file-based ones: system_prompt replaces the base
+	// (like SYSTEM.md), agents_md appends (like AGENTS.md).
+	if v.SystemPrompt != "" {
+		prompts.Override = v.SystemPrompt
+	}
+	if v.AgentsMD != "" {
+		prompts.Appends = append(prompts.Appends, v.AgentsMD)
+	}
+
+	// Per-variant limits/spawn-depth layered over the ambient config.
+	limits := resolveAgentLimits(Config{Limits: cfg.Limits.merge(v.Limits)})
+	spawnDepth := resolveSpawnDepth(cfg)
+	if v.SpawnDepth > 0 {
+		spawnDepth = v.SpawnDepth
+	}
 
 	runsBase, err := runsDir()
 	if err != nil {
@@ -217,8 +246,8 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-		AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
-		StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
+		AgentCatalog: catalog, SpawnDepth: spawnDepth,
+		StatusDirs: agentStateDirs(), Limits: limits,
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied
 

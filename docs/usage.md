@@ -397,14 +397,20 @@ configurations and compare them side by side instead of guessing:
 
 `--models` makes one variant per model. `--variants` points at a YAML list where each variant
 overrides the ambient defaults with any of `model`, `tier`, `workspace`, `context_files`,
-`no_context_files` — the file-backed equivalent of a set of run flags:
+`no_context_files`, an inline `system_prompt` / `agents_md` (so a variant needn't ship a file),
+per-variant `limits` (the same keys as the config `limits` block, layered over it), and
+`spawn_depth` — the file-backed equivalent of a set of run flags:
 
 ```yaml
 - name: baseline
 - name: with-project-prompt
   context_files: [./PROMPT.md]
-- name: bigger-model
+- name: terse-inline               # inline prompt, no file needed
+  system_prompt: |
+    You are a terse assistant. Answer in one sentence.
+- name: deeper-loops               # vary a limit for this variant only
   model: gpt-4o
+  limits: { max_iterations: 40 }
 ```
 
 Each variant runs the executor directly (no planner) with a fresh context, sharing this agent's
