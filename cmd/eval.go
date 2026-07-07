@@ -85,7 +85,7 @@ var evalCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		prov := openaiprovider.New(cfg.OpenAIKey)
+		prov := newProvider(cfg)
 
 		// One shared tool catalog + memory across variants (same as `run`): the comparison
 		// is about prompt/model, not tool/memory state, and sharing keeps the run realistic.
@@ -218,6 +218,7 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+		StatusDirs: agentStateDirs(),
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied
 

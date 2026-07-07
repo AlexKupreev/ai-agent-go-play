@@ -2,7 +2,7 @@ package agent
 
 import "ai-agent-go-play/internal/provider"
 
-// Verdict is the critic's structured output (docs/planning/chat-planner.md §9.6 / Q9a): a
+// Verdict is the critic's structured output (docs/adr/chat-planner.md §9.6 / Q9a): a
 // judgment, not a plan. The critique loop delivers the executor's answer when Satisfied;
 // otherwise it re-runs the PLANNER (unchanged contract) with Gaps as added context and
 // re-delegates. Keeping the verdict on its own small schema is what lets Plan stay exactly

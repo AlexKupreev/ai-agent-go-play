@@ -15,7 +15,6 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
-	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -67,7 +66,7 @@ var chatCmd = &cobra.Command{
 		plan := !chatNoPlanFlag
 		critique := plan && !chatNoCritiqueFlag
 
-		prov := openaiprovider.New(cfg.OpenAIKey)
+		prov := newProvider(cfg)
 		model := resolveModel(modelFlag, cfg)
 		tier, err := resolveTier(tierFlag, cfg)
 		if err != nil {
@@ -157,6 +156,7 @@ var chatCmd = &cobra.Command{
 				Usage: tools.UsageContext{}, AuditReader: rec,
 				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 				AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+				StatusDirs: agentStateDirs(),
 				// nil/"" in bare chat ⇒ no record_artifact and no scratch note (unchanged).
 				Manifest: manifest, ScratchDir: scratchDir,
 			}), nil
@@ -405,7 +405,7 @@ func onOff(b bool) string {
 }
 
 func init() {
-	chatCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
+	chatCmd.Flags().StringVar(&modelFlag, "model", "", modelFlagUsage)
 	chatCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	chatCmd.Flags().BoolVar(&chatNoPlanFlag, "no-plan", false, "disable deliberate mode (planning is ON by default): run the bare executor with retained context instead of planner → stateless executor")
 	chatCmd.Flags().BoolVar(&chatNoCritiqueFlag, "no-critique", false, "disable the critique loop (ON by default with planning): after each answer a critic judges it against the plan's success criteria and re-plans on a shortfall")

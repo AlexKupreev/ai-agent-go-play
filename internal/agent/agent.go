@@ -21,7 +21,11 @@ import (
 )
 
 const maxIterations = 20
-const defaultModel = "gpt-4o-mini"
+
+// DefaultModel is the built-in default model id, used when neither a flag, env, nor config
+// value sets one. Exported so the cmd layer can render it in flag help without duplicating
+// the literal.
+const DefaultModel = "gpt-4o-mini"
 
 // scriptTimeout bounds any single sandboxed script execution (run_code and
 // authored Script tools).
@@ -119,7 +123,7 @@ func baseSystemPrompt(override, docsNote, policyNote, rosterNote, scratchNote st
 }
 
 // scratchPromptNote tells the executor how to use its scratch directory + record_artifact
-// (docs/planning/chat-planner.md §D3/§D4): the filesystem, not context, is the working
+// (docs/adr/chat-planner.md §D3/§D4): the filesystem, not context, is the working
 // memory. Attached only when a manifest is wired (the chat --plan pipeline); empty
 // otherwise, so run/serve executors are unchanged.
 func scratchPromptNote(scratchDir string) string {
@@ -360,7 +364,7 @@ type Agent struct {
 
 func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tools.Tool, obs Observer) *Agent {
 	if model == "" {
-		model = defaultModel
+		model = DefaultModel
 	}
 	byName := make(map[string]tools.Tool, len(agentTools))
 	for _, t := range agentTools {
@@ -400,6 +404,11 @@ type ExecutorConfig struct {
 
 	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
 	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
+
+	// StatusDirs are the agent's on-disk state locations (sessions, transcripts, scratch,
+	// catalog, memory, audit), surfaced by the status tool's disk-usage section. The cmd
+	// layer resolves them (internal/agent/tools resolve no paths); empty ⇒ section omitted.
+	StatusDirs []tools.StateDir
 
 	// Manifest + ScratchDir wire the chat planner's artifact cache (docs/planning/
 	// chat-planner.md §D3–D4). When Manifest is non-nil the executor gains the
@@ -467,13 +476,14 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		tools.NewAskUserTool(gate, runID),
 		// Self-status: identity + host resources. Read-only, trusted, not sandbox-exposed.
 		tools.NewStatusTool(tools.StatusDeps{
-			Model:    model,
-			Tier:     string(tier),
-			RunID:    runID,
-			Version:  buildinfo.Version,
-			WorkDir:  workDir,
-			Registry: registry,
-			Memory:   mem,
+			Model:     model,
+			Tier:      string(tier),
+			RunID:     runID,
+			Version:   buildinfo.Version,
+			WorkDir:   workDir,
+			Registry:  registry,
+			Memory:    mem,
+			StateDirs: cfg.StatusDirs,
 		}),
 	}
 	// Long-term memory is a trusted built-in (not exposed to the sandbox). Omit it

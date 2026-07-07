@@ -3,12 +3,23 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"ai-agent-go-play/internal/hoststat"
 	"ai-agent-go-play/internal/memory"
 )
+
+// StateDir is one on-disk state location the status tool reports usage for. The cmd layer
+// resolves and supplies these (config dir, runs dir, session store, …); internal/tools
+// resolves no paths itself, so the package stays free of the config-dir layout.
+type StateDir struct {
+	Label string // human label, e.g. "transcripts (runs)"
+	Path  string // absolute path to a file or directory
+}
 
 // StatusDeps is what the status tool reports about the running agent. The host figures
 // are read live at call time (see hoststat).
@@ -20,7 +31,15 @@ type StatusDeps struct {
 	WorkDir  string // filesystem to report disk free for
 	Registry Registry
 	Memory   memory.Store // may be nil
+
+	// StateDirs are the agent's own on-disk state locations (sessions, transcripts,
+	// scratch, catalog, memory, audit). Empty ⇒ the "State on disk" section is omitted.
+	StateDirs []StateDir
 }
+
+// maxStateWalkFiles bounds the disk-usage walk so a huge runs/ tree can't stall the status
+// tool. Past it the reported size is a lower bound (marked with a leading '≥').
+const maxStateWalkFiles = 200000
 
 // NewStatusTool returns the `status` built-in: the agent's self-report — its identity
 // (model, tier, run, build), how many authored tools and memory entries it has, and the
@@ -31,9 +50,11 @@ func NewStatusTool(deps StatusDeps) Tool {
 	return Tool{
 		Name: "status",
 		Description: "Report your own status: your model, trust tier, run id, and build version; how many " +
-			"authored tools and memory entries you have; and the host machine's live resources (CPU count and " +
-			"load, memory, disk free, your process RSS, and uptime). Use it to answer questions about your " +
-			"current configuration or how much headroom the machine has before starting heavy work.",
+			"authored tools and memory entries you have; the host machine's live resources (CPU count and " +
+			"load, memory, disk free, your process RSS, and uptime); and how much disk your own state " +
+			"(sessions, run transcripts, scratch cache, tool catalog, memory, audit log) is using. Use it " +
+			"to answer questions about your current configuration, how much headroom the machine has before " +
+			"starting heavy work, or what is consuming your disk.",
 		Parameters: map[string]any{},
 		Required:   []string{},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
@@ -73,6 +94,13 @@ func NewStatusTool(deps StatusDeps) Tool {
 			if s.HostUptime > 0 {
 				fmt.Fprintf(&b, ", host up %s", humanDuration(s.HostUptime))
 			}
+
+			// Agent state on disk: what each store is consuming, so the agent can answer
+			// "what's eating my disk?" and notice an unreaped runs/ tree.
+			if line := stateOnDisk(deps.StateDirs); line != "" {
+				b.WriteByte('\n')
+				b.WriteString(line)
+			}
 			return strings.TrimRight(b.String(), "\n"), nil
 		},
 	}
@@ -87,6 +115,92 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// stateOnDisk renders the "State on disk" section: one line per present StateDir with its
+// entry count and total bytes. Absent paths are skipped; an all-absent set yields "" (no
+// dangling header). Best-effort — an unreadable dir contributes what it could read.
+func stateOnDisk(dirs []StateDir) string {
+	var b strings.Builder
+	b.WriteString("State on disk\n")
+	any := false
+	for _, sd := range dirs {
+		entries, bytes, exists, truncated := diskUsage(sd.Path)
+		if !exists {
+			continue
+		}
+		any = true
+		size := humanBytes(bytes)
+		if truncated {
+			size = "≥" + size
+		}
+		if entries > 0 {
+			fmt.Fprintf(&b, "  %s: %d %s, %s\n", sd.Label, entries, itemWord(entries), size)
+		} else {
+			fmt.Fprintf(&b, "  %s: %s\n", sd.Label, size)
+		}
+	}
+	if !any {
+		return ""
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// diskUsage returns the immediate entry count and total (recursive) bytes at path. exists is
+// false when the path is absent (skip it). For a regular file, entries is 0 and bytes is its
+// size. truncated is true when the walk hit maxStateWalkFiles (bytes is then a lower bound).
+func diskUsage(path string) (entries int, bytes int64, exists, truncated bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, false, false
+	}
+	if !info.IsDir() {
+		return 0, info.Size(), true, false
+	}
+	if des, err := os.ReadDir(path); err == nil {
+		entries = len(des)
+	}
+	seen := 0
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip an unreadable entry, keep going
+		}
+		if d.IsDir() {
+			return nil
+		}
+		seen++
+		if seen > maxStateWalkFiles {
+			truncated = true
+			return filepath.SkipAll
+		}
+		if fi, err := d.Info(); err == nil {
+			bytes += fi.Size()
+		}
+		return nil
+	})
+	return entries, bytes, true, truncated
+}
+
+// itemWord is the singular/plural of "item" for an entry count.
+func itemWord(n int) string {
+	if n == 1 {
+		return "item"
+	}
+	return "items"
+}
+
+// humanBytes renders a byte count as B/KB/MB/GB… with one decimal above 1 KiB.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // humanDuration renders a coarse "3d 4h" / "5h 12m" / "8m" uptime.

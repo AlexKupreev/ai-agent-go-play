@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"ai-agent-go-play/internal/capability"
+
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +99,82 @@ func TestResolveAddr(t *testing.T) {
 	if got := resolveAddr("unknown"); got != "unknown" {
 		t.Fatalf("resolveAddr(unknown alias) = %q, want it passed through unchanged", got)
 	}
+}
+
+// TestResolveModel checks the precedence: --model flag > AI_AGENT_MODEL env > config value.
+func TestResolveModel(t *testing.T) {
+	t.Run("flag beats env and config", func(t *testing.T) {
+		t.Setenv(envModel, "env-model")
+		if got := resolveModel("flag-model", Config{Model: "cfg-model"}); got != "flag-model" {
+			t.Fatalf("resolveModel = %q, want flag-model", got)
+		}
+	})
+	t.Run("env beats config", func(t *testing.T) {
+		t.Setenv(envModel, "env-model")
+		if got := resolveModel("", Config{Model: "cfg-model"}); got != "env-model" {
+			t.Fatalf("resolveModel = %q, want env-model", got)
+		}
+	})
+	t.Run("config when neither flag nor env", func(t *testing.T) {
+		t.Setenv(envModel, "")
+		if got := resolveModel("", Config{Model: "cfg-model"}); got != "cfg-model" {
+			t.Fatalf("resolveModel = %q, want cfg-model", got)
+		}
+	})
+}
+
+// TestResolveTier checks the precedence: --tier flag > AI_AGENT_TIER env > config > balanced,
+// and that an invalid value from any source errors.
+func TestResolveTier(t *testing.T) {
+	t.Run("env beats config", func(t *testing.T) {
+		t.Setenv(envTier, "safe")
+		got, err := resolveTier("", Config{Tier: "permissive"})
+		if err != nil || got != capability.TierSafe {
+			t.Fatalf("resolveTier = (%q, %v), want (safe, nil)", got, err)
+		}
+	})
+	t.Run("flag beats env", func(t *testing.T) {
+		t.Setenv(envTier, "safe")
+		got, err := resolveTier("permissive", Config{})
+		if err != nil || got != capability.TierPermissive {
+			t.Fatalf("resolveTier = (%q, %v), want (permissive, nil)", got, err)
+		}
+	})
+	t.Run("default balanced when unset", func(t *testing.T) {
+		t.Setenv(envTier, "")
+		got, err := resolveTier("", Config{})
+		if err != nil || got != capability.TierBalanced {
+			t.Fatalf("resolveTier = (%q, %v), want (balanced, nil)", got, err)
+		}
+	})
+	t.Run("invalid env errors", func(t *testing.T) {
+		t.Setenv(envTier, "bogus")
+		if _, err := resolveTier("", Config{}); err == nil {
+			t.Fatal("expected an error for an invalid tier from env")
+		}
+	})
+}
+
+// TestResolveOpenAIBaseURL checks the precedence: AI_AGENT_OPENAI_BASE_URL env > config > "".
+func TestResolveOpenAIBaseURL(t *testing.T) {
+	t.Run("env beats config", func(t *testing.T) {
+		t.Setenv(envOpenAIBaseURL, "http://env:1234/v1")
+		if got := resolveOpenAIBaseURL(Config{OpenAIBaseURL: "http://cfg:1/v1"}); got != "http://env:1234/v1" {
+			t.Fatalf("resolveOpenAIBaseURL = %q, want the env value", got)
+		}
+	})
+	t.Run("config when env unset", func(t *testing.T) {
+		t.Setenv(envOpenAIBaseURL, "")
+		if got := resolveOpenAIBaseURL(Config{OpenAIBaseURL: "http://cfg:1/v1"}); got != "http://cfg:1/v1" {
+			t.Fatalf("resolveOpenAIBaseURL = %q, want the config value", got)
+		}
+	})
+	t.Run("empty when neither set", func(t *testing.T) {
+		t.Setenv(envOpenAIBaseURL, "")
+		if got := resolveOpenAIBaseURL(Config{}); got != "" {
+			t.Fatalf("resolveOpenAIBaseURL = %q, want empty (SDK default)", got)
+		}
+	})
 }
 
 // TestConfigDirPrecedence checks the resolution order: --config-dir flag beats the

@@ -33,8 +33,15 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   revoke it (404 if absent, audited as `tool_revoked`)
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
-- `POST /sessions` → `{session_id}`; `GET /sessions` → list; `DELETE /sessions/{id}` → terminate;
+- `POST /sessions` → `{session_id}`; `GET /sessions` → list; `DELETE /sessions/{id}` → close
+  (archives the conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
   `POST /sessions/{id}/turns` `{text}` → `{run_id}` (stream the reply via `GET /runs/{run_id}/events`)
+- `POST /reload` → re-read the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) + `agents/*.md`
+  from disk (400 on a malformed file, keeping the current config); the next run picks up the change
+
+A deliberate session turn also emits a `brief` event on the run's stream (the clean, rendered
+plan the executor was seeded with, plus any critique-loop notes), published out-of-band like the
+approval events so a frontend can render the deliberation distinctly from the raw planner output.
 
 Parked approvals are also **pushed onto the run's event stream** (`approval_requested` /
 `approval_resolved` events carrying `approval_id`), so a streaming frontend need not poll `/approvals`;
@@ -165,5 +172,7 @@ why auth is a frontend concern (design §1): the engine trusts localhost; the bo
 - Events are serialized to a wire-neutral `Event` type (not `agent.Event` directly) so both
   adapters share one schema and the on-the-wire format is stable independent of internal
   fields.
-- The planner step is interactive (`ask_user` over stdin) and does not fit a headless request;
-  the API runs the executor on the task directly for now. Headless planning is a later 4c/4e item.
+- Headless planning shipped with the chat planner (`docs/adr/chat-planner.md`): **session turns**
+  run the full deliberate planner → executor → critic pipeline over the engine, with the planner's
+  `ask_user` routed through the shared approval queue (no stdin needed). One-shot `POST /runs`
+  still runs the executor directly — the planner is a session-turn concern, not a one-shot one.

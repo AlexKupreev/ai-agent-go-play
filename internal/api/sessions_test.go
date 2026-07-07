@@ -69,6 +69,60 @@ func TestEngine_SessionTurnsRetainAndPersist(t *testing.T) {
 	}
 }
 
+// TestCloseSessionFreesTurnLock verifies the per-session turn lock is released with the
+// session — ids are never reused, so a leaked entry would live for the process lifetime.
+func TestCloseSessionFreesTurnLock(t *testing.T) {
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
+
+	sid, err := e.StartSession()
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	runID, err := e.PostTurn(sid, "hi")
+	if err != nil {
+		t.Fatalf("PostTurn: %v", err)
+	}
+	waitRunState(t, e, runID, StateDone)
+
+	if err := e.CloseSession(sid); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	e.sessLocksMu.Lock()
+	_, held := e.sessLocks[sid]
+	e.sessLocksMu.Unlock()
+	if held {
+		t.Errorf("turn lock for closed session %s still held in sessLocks", sid)
+	}
+}
+
+// TestCloseSessionFiresHook verifies the scratch-reap seam: closing a session invokes the
+// registered close hook with the session id (the cmd layer uses this to remove the session's
+// scratch cache).
+func TestCloseSessionFiresHook(t *testing.T) {
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
+
+	got := make(chan string, 1)
+	e.SetSessionCloseHook(func(id string) { got <- id })
+
+	sid, err := e.StartSession()
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if err := e.CloseSession(sid); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	select {
+	case id := <-got:
+		if id != sid {
+			t.Fatalf("close hook got id %q, want %q", id, sid)
+		}
+	default:
+		t.Fatal("close hook was not fired")
+	}
+}
+
 func TestEngine_PostTurnUnknownSession(t *testing.T) {
 	e := NewEngine(RunnerFunc(fakeRunner))
 	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())

@@ -7,7 +7,7 @@ import (
 )
 
 // Plan is the structured output produced by the planner agent. It is shared by `run`
-// and `chat --plan`; the chat pipeline (docs/planning/chat-planner.md) widened it from
+// and every deliberate chat / session turn; the chat pipeline (docs/adr/chat-planner.md) widened it from
 // the original {refined_task, assumptions, confirmed} with a Context block, cache-with-
 // fallback artifact references, and an optional success criterion for the critique loop.
 //

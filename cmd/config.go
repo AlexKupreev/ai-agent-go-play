@@ -9,17 +9,28 @@ import (
 	"strconv"
 	"strings"
 
+	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/capability"
+	openaiprovider "ai-agent-go-play/internal/provider/openai"
+	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
 )
 
+// modelFlagUsage is the shared `--model` help string, derived from the agent's built-in
+// default so the literal lives in exactly one place (agent.DefaultModel).
+var modelFlagUsage = fmt.Sprintf("model to use (overrides config; default: %s)", agent.DefaultModel)
+
 // Config holds persistent settings stored on disk.
 type Config struct {
 	OpenAIKey string `json:"openai_key"`
-	Model     string `json:"model,omitempty"`   // default model; overridden by --model
-	Tier      string `json:"tier,omitempty"`    // default trust tier; overridden by --tier
-	Verbose   bool   `json:"verbose,omitempty"` // default trace verbosity; overridden by --verbose/--quiet
+	// OpenAIBaseURL points the OpenAI-compatible client at a non-default endpoint (a local
+	// llama.cpp/Ollama/vLLM server, OpenRouter, a proxy). Empty ⇒ the real OpenAI API.
+	// Overridden by AI_AGENT_OPENAI_BASE_URL.
+	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
+	Model         string `json:"model,omitempty"`   // default model; overridden by --model
+	Tier          string `json:"tier,omitempty"`    // default trust tier; overridden by --tier
+	Verbose       bool   `json:"verbose,omitempty"` // default trace verbosity; overridden by --verbose/--quiet
 
 	// Optional Telegram frontend. Empty token ⇒ the bot is disabled and the engine
 	// runs unchanged. Both may be supplied via env vars (see resolveTelegram*).
@@ -44,6 +55,21 @@ var setKeyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadConfigOrEmpty()
 		cfg.OpenAIKey = args[0]
+		return saveConfig(cfg)
+	},
+}
+
+var setBaseURLCmd = &cobra.Command{
+	Use:   "set-base-url <url>",
+	Short: "Point the OpenAI-compatible client at a non-default endpoint (local server / proxy); AI_AGENT_OPENAI_BASE_URL overrides it",
+	Long: "Set the base URL for the OpenAI-compatible API so the agent can talk to a local " +
+		"llama.cpp / Ollama / vLLM server, OpenRouter, or a proxy instead of the OpenAI API. " +
+		"Pass an empty string to clear it and go back to the default. AI_AGENT_OPENAI_BASE_URL " +
+		"overrides this per run.",
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		cfg.OpenAIBaseURL = strings.TrimSpace(args[0])
 		return saveConfig(cfg)
 	},
 }
@@ -144,6 +170,7 @@ var enginesCmd = &cobra.Command{
 
 func init() {
 	configCmd.AddCommand(setKeyCmd)
+	configCmd.AddCommand(setBaseURLCmd)
 	configCmd.AddCommand(setModelCmd)
 	configCmd.AddCommand(setTierCmd)
 	configCmd.AddCommand(setVerboseCmd)
@@ -233,13 +260,43 @@ func auditPath() (string, error) { return underConfigDir("audit.jsonl") }
 // from the per-run transcripts under --sessions-dir, which are logs).
 func sessionStorePath() (string, error) { return underConfigDir("sessions") }
 
+// sessionScratchRoot returns the parent of every session's scratch dir, e.g.
+// ~/.config/ai-agent/session-scratch. Reaped per session on close; reported as one store by
+// the status tool's disk-usage section.
+func sessionScratchRoot() (string, error) { return underConfigDir("session-scratch") }
+
 // sessionScratchDir returns the per-session scratch directory for the deliberate engine
 // path (serve --plan): the artifact cache + manifest for one session, e.g.
 // ~/.config/ai-agent/session-scratch/<id>. Keyed by session id so it is namespaced per
-// conversation and persists across turns and restarts (chat-planner.md §D5). v1 has no
-// reaper — cache-with-fallback keeps a stale/absent file correct.
+// conversation and persists across turns and restarts (chat-planner.md §D5). Reaped when
+// the session is closed (serve's session-close hook); cache-with-fallback keeps a
+// stale/absent file correct in the meantime.
 func sessionScratchDir(sessionID string) (string, error) {
 	return underConfigDir(filepath.Join("session-scratch", sessionID))
+}
+
+// agentStateDirs resolves the agent's on-disk state locations for the status tool's
+// disk-usage section, best-effort (a path that can't be resolved is skipped). internal/tools
+// reports usage but resolves no paths itself; this is where the config-dir layout lives.
+func agentStateDirs() []tools.StateDir {
+	specs := []struct {
+		label string
+		fn    func() (string, error)
+	}{
+		{"transcripts (runs)", runsDir},
+		{"sessions (+ archived)", sessionStorePath},
+		{"scratch cache", sessionScratchRoot},
+		{"tool catalog", catalogPath},
+		{"memory", memoryPath},
+		{"audit log", auditPath},
+	}
+	var dirs []tools.StateDir
+	for _, s := range specs {
+		if p, err := s.fn(); err == nil && p != "" {
+			dirs = append(dirs, tools.StateDir{Label: s.label, Path: p})
+		}
+	}
+	return dirs
 }
 
 // Env vars overriding the Telegram config (env wins, so a token can be supplied
@@ -336,11 +393,37 @@ func resolveAddr(addr string) string {
 	return addr
 }
 
-// resolveModel applies model precedence: the --model flag wins, then the saved
-// config default, then "" (the agent falls back to its built-in default).
+// Env vars overriding the model/tier/base-URL defaults (a flag still wins over env).
+const (
+	envModel         = "AI_AGENT_MODEL"
+	envTier          = "AI_AGENT_TIER"
+	envOpenAIBaseURL = "AI_AGENT_OPENAI_BASE_URL"
+)
+
+// resolveOpenAIBaseURL applies base-URL precedence: AI_AGENT_OPENAI_BASE_URL env > config
+// value > "" (the SDK default, the real OpenAI API).
+func resolveOpenAIBaseURL(cfg Config) string {
+	if v := strings.TrimSpace(os.Getenv(envOpenAIBaseURL)); v != "" {
+		return v
+	}
+	return strings.TrimSpace(cfg.OpenAIBaseURL)
+}
+
+// newProvider builds the model provider from config + env, the single construction point so
+// base-URL resolution (and a future adapter switch) lives in one place rather than at each
+// call site.
+func newProvider(cfg Config) *openaiprovider.Client {
+	return openaiprovider.New(cfg.OpenAIKey, resolveOpenAIBaseURL(cfg))
+}
+
+// resolveModel applies model precedence: the --model flag wins, then AI_AGENT_MODEL, then
+// the saved config default, then "" (the agent falls back to its built-in default).
 func resolveModel(flag string, cfg Config) string {
 	if flag != "" {
 		return flag
+	}
+	if v := strings.TrimSpace(os.Getenv(envModel)); v != "" {
+		return v
 	}
 	return cfg.Model
 }
@@ -378,10 +461,13 @@ func parseBool(s string) (val bool, ok bool) {
 	}
 }
 
-// resolveTier applies tier precedence: the --tier flag wins, then the saved config
-// default, then TierBalanced. An invalid value (from either source) is an error.
+// resolveTier applies tier precedence: the --tier flag wins, then AI_AGENT_TIER, then the
+// saved config default, then TierBalanced. An invalid value (from any source) is an error.
 func resolveTier(flag string, cfg Config) (capability.Tier, error) {
 	raw := flag
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(envTier))
+	}
 	if raw == "" {
 		raw = cfg.Tier
 	}

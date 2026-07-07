@@ -31,8 +31,9 @@ func init() {
 			"(default <config-dir>/runs, so separate --config-dir agents share nothing; "+
 			"env AI_AGENT_SESSIONS_DIR)")
 	rootCmd.PersistentFlags().BoolVar(&noContextFilesFlag, "no-context-files", false,
-		"ignore SYSTEM.md / AGENTS.md prompt customization in the config dir "+
-			"(reproducible runs with the built-in base prompt)")
+		"ignore ALL prompt customization — SYSTEM.md / AGENTS.md / PLANNER.md / CRITIC.md, "+
+			"--context-file, and agents/*.md, in both the config dir and the workspace "+
+			"(reproducible runs on the built-in base prompts + built-in agent types)")
 	rootCmd.PersistentFlags().StringVar(&workspaceFlag, "workspace", "",
 		"directory the agent acts on — the shell tool's working directory "+
 			"(default: the current directory), as distinct from --config-dir "+

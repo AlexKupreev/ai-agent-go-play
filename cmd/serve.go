@@ -118,7 +118,7 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		deps := serveDeps{
-			prov:     openaiprovider.New(cfg.OpenAIKey),
+			prov:     newProvider(cfg),
 			workDir:  workDir,
 			model:    resolveModel(modelFlag, cfg),
 			tier:     tier,
@@ -149,6 +149,19 @@ var serveCmd = &cobra.Command{
 		// Record a run_usage event per completed run/turn into the process-wide log,
 		// so token spend is browsable over GET /audit alongside every other effect.
 		engine.SetAuditRecorder(rec)
+		// Persist each finished run's metadata as info.json next to its transcript, so a run's
+		// status survives eviction (maxFinishedRuns) and a restart (GET /runs/{id} then reads
+		// it back). Best-effort — skipped if the runs dir can't be resolved.
+		if runsBase, err := runsDir(); err == nil {
+			engine.SetRunStore(fileRunStore{base: runsBase})
+		}
+		// Closing a session archives its conversation (recoverable); its scratch cache is
+		// large and re-derivable, so reap it here — this is also the reaper for session-scratch/.
+		engine.SetSessionCloseHook(func(sessionID string) {
+			if dir, err := sessionScratchDir(sessionID); err == nil {
+				_ = os.RemoveAll(dir)
+			}
+		})
 		// Push parked escalations (and their resolutions) onto the owning run's event
 		// stream, so a streaming frontend learns of them without polling /approvals.
 		approvals.SetEmitter(engine.PublishToRun)
@@ -255,7 +268,8 @@ func (d serveDeps) newExecutor(runID, sessionID string, manifest *artifact.Manif
 		Usage: usageCtx, AuditReader: d.reader,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-		Manifest: manifest, ScratchDir: scratchDir,
+		StatusDirs: agentStateDirs(),
+		Manifest:   manifest, ScratchDir: scratchDir,
 	})
 }
 
@@ -408,7 +422,7 @@ func startTelegramIfConfigured(cfg Config) {
 
 func init() {
 	serveCmd.Flags().StringVar(&addrFlag, "addr", "127.0.0.1:8080", "address to listen on")
-	serveCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
+	serveCmd.Flags().StringVar(&modelFlag, "model", "", modelFlagUsage)
 	serveCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	serveCmd.Flags().BoolVar(&serveNoPlanFlag, "no-plan", false, "disable deliberate session turns (planning is ON by default): run the bare executor seeded with prior history instead")
 	serveCmd.Flags().BoolVar(&serveNoCritiqueFlag, "no-critique", false, "disable the critique loop (ON by default with planning): after each answer a critic judges it and re-plans on a shortfall")

@@ -11,7 +11,7 @@ import (
 
 // NewRecordArtifactTool returns the `record_artifact` built-in: the executor records a
 // sizeable intermediate it materialized so the planner sees it in next turn's manifest
-// (docs/planning/chat-planner.md §D4). It is an auto-permitted host tool — it only appends
+// (docs/adr/chat-planner.md §D4). It is an auto-permitted host tool — it only appends
 // a manifest entry and only accepts a path inside scratchDir, so it holds no capability,
 // touches no network, and reaches no arbitrary path; it never prompts, at any tier (§D4).
 // Recording must be as frictionless as writing the file it describes, or the manifest

@@ -41,12 +41,15 @@ To install system-wide, `go install .` and make sure `~/go/bin` is on your `PATH
   then an **executor** ReAct loop runs it), streaming progress to your terminal and prompting you
   on stdin for risky actions.
 - **Interactive chat** — `agent chat` is a multi-turn REPL that retains conversation context
-  across turns (`/new` or `/reset`, `/exit`; `--plan` to run the planner per message). Add `--addr` to drive
+  across turns (`/new` or `/reset`, `/exit`). Each message is **deliberate by default**: a
+  **planner** refines it, an **executor** runs it, and a **critic** judges the result and re-plans
+  a shortfall (`--no-plan` / `--no-critique` drop back to a bare executor). Add `--addr` to drive
   a running engine's **persistent session** instead — the conversation lives server-side, so it
   survives quitting and can be resumed here (`--session`) or from another client like Telegram.
-- **Headless engine** — `agent serve` runs the executor as a local HTTP+SSE service; `agent client
+- **Headless engine** — `agent serve` runs the engine as a local HTTP+SSE service; `agent client
   <task>` (and, optionally, a Telegram bot) drive it as peer clients, with risky actions parking
-  for a remote approval. Good for unattended use.
+  for a remote approval. Session turns are deliberate by default (same `--no-plan` / `--no-critique`
+  dials); one-shot `POST /runs` runs the executor directly. Good for unattended use.
 
 ```bash
 ./agent serve                      # terminal 1: start the engine

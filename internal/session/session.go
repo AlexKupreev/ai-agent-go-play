@@ -66,6 +66,11 @@ type Store interface {
 	List() ([]Info, error)  // newest-updated first
 }
 
+// archiveSubdir holds sessions closed via Delete. Closing archives rather than deletes, so a
+// mistaken `/end` is recoverable (Restore). List skips this subdirectory, so archived sessions
+// drop out of the resumable listing automatically.
+const archiveSubdir = "archive"
+
 // FileStore is a Store backed by one JSON file per session under dir.
 type FileStore struct {
 	mu  sync.Mutex
@@ -76,6 +81,10 @@ type FileStore struct {
 func NewFileStore(dir string) *FileStore { return &FileStore{dir: dir} }
 
 func (s *FileStore) path(id string) string { return filepath.Join(s.dir, id+".json") }
+
+func (s *FileStore) archivePath(id string) string {
+	return filepath.Join(s.dir, archiveSubdir, id+".json")
+}
 
 func (s *FileStore) Create() (Session, error) {
 	s.mu.Lock()
@@ -101,14 +110,57 @@ func (s *FileStore) Save(sess Session) error {
 	return s.write(sess)
 }
 
+// Delete closes a session by ARCHIVING it: the file moves from sessions/<id>.json to
+// sessions/archive/<id>.json rather than being removed, so a mistaken close (`/end`) is
+// recoverable (Restore). It then reads as gone — Get/List skip the archive — while the
+// bytes survive. ErrNotFound if the session isn't live. Use Purge for irreversible removal.
 func (s *FileStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err := os.Remove(s.path(id))
-	if os.IsNotExist(err) {
-		return ErrNotFound
+	if _, err := os.Stat(s.path(id)); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
 	}
-	return err
+	if err := os.MkdirAll(filepath.Join(s.dir, archiveSubdir), 0700); err != nil {
+		return err
+	}
+	return os.Rename(s.path(id), s.archivePath(id))
+}
+
+// Restore moves an archived session back to the live set so it can be resumed. ErrNotFound
+// if no archived session with that id exists.
+func (s *FileStore) Restore(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Stat(s.archivePath(id)); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return os.Rename(s.archivePath(id), s.path(id))
+}
+
+// Purge permanently removes a session — live or archived. It is the irreversible counterpart
+// to Delete (which only archives), for a future management plane's "really delete". ErrNotFound
+// if neither a live nor an archived file exists.
+func (s *FileStore) Purge(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	errLive := os.Remove(s.path(id))
+	errArch := os.Remove(s.archivePath(id))
+	switch {
+	case errLive == nil || errArch == nil:
+		return nil // removed at least one
+	case os.IsNotExist(errLive) && os.IsNotExist(errArch):
+		return ErrNotFound
+	case !os.IsNotExist(errLive):
+		return errLive
+	default:
+		return errArch
+	}
 }
 
 func (s *FileStore) List() ([]Info, error) {

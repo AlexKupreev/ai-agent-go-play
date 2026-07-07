@@ -141,9 +141,11 @@ guardrail catches irreversible/high-impact commands before they run:
   `shutdown`/`reboot`, `git push`/`reset --hard`/`clean`/`branch -D`, package removal, and
   `curl|wget … | sh`.
 - A match calls the `HumanGate` (`Approve(ctx, ApprovalRequest) (bool, error)`; CLI:
-  `StdinGate`, a y/N prompt). Decline **or an approval error** blocks the run; the gate is
-  injectable for tests, and `nil` disables the gate. The same gate also answers the executor's
-  `ask_user` questions (`Ask`), so both human interactions share one seam and one frontend route.
+  `StdinGate`, a y/N prompt). Decline **or an approval error** blocks the *command* — it is not
+  run, and the outcome ("command not run: …") is returned to the model as the tool result so the
+  run continues and the model can adapt. The gate is injectable for tests, and `nil` disables it.
+  The same gate also answers the executor's `ask_user` questions (`Ask`), so both human
+  interactions share one seam and one frontend route.
 
 **Defends against:** the agent — possibly steered by injected content — running something
 destructive without a human nod.

@@ -19,9 +19,16 @@ type Client struct {
 	client oai.Client
 }
 
-// New builds an OpenAI provider from an API key.
-func New(apiKey string) *Client {
-	return &Client{client: oai.NewClient(option.WithAPIKey(apiKey))}
+// New builds an OpenAI provider from an API key and an optional base URL. An empty
+// baseURL uses the SDK default (the OpenAI API); a non-empty one points the client at
+// any OpenAI-compatible endpoint — a local llama.cpp / Ollama / vLLM server, OpenRouter,
+// an Azure/proxy gateway — without any other code change.
+func New(apiKey, baseURL string) *Client {
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	return &Client{client: oai.NewClient(opts...)}
 }
 
 // Step runs one model turn against the Chat Completions API.

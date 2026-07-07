@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,60 @@ func TestStatusTool(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+// TestStatusTool_StateOnDisk checks the disk-usage section: a directory reports its entry
+// count + bytes, a file reports its bytes, and an absent path is silently skipped.
+func TestStatusTool_StateOnDisk(t *testing.T) {
+	base := t.TempDir()
+	runs := filepath.Join(base, "runs")
+	if err := os.MkdirAll(filepath.Join(runs, "run1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runs, "run1", "run.jsonl"), []byte("hello world"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := filepath.Join(base, "tools.json")
+	if err := os.WriteFile(catalog, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewStatusTool(StatusDeps{
+		Model: "gpt-4o-mini", Tier: "balanced", WorkDir: ".", Registry: NewMemoryRegistry(),
+		StateDirs: []StateDir{
+			{Label: "transcripts (runs)", Path: runs},
+			{Label: "tool catalog", Path: catalog},
+			{Label: "memory", Path: filepath.Join(base, "does-not-exist.json")},
+		},
+	})
+	out, err := tool.Run(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"State on disk",
+		"transcripts (runs): 1 item,", // one run dir
+		"tool catalog: 2 B",           // the "[]" file
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output missing %q; got:\n%s", want, out)
+		}
+	}
+	// An absent path is skipped, not rendered.
+	if strings.Contains(out, "does-not-exist") || strings.Contains(out, "memory:") {
+		t.Errorf("absent state path should be skipped; got:\n%s", out)
+	}
+}
+
+// TestStatusTool_NoStateDirs omits the section entirely when no dirs are supplied (the
+// default for runs/chat/eval executors that don't wire it — no dangling header).
+func TestStatusTool_NoStateDirs(t *testing.T) {
+	tool := NewStatusTool(StatusDeps{Model: "m", Tier: "safe", WorkDir: ".", Registry: NewMemoryRegistry()})
+	out, _ := tool.Run(context.Background(), map[string]any{})
+	if strings.Contains(out, "State on disk") {
+		t.Errorf("no StateDirs should omit the section; got:\n%s", out)
 	}
 }
 

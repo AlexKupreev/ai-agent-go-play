@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,6 +30,14 @@ const (
 	StateDone    = "done"
 	StateError   = "error"
 )
+
+// maxFinishedRuns bounds how many finished runs the engine retains in memory (newest
+// kept). A long-lived serve turns every session turn into a run; without eviction the
+// runs map — and each run's replayable event history — grows for the life of the
+// process. An evicted run disappears from GET /runs and its event stream can no longer
+// be replayed; the per-run transcript on disk keeps the durable record. Running runs
+// are never evicted.
+const maxFinishedRuns = 100
 
 // Runner executes a task to completion, emitting run events to obs. It abstracts
 // the agent wiring (provider, registry, broker, executor) so the API core stays
@@ -103,6 +112,9 @@ type Engine struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+	// maxFinished is the finished-run retention cap (maxFinishedRuns; a field so
+	// tests can tighten it).
+	maxFinished int
 
 	// Session support (optional; nil unless EnableSessions is called). turns runs a
 	// turn seeded with prior history; sessions persists the conversation; sessLocks
@@ -115,11 +127,30 @@ type Engine struct {
 	// auditRec, when set, receives a run_usage event per completed run/turn so token
 	// spend is reviewable through the same log as every other effect. Optional.
 	auditRec audit.Recorder
+
+	// onSessionClose, when set, fires (best-effort) after a session is archived, so the cmd
+	// layer can reap the session's scratch cache — the engine core knows nothing of disk
+	// paths, so this is its seam to them. Optional.
+	onSessionClose func(sessionID string)
+
+	// runStore, when set, persists a run's final RunInfo when it reaches a terminal state
+	// (Save) and reloads it for a run the engine has since evicted (Load). It lets run
+	// metadata survive eviction and restart without the core knowing where on disk it goes.
+	// Optional.
+	runStore RunStore
+}
+
+// RunStore persists finished-run metadata so it survives eviction (maxFinishedRuns) and a
+// process restart. The cmd layer supplies one that writes info.json next to the run's
+// transcript; the engine calls Save on completion and Load as a RunStatus fallback.
+type RunStore interface {
+	Save(RunInfo)
+	Load(id string) (RunInfo, bool)
 }
 
 // NewEngine builds an engine over the given Runner.
 func NewEngine(r Runner) *Engine {
-	return &Engine{runner: r, runs: make(map[string]*run), sessLocks: make(map[string]*sync.Mutex)}
+	return &Engine{runner: r, runs: make(map[string]*run), sessLocks: make(map[string]*sync.Mutex), maxFinished: maxFinishedRuns}
 }
 
 // EnableSessions wires the persistent conversation layer: store holds histories and
@@ -136,6 +167,14 @@ func (e *Engine) SessionsEnabled() bool { return e.sessions != nil && e.turns !=
 // SetAuditRecorder wires a recorder that receives a run_usage event when each run (or
 // session turn) completes. Optional — nil leaves usage in RunInfo only.
 func (e *Engine) SetAuditRecorder(rec audit.Recorder) { e.auditRec = rec }
+
+// SetSessionCloseHook installs a best-effort callback fired after a session is archived
+// (CloseSession), so the cmd layer can reap that session's scratch cache. Optional.
+func (e *Engine) SetSessionCloseHook(fn func(sessionID string)) { e.onSessionClose = fn }
+
+// SetRunStore installs a store that persists a run's final RunInfo on completion and serves
+// it back as a RunStatus fallback once the run is evicted. Optional. See RunStore.
+func (e *Engine) SetRunStore(rs RunStore) { e.runStore = rs }
 
 // StartRun begins a run in the background and returns its id. Events flow to the
 // run's Hub, which callers reach via Subscribe; the hub closes when the run ends.
@@ -199,12 +238,19 @@ func (e *Engine) launch(task, sessionID string, work func(ctx context.Context, r
 
 		usage.Record(e.auditRec, id, sessionID, total, steps)
 
+		// Persist the final metadata before pruning — this very run may be the one evicted,
+		// and the store is what lets its status survive eviction (and a restart).
+		if e.runStore != nil {
+			e.runStore.Save(r.snapshot())
+		}
+
 		if err != nil {
 			hub.publish(Event{Kind: KindError, Text: err.Error()})
 		} else {
 			hub.publish(Event{Kind: KindDone, Text: result})
 		}
 		hub.Close()
+		e.pruneFinished()
 	}()
 
 	return id
@@ -235,7 +281,22 @@ func (e *Engine) CloseSession(id string) error {
 	if !e.SessionsEnabled() {
 		return ErrSessionsDisabled
 	}
-	return e.sessions.Delete(id)
+	if err := e.sessions.Delete(id); err != nil {
+		return err
+	}
+	// Free the session's turn lock — ids are never reused, so without this the map
+	// grows one mutex per session for the life of the process. An in-flight turn
+	// holds its own pointer to the mutex and is unaffected; its re-Get of the
+	// deleted session fails cleanly.
+	e.sessLocksMu.Lock()
+	delete(e.sessLocks, id)
+	e.sessLocksMu.Unlock()
+	// Reap the session's scratch cache (large, re-derivable artifacts we don't archive with
+	// the conversation). Best-effort — the hook resolves the path and removes it.
+	if e.onSessionClose != nil {
+		e.onSessionClose(id)
+	}
+	return nil
 }
 
 // PostTurn runs one turn against a session: it starts a run (streamable via the usual
@@ -270,6 +331,31 @@ func (e *Engine) PostTurn(sessionID, text string) (string, error) {
 		return answer, nil
 	})
 	return id, nil
+}
+
+// pruneFinished evicts the oldest finished runs beyond the retention cap, called after
+// each run completes. Only finished runs (EndedAt set) are candidates, so a run cannot
+// be evicted mid-flight.
+func (e *Engine) pruneFinished() {
+	type ended struct {
+		id string
+		at time.Time
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var finished []ended
+	for id, r := range e.runs {
+		if info := r.snapshot(); info.EndedAt != nil {
+			finished = append(finished, ended{id, *info.EndedAt})
+		}
+	}
+	if len(finished) <= e.maxFinished {
+		return
+	}
+	sort.Slice(finished, func(i, j int) bool { return finished[i].at.Before(finished[j].at) })
+	for _, f := range finished[:len(finished)-e.maxFinished] {
+		delete(e.runs, f.id)
+	}
 }
 
 // sessionLock returns the per-session turn lock, creating it on first use.
@@ -347,10 +433,19 @@ func (e *Engine) ListRuns() []RunInfo {
 	return out
 }
 
-// RunStatus returns the metadata for a run. ErrUnknownRun otherwise.
+// RunStatus returns the metadata for a run. For a run the engine has evicted (or that
+// predates this process), it falls back to the persisted RunInfo if a RunStore is wired, so
+// a status query survives eviction and restart. Live SSE replay is not reconstructable this
+// way (the event history is gone), so Subscribe still 404s for an evicted run. ErrUnknownRun
+// if neither the live map nor the store has it.
 func (e *Engine) RunStatus(id string) (RunInfo, error) {
 	r, err := e.lookup(id)
 	if err != nil {
+		if e.runStore != nil {
+			if info, ok := e.runStore.Load(id); ok {
+				return info, nil
+			}
+		}
 		return RunInfo{}, err
 	}
 	return r.snapshot(), nil

@@ -20,8 +20,8 @@ dedup. Remaining: SQLite store and async approval are post-Phase-3 (see deferral
 There are two kinds of tool, deliberately kept as **separate types**:
 
 1. **Built-ins** — `tools.Tool` (`internal/tools/tools.go`): `shell`, `web_search`, `web_fetch`,
-   `run_code`, `ask_user`, and the future `author_tool`. Hand-written Go, trusted, ambient
-   authority. Unchanged since Phase 0–2.
+   `run_code`, `ask_user`, `author_tool`, and the introspection/memory/status tools. Hand-written
+   Go, trusted, ambient authority.
 2. **Registered tools** — `tools.ToolSpec` (`internal/tools/spec.go`): agent-authored (or
    natively-registered) tools held in a `Registry`. Authored ones run sandboxed + brokered.
 

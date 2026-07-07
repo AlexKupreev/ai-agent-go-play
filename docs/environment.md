@@ -74,11 +74,14 @@ the built-in base plus operator/project files, read from **both anchors**:
 | --- | --- | --- |
 | `SYSTEM.md` | **Replaces** the built-in base prompt (executor) | workspace wins outright over config-dir (replace ⇒ last writer) |
 | `AGENTS.md` (alias `CLAUDE.md`) | **Appended** as operator instructions (executor) | config-dir first, then workspace, concatenated (workspace has the last word) |
-| `PLANNER.md` | **Replaces** the built-in planner prompt (the pre-execution clarify/refine pass) | workspace wins outright over config-dir |
+| `PLANNER.md` | **Replaces** the built-in planner prompt (the clarify/refine pass) | workspace wins outright over config-dir |
+| `CRITIC.md` | **Replaces** the built-in critic prompt (the deliberate critique loop's verdict pass) | workspace wins outright over config-dir |
 
-`PLANNER.md` tunes only the planner (`agent run`, `agent chat --plan`); the planner's structured
-Plan output is enforced by a JSON schema regardless, so an override can't break the plan contract.
-It is re-read on each planned turn / run (and on `/reload`), so edits take effect without a rebuild.
+`PLANNER.md` tunes the planner (`agent run`, and every deliberate `agent chat` / session turn);
+`CRITIC.md` tunes the critic (the critique loop in a deliberate `agent chat` / session turn). The
+planner's structured Plan and the critic's Verdict are each enforced by a JSON schema regardless,
+so an override can restyle the pass but can't break its contract. Both are re-read on each
+deliberate turn / run (and on `/reload`), so edits take effect without a rebuild.
 
 Precedence is **workspace over config-dir**, matching pi. When both `AGENTS.md` and `CLAUDE.md`
 exist in one directory, `AGENTS.md` wins (the alias is not also appended). The workspace tier is
@@ -90,8 +93,9 @@ Two escape hatches:
 - `--context-file <path>` (repeatable) — extra prompt file(s) appended last, **always honored
   regardless of tier** (you named them). A missing named file is an error (unlike absent tier
   files, which are a no-op).
-- `--no-context-files` — ignore all `SYSTEM.md` / `AGENTS.md` / `PLANNER.md` / `--context-file`
-  loading and run on the bare built-in base prompts (reproducible runs, debugging).
+- `--no-context-files` — ignore all `SYSTEM.md` / `AGENTS.md` / `PLANNER.md` / `CRITIC.md` /
+  `--context-file` loading **and** the workspace/config-dir `agents/*.md` sub-agent types, and
+  run on the bare built-in base prompts + built-in agent types (reproducible runs, debugging).
 
 ---
 
@@ -138,12 +142,13 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `--config-dir` (global flag) | `AI_AGENT_CONFIG_DIR` | Agent identity dir: config/tools/memory/audit + global prompt files & agent types. Default `~/.config/ai-agent`. |
 | `--workspace` (global flag) | — | Directory the agent acts on: shell cwd + workspace prompt files & agent types. Default: process cwd. |
 | `--context-file` (global flag, repeatable) | — | Extra prompt file(s) appended last, always loaded regardless of tier. |
-| `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`PLANNER.md`/`--context-file`; run on the bare base prompts. |
+| `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`PLANNER.md`/`CRITIC.md`/`--context-file` **and** `agents/*.md`; run on the bare base prompts + built-in agent types. |
 | `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share nothing. |
 | `openai_key` | — | OpenAI API key. |
-| `model` | `--model` flag | Default model (built-in default `gpt-4o-mini`). |
-| `tier` | `--tier` flag | Default trust tier (built-in default `balanced`). |
-| `verbose` | `--verbose`/`--quiet` flag, `AI_AGENT_VERBOSE` env | Default trace verbosity (built-in default off). Gates only the live CLI tool-call trace; the on-disk transcript is always written. `chat` is quiet by default and has a live `/verbose [on\|off]` toggle. |
+| `openai_base_url` | `AI_AGENT_OPENAI_BASE_URL` | Base URL for the OpenAI-compatible API. Empty ⇒ the real OpenAI API; set it to point at a local llama.cpp/Ollama/vLLM server, OpenRouter, or a proxy (`config set-base-url`). |
+| `model` | `AI_AGENT_MODEL` (`--model` flag wins) | Default model (built-in default `gpt-4o-mini`). |
+| `tier` | `AI_AGENT_TIER` (`--tier` flag wins) | Default trust tier (built-in default `balanced`). |
+| `verbose` | `AI_AGENT_VERBOSE` (`--verbose`/`--quiet` flag wins) | Default trace verbosity (built-in default off). Gates only the live CLI tool-call trace; the on-disk transcript is always written. `chat` is quiet by default and has a live `/verbose [on\|off]` toggle. |
 | `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
 | `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
 | `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
@@ -164,15 +169,17 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | `<config-dir>/memory.json` | Long-term memory store. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
 | `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
-| `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
-| `<config-dir>/SYSTEM.md`, `AGENTS.md`, `PLANNER.md` | Global prompt customization (optional; `PLANNER.md` overrides the planner). |
+| `<config-dir>/sessions/archive/<id>.json` | Closed conversations, **archived not deleted** (`/end` / `DELETE /sessions/{id}`). Excluded from the resumable listing; move one back up a level to resume it. |
+| `<config-dir>/session-scratch/<id>/` | Deliberate `serve` turns: a session's disk-backed artifact cache + `manifest.json`, persistent across turns/restarts (keyed by session id). Reaped when the session is closed; cache-with-fallback keeps a stale/absent file correct otherwise. |
+| `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**) + `info.json` (final run metadata), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
+| `<config-dir>/SYSTEM.md`, `AGENTS.md`, `PLANNER.md`, `CRITIC.md` | Global prompt customization (optional; `PLANNER.md`/`CRITIC.md` override the planner/critic). |
 | `<config-dir>/agents/<name>.md` | Global sub-agent type definitions (optional). |
 
 Under the **workspace** (the directory the agent acts on; default the cwd), optional and tier-gated:
 
 | Path | What |
 | --- | --- |
-| `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`), `PLANNER.md` | Workspace prompt customization (`PLANNER.md` overrides the planner). |
+| `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`), `PLANNER.md`, `CRITIC.md` | Workspace prompt customization (`PLANNER.md`/`CRITIC.md` override the planner/critic). |
 | `<workspace>/agents/<name>.md` | Workspace sub-agent type definitions. |
 
 Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /
@@ -180,6 +187,8 @@ Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-d
 
 | Path | What |
 | --- | --- |
-| `<runs-dir>/<run-id>/` | Per-run transcript: `run.jsonl`, `audit.jsonl`, `artifacts/`. |
+| `<runs-dir>/<run-id>/` | Per-run transcript: `run.jsonl`, `audit.jsonl`, `artifacts/`, `info.json`. |
 
-All are created on first use; deleting them resets the corresponding state.
+All are created on first use; deleting them resets the corresponding state. One exception: closing
+a **session** archives it under `sessions/archive/` rather than removing it (so a mistaken `/end`
+is recoverable) — delete an archived file by hand to reclaim its space.

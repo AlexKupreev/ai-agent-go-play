@@ -14,7 +14,6 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
-	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -61,7 +60,7 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		prov := openaiprovider.New(cfg.OpenAIKey)
+		prov := newProvider(cfg)
 		model := resolveModel(modelFlag, cfg)
 		tier, err := resolveTier(tierFlag, cfg)
 		if err != nil {
@@ -134,6 +133,7 @@ var runCmd = &cobra.Command{
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
+			StatusDirs: agentStateDirs(),
 		})
 
 		// run has no artifact manifest (no scratch cache today, chat-planner.md Q9c) ⇒ "".
@@ -184,7 +184,7 @@ var runCmd = &cobra.Command{
 }
 
 func init() {
-	runCmd.Flags().StringVar(&modelFlag, "model", "", "model to use (overrides config; default: gpt-4o-mini)")
+	runCmd.Flags().StringVar(&modelFlag, "model", "", modelFlagUsage)
 	runCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	runCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "print the tool-call trace to stderr (overrides config/env)")
 	runCmd.Flags().BoolVar(&quietFlag, "quiet", false, "suppress the tool-call trace (overrides config/env; the disk transcript is unaffected)")

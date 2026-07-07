@@ -1,5 +1,5 @@
 // Package artifact provides the chat planner's artifact manifest: a small, on-disk index
-// of the working data materialized during a session (docs/planning/chat-planner.md §D4).
+// of the working data materialized during a session (docs/adr/chat-planner.md §D4).
 // The filesystem — not either agent's context — is the working memory (§D3): the executor
 // writes sizeable intermediate data to a scratch dir and records it here via the
 // record_artifact tool; the planner reads the rendered manifest each turn to know what

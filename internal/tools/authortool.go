@@ -23,7 +23,7 @@ type AuthorToolDeps struct {
 	Audit    audit.Recorder
 	Tier     capability.Tier
 	RunID    string
-	Gate  HumanGate // approval gate for caps beyond the tier; nil = cannot escalate
+	Gate     HumanGate // approval gate for caps beyond the tier; nil = cannot escalate
 }
 
 // NewAuthorTool returns the author_tool meta-tool: the agent's path to promote an

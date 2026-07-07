@@ -11,6 +11,7 @@ is the *how*.
 - [Command reference](#command-reference)
 - [Trust tiers — the safety dial](#trust-tiers--the-safety-dial)
 - [Approvals & questions — the human-in-the-loop gate](#approvals--questions--the-human-in-the-loop-gate)
+- [Deliberate turns & the artifact cache](#deliberate-turns--the-artifact-cache)
 - [Customizing the agent — prompts & agent types](#customizing-the-agent--prompts--agent-types)
 - [Comparing configurations — `agent eval`](#comparing-configurations--agent-eval)
 - [Self-authored tools](#self-authored-tools)
@@ -42,6 +43,15 @@ Optional defaults (both overridable per-run with `--model` / `--tier`):
 ./agent config set-model gpt-4o        # default model (built-in default: gpt-4o-mini)
 ./agent config set-tier balanced       # default trust tier (built-in default: balanced)
 ./agent config set-verbose on          # default trace verbosity (built-in default: off)
+```
+
+To use a local or third-party OpenAI-compatible endpoint (llama.cpp, Ollama, vLLM, OpenRouter,
+a proxy) instead of the OpenAI API, point the client at its base URL — the rest of the agent is
+unchanged (`AI_AGENT_OPENAI_BASE_URL` overrides it per run):
+
+```bash
+./agent config set-base-url http://127.0.0.1:11434/v1   # e.g. a local Ollama server
+./agent config set-base-url ""                          # clear it — back to the OpenAI API
 ```
 
 The CLI tool-call trace is off by default; turn it on per run with `--verbose` (or off with
@@ -88,8 +98,11 @@ can be answered remotely, so runs work unattended.
 ./agent client "check disk usage and report the biggest dirs"
 ```
 
-`serve` runs the executor directly (no interactive planner — there is no stdin to ask
-on). Best for unattended / mobile / multi-frontend use.
+A one-shot `agent client` run (`POST /runs`) runs the executor directly. **Session turns**
+(`agent chat --addr` / Telegram) are **deliberate by default** — a context-aware planner →
+executor → critic loop — with clarifying questions routed through the approval queue instead
+of stdin; `serve --no-plan` / `--no-critique` turn those off (see [`agent serve`](#agent-serve)).
+Best for unattended / mobile / multi-frontend use.
 
 ---
 
@@ -100,8 +113,8 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | Command | What it does |
 | --- | --- |
 | `agent run <task>` | One-shot run in this process (planner + executor), stdin approvals. |
-| `agent chat` | Interactive multi-turn REPL, retained context. Local by default; `--addr` drives a `serve` engine's persistent session. `/reload` re-reads prompt/agent-type files. |
-| `agent serve` | Start the headless HTTP+SSE engine. |
+| `agent chat` | Interactive multi-turn REPL, retained context. Deliberate (planner→executor→critic) by default; `--no-plan`/`--no-critique` to simplify. Local by default; `--addr` drives a `serve` engine's persistent session. `/reload` re-reads prompt/agent-type files. |
+| `agent serve` | Start the headless HTTP+SSE engine. Deliberate session turns by default (`--no-plan`/`--no-critique`/`--max-revisions`). |
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
 | `agent eval <task>` | Run one task under N config variants and compare outputs + token usage. |
 | `agent reload` | Tell a running engine to re-read its prompt + agent-type files (no restart). |
@@ -110,7 +123,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
-| `agent config set-key\|set-model\|set-tier\|set-verbose` | Save API key / default model / default tier / default trace verbosity. |
+| `agent config set-key\|set-base-url\|set-model\|set-tier\|set-verbose` | Save API key / OpenAI-compatible base URL / default model / default tier / default trace verbosity. |
 | `agent config set-engine\|rm-engine\|engines` | Name an engine address as an alias for `--addr` (and list/remove them). |
 
 Every command that talks to a running engine takes `--addr`, which accepts a literal
@@ -139,19 +152,25 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
 `audit.jsonl` that only `agent serve` writes and `agent audit` reads — see [Audit log](#audit-log).
 
 ```bash
-./agent chat                 # executor-only conversation
-./agent chat --plan          # refine each message through the planner first (experimental)
+./agent chat                 # deliberate: planner → executor → critic (the default)
+./agent chat --no-plan       # bare executor with retained context (a straight conversation)
+./agent chat --no-critique   # planner → executor, but skip the critic re-plan loop
 ./agent chat --tier safe     # per-session model/tier, same flags as `run`
 ```
 
-- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/reload` re-reads the
-  prompt files and agent-type catalog and rebuilds the executor *without losing the
-  conversation* (edit a `SYSTEM.md`/`AGENTS.md`/`agents/*.md`, `/reload`, keep going — a
-  malformed file is reported and the current setup is kept); `/exit` (or Ctrl-D) quits.
-  **Ctrl-C** cancels the *current* turn and returns you to the prompt.
-- **Planner toggle (`--plan`):** off by default (a straight conversation). When on, each
-  message is refined by the planner before execution, exactly like `agent run` — useful
-  for one-shot-style tasks, heavier for back-and-forth chat. It's experimental; try both.
+- **Deliberate by default.** Each message runs the full pipeline: a **planner** refines it
+  into a brief (using the conversation so far), the **executor** runs the brief, and a
+  **critic** judges the answer against the plan's success criteria and re-plans a shortfall
+  (up to `--max-revisions`, default 1). `--no-plan` drops to a bare executor with retained
+  history; `--no-critique` keeps the planner but skips the critic loop. The brief and any
+  critique notes are printed to stderr, distinct from the final answer on stdout.
+- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/attach
+  <path>` registers a local file as an artifact the agent can read by path (deliberate mode
+  only); `/verbose [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
+  and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
+  `/reload` is a no-op there; in `--no-plan` it rebuilds the executor *without losing the
+  conversation* — a malformed file is reported and the current setup kept); `/exit` (or
+  Ctrl-D) quits. **Ctrl-C** cancels the *current* turn and returns you to the prompt.
 - The agent's tool activity is streamed to stderr; each turn's final answer goes to stdout.
 
 **Remote mode (`--addr`)** drives a running `agent serve` engine as a peer client instead of
@@ -174,18 +193,31 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
   remote run) and returns you to the prompt.
 - Approvals are the engine's **shared** queue: an escalation you don't answer here is the
   same one visible to `agent audit`, other clients, and Telegram — not a local stdin gate.
-- `--model` / `--tier` / `--plan` are **local-mode only**; in remote mode those are fixed by
-  how `serve` was started.
+  A deliberate session turn's planner clarification (`ask_user`) arrives through this same
+  queue, so the engine can deliberate remotely, not just on the CLI.
+- `--model` / `--tier` and the `--no-plan` / `--no-critique` dials are **local-mode only**;
+  in remote mode the model, tier, and whether turns are deliberate are fixed by how `serve`
+  was started.
 
 ### `agent serve`
 
 ```bash
 ./agent serve --addr 127.0.0.1:8080 --model gpt-4o --tier balanced
+./agent serve --no-plan            # session turns run the bare executor (no planner/critic)
+./agent serve --no-critique        # planner on, critic re-plan loop off
 ```
 
-Flags: `--addr` (listen address; keep it on `127.0.0.1`), `--model`, `--tier`. Prints a
+Flags: `--addr` (listen address; keep it on `127.0.0.1`), `--model`, `--tier`, and the
+deliberate-turn dials `--no-plan` / `--no-critique` / `--max-revisions` (default 1). Prints a
 couple of `curl` snippets on startup. Shares one tool catalog, one memory store, and one
 process-wide audit log across all runs it serves.
+
+**Session turns are deliberate by default** (planner → executor → critic; `--no-plan` implies
+no critique). This affects **session turns** (`/sessions/{id}/turns`, i.e. `chat --addr` and
+Telegram), *not* one-shot `POST /runs`, which always runs the executor directly. The planner's
+clarifying questions route through the shared approval queue, so deliberation works over any
+frontend. Each session gets a disk-backed scratch dir + artifact manifest that persists across
+turns and restarts (see [Deliberate turns & the artifact cache](#deliberate-turns--the-artifact-cache)).
 
 ### `agent client <task>` / `agent stop <run-id>`
 
@@ -251,6 +283,51 @@ its cancellation to the model).
 
 ---
 
+## Deliberate turns & the artifact cache
+
+A **deliberate** turn (the default in `agent chat` and `serve` session turns) is a small
+pipeline rather than a single executor call:
+
+1. **Planner** — reads the conversation so far and the artifact manifest (below), and refines
+   your message into a **brief** (a refined task + context + data references + success
+   criteria). It may ask a clarifying question, which routes to stdin (local) or the approval
+   queue (remote/Telegram). Tune it with `PLANNER.md`.
+2. **Executor** — runs the brief in a fresh executor (no accumulated tool-call cruft in the
+   conversation), streaming its activity and producing the answer.
+3. **Critic** (unless `--no-critique`) — judges the answer against the brief's success
+   criteria. If it falls short, the planner re-plans with the critic's gaps as added context
+   and the executor runs the revised brief — up to `--max-revisions` cycles (default 1), after
+   which the best answer is delivered with a note. Tune it with `CRITIC.md`.
+
+The rendered brief and critique notes are surfaced distinctly — to stderr on the CLI, and as
+`brief` events on the SSE stream (`agent serve`) so a frontend can show the deliberation.
+`--no-plan` skips the whole pipeline and runs a bare executor with retained history (`--no-plan`
+implies no critique).
+
+### The artifact cache
+
+So a turn doesn't have to stuff a downloaded dataset or a computed result into the conversation
+(and re-fetch it next turn), a deliberate turn gets a **disk-backed scratch directory** and an
+**artifact manifest**:
+
+- **`record_artifact`** — a built-in the executor calls after writing a sizeable intermediate
+  (a fetched dataset, a cleaned CSV, a computed file) to the scratch dir: it registers the
+  file's path, source, and a one-line shape note in the manifest so it's tracked and reusable.
+- **`/attach <path>`** (CLI chat) — registers a file *you* provide into the manifest
+  (`origin: user`), so the agent reads it by path like any other artifact. Explicit attach
+  only — the agent never sniffs your prose for filenames.
+- The planner sees the manifest each turn and references existing artifacts by path (with the
+  source as a re-fetch fallback) instead of re-deriving them.
+
+**Where it lives.** In `agent serve`, the scratch dir + manifest are **per session** and
+persist across turns and restarts, keyed by session id, at
+`<config-dir>/session-scratch/<session-id>/` (see [Files on disk](environment.md#files-on-disk)).
+In local `agent chat`, they live under the run's transcript dir and last for the process. There
+is no automatic reaper yet — a cache-with-fallback keeps a stale or absent file correct (the
+manifest records the source to re-fetch from), so pruning `session-scratch/` by hand is safe.
+
+---
+
 ## Customizing the agent — prompts & agent types
 
 You can shape the agent's behaviour with files, read from **two directories**: the
@@ -260,10 +337,15 @@ tier gate live in [`environment.md`](environment.md); the operational summary:
 
 - **System prompt / operator instructions.** `SYSTEM.md` **replaces** the built-in base prompt;
   `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. `PLANNER.md` **replaces** the
-  built-in planner prompt (the pre-execution clarify/refine pass; `agent run` and `chat --plan`).
-  Drop any in the config-dir (global) and/or the workspace; workspace wins over global.
-  `--context-file <path>` (repeatable) appends an extra file regardless of tier; `--no-context-files`
-  ignores them all for a reproducible run on the bare base prompts.
+  built-in planner prompt (the clarify/refine pass — `agent run`, and every deliberate `agent
+  chat` / session turn). `CRITIC.md` **replaces** the built-in critic prompt (the critique loop's
+  verdict pass in a deliberate `agent chat` / session turn). Drop any in the config-dir (global)
+  and/or the workspace; workspace wins over global. `--context-file <path>` (repeatable) appends
+  an extra file regardless of tier; `--no-context-files` ignores **all** of the above (both tiers,
+  `SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`, agent types, and `--context-file`) for a reproducible run
+  on the bare base prompts. The `PLANNER.md`/`CRITIC.md` overrides only re-style the pass; the
+  planner's Plan and the critic's Verdict are enforced by JSON schema, so an override can't break
+  the contract.
 - **Sub-agent types.** Declare delegatable agents as `agents/<name>.md` (YAML frontmatter +
   a body that is the sub-agent's system prompt) under the config-dir and/or workspace. The agent
   reaches them through a `spawn_agent(type, task)` tool; built-in types `researcher` and
@@ -388,6 +470,12 @@ configured?" or "how much headroom does this machine have?" accurately. It retur
 - **Counts:** how many authored tools and memory entries it has.
 - **Host resources:** CPU count and load average, RAM free/total, disk free/total, the
   process's RSS, Go heap/goroutines, and host uptime.
+- **State on disk:** how much space its own state occupies — the run transcripts (`runs/`),
+  sessions (live + archived), the session scratch cache, the tool catalog, memory, and the
+  audit log — each as an entry count + total bytes. So it can answer "what's using my disk?"
+  and notice, e.g., an accumulating `runs/` tree (which has no auto-reaper by design). The
+  walk is best-effort and budget-bounded, so a huge tree can't stall the tool (a capped total
+  is shown with a leading `≥`).
 
 Host figures are read live (Linux `/proc` + Go runtime; fields it can't read are omitted).
 This isn't a new capability — the agent can already `shell` out to `df`/`free`/`uptime` — but
@@ -508,6 +596,20 @@ survive a `serve` restart and are shared by every client of that engine (this is
 mechanism behind the Telegram bot's per-chat conversations, and how the same conversation
 could later be resumed from a different device). The stored history is the conversation
 only — the system prompt is re-seeded from current code each turn.
+
+**Closing a session archives it, it doesn't destroy it.** `/end` (and `DELETE /sessions/{id}`)
+moves the conversation to `<config-dir>/sessions/archive/<id>.json` rather than deleting it, so
+a mistaken close is recoverable: move the file back up to `<config-dir>/sessions/` and resume
+it with `agent chat --addr <engine> --session <id>`. Archived sessions drop out of the resumable
+listing (`--list`, `GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) *is*
+removed on close — it holds large, re-derivable artifacts, and the manifest records each one's
+source so a later turn re-fetches it if needed. (There is no built-in "purge for real" surface
+yet; delete an archived file by hand to reclaim its space.)
+
+Each completed run/turn also writes a compact `info.json` (task, state, result, token usage,
+timings) into its transcript dir, so a run's status survives both the engine's in-memory
+retention cap and a restart: `GET /runs/{id}` falls back to it once the live run is evicted
+(its live SSE event replay is not reconstructable, so streaming an evicted run still 404s).
 
 ## Telegram frontend (optional)
 
