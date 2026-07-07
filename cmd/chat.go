@@ -13,6 +13,7 @@ import (
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/tools"
@@ -43,8 +44,9 @@ var chatCmd = &cobra.Command{
 		"--session <id> to resume one.\n\n" +
 		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
 		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
-		"Commands (local): /new (alias /reset) clears the conversation, /verbose [on|off] toggles " +
-		"the trace, /exit (or Ctrl-D) quits.\n" +
+		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
+		"[safe|balanced|permissive] show or switch the model/tier for the session, /verbose " +
+		"[on|off] toggles the trace, /exit (or Ctrl-D) quits.\n" +
 		"Commands (--addr): /new (alias /reset) starts a fresh session, /end closes the session, " +
 		"/exit (or Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
@@ -194,12 +196,32 @@ var chatCmd = &cobra.Command{
 			return err
 		}
 
+		// applyConfigChange makes a live /model or /tier change take effect. In bare chat the
+		// persistent executor is rebuilt (carrying the conversation forward, like /reload); in
+		// --plan mode the per-turn rebuild reads the updated model/tier on the next turn, so
+		// there is nothing to rebuild now. buildExecutor/buildPlanner/buildCritic close over the
+		// model/tier variables, so reassigning them is what the rebuild picks up.
+		applyConfigChange := func(what string) {
+			if plan {
+				fmt.Fprintf(os.Stderr, "(%s; effective next turn)\n", what)
+				return
+			}
+			next, err := buildExecutor()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "(%s, but rebuild failed — keeping current setup: %v)\n", what, err)
+				return
+			}
+			next.Restore(executor.Messages())
+			executor = next
+			fmt.Fprintf(os.Stderr, "(%s)\n", what)
+		}
+
 		critiqueStatus := "off"
 		if critique {
 			critiqueStatus = fmt.Sprintf("on (max %d revisions)", chatMaxRevisionsFlag)
 		}
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, critique %s, verbose %s\n", executor.Model(), tier, onOff(plan), critiqueStatus, onOff(trace.Enabled()))
-		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
+		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /model or /tier to switch, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -234,6 +256,35 @@ var chatCmd = &cobra.Command{
 					continue
 				}
 				fmt.Fprintf(os.Stderr, "(verbose %s)\n", onOff(trace.Enabled()))
+				continue
+			}
+			// /model [id] shows or sets the model for the session (local mode). No arg prints
+			// the current one; an id switches to it, taking effect immediately in bare chat and
+			// on the next turn in --plan mode.
+			if arg, ok := strings.CutPrefix(line, "/model"); ok {
+				arg = strings.TrimSpace(arg)
+				if arg == "" {
+					fmt.Fprintf(os.Stderr, "(model: %s; usage: /model <id>)\n", modelLabel(model))
+					continue
+				}
+				model = arg
+				applyConfigChange("model set to " + arg)
+				continue
+			}
+			// /tier [safe|balanced|permissive] shows or sets the trust tier for the session.
+			if arg, ok := strings.CutPrefix(line, "/tier"); ok {
+				arg = strings.TrimSpace(arg)
+				if arg == "" {
+					fmt.Fprintf(os.Stderr, "(tier: %s; usage: /tier safe|balanced|permissive)\n", tier)
+					continue
+				}
+				t, err := capability.ParseTier(arg)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%v\n", err)
+					continue
+				}
+				tier = t
+				applyConfigChange("tier set to " + string(t))
 				continue
 			}
 			// /attach <path> registers a user-provided file in the artifact manifest with
@@ -402,6 +453,14 @@ func onOff(b bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+// modelLabel renders a model id for display, naming the built-in default when unset.
+func modelLabel(model string) string {
+	if model == "" {
+		return agent.DefaultModel + " (built-in default)"
+	}
+	return model
 }
 
 func init() {

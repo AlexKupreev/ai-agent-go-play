@@ -165,9 +165,12 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   (up to `--max-revisions`, default 1). `--no-plan` drops to a bare executor with retained
   history; `--no-critique` keeps the planner but skips the critic loop. The brief and any
   critique notes are printed to stderr, distinct from the final answer on stdout.
-- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/attach
-  <path>` registers a local file as an artifact the agent can read by path (deliberate mode
-  only); `/verbose [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
+- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/model
+  [id]` and `/tier [safe|balanced|permissive]` show or switch the model / trust tier for the
+  session (no arg prints the current value) — in `--no-plan` the executor is rebuilt in place
+  carrying the conversation, in deliberate mode the change takes effect on the next turn;
+  `/attach <path>` registers a local file as an artifact the agent can read by path (deliberate
+  mode only); `/verbose [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
   and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
   `/reload` is a no-op there; in `--no-plan` it rebuilds the executor *without losing the
   conversation* — a malformed file is reported and the current setup kept); `/exit` (or
