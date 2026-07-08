@@ -13,6 +13,33 @@ behavior — nothing here is built yet.**
 
 ---
 
+## Governing decision (2026-07-08) — workspace-local, for simplicity
+
+**This supersedes the config-dir / global-scope / committable-file discussion below** (§2's
+"Config-dir, not workspace", §3's config-dir paths, §4's global layer). Those were explored and
+rejected *for now* as too complex. The v1 decision:
+
+- **Memory and spaces both live in the workspace**, under `<workspace>/.agent/` — `memory.json` and
+  `spaces/<id>/`. There is **no config-dir memory, no global/identity layer, and no separate
+  "committable" mechanism.**
+- **Per-workspace by construction.** A workspace has its own memory + its own spaces; switching
+  workspace switches the whole data set. This is what "per-workspace-tuned agents shouldn't share all
+  memory" asked for, achieved by *where the files live* rather than by a scope system.
+- **Committing is free.** The data is files in the workspace, so `git add` shares/versions them and
+  `.gitignore` keeps them private — no feature required.
+- **Deferred (complicate later, on real need):** a config-dir global/identity layer for cross-workspace
+  facts; a distinct private-vs-committable split; SQLite. The `memory.Store` interface remains the
+  seam for all of them.
+
+Two operational notes: (1) for `serve`/Telegram, point `--workspace` at a **persistent** dir so
+memory survives restarts (it no longer rides the config-dir volume); (2) memory is now keyed by
+workspace, so two `--config-dir` agents in the *same* workspace share it.
+
+The sections below record the fuller design space that was considered; read them as background, with
+the box above as the actual v1 choice.
+
+---
+
 ## 0. The model in one paragraph
 
 A **space** is a named data scope: a short **notes** blob (always-loaded when the space is
@@ -217,9 +244,9 @@ Each stage leaves the agent working; P1 ships the switch, P2 the value.
 - **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3); chosen over
   `modernc.org/sqlite` and `bbolt` this round to avoid a new dependency and keep the `CGO_ENABLED=0`
   static binary lean (§3 alternatives).
-- **Config-dir, agent-global** — spaces live under the config dir and are shared across all
-  workspaces; space and workspace are orthogonal axes (§2). Per-`--config-dir` share-nothing gives
-  separate spaces per agent for free.
+- **Workspace-local (v1)** — memory and spaces both live under `<workspace>/.agent/`, per-workspace by
+  construction; committing/gitignoring is free. Config-dir global layer deferred. (See the governing
+  decision at the top; it supersedes the earlier "config-dir, agent-global" exploration in §2.)
 - **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
 
 ## 9. Open questions
