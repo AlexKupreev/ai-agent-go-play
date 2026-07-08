@@ -46,6 +46,12 @@ type Config struct {
 	// Limits tunes the built-in bounds without a rebuild (0/unset ⇒ the built-in default).
 	// omitzero (not omitempty) so an all-default Limits is dropped from config.json entirely.
 	Limits ConfigLimits `json:"limits,omitzero"`
+
+	// ContextLimits overrides the context-window size (tokens) per model id for the
+	// context-usage gauge, for private/renamed/newer endpoints the built-in table
+	// (agent.ContextWindow) does not know. Keyed by model id; a value here wins over the
+	// built-in table. Absent ⇒ the built-in table (or "unknown" for an unlisted model).
+	ContextLimits map[string]int `json:"context_limits,omitempty"`
 }
 
 // ConfigLimits are the on-disk, tunable bounds (config.json "limits"). A zero/absent field
@@ -490,6 +496,23 @@ func resolveModel(flag string, cfg Config) string {
 		return v
 	}
 	return cfg.Model
+}
+
+// resolveContextLimit returns the context-window size (tokens) for model: a config
+// `context_limits` override wins, else the built-in table (agent.ContextWindow), else 0
+// (unknown — the gauge then shows tokens without a percentage). Passed into
+// ExecutorConfig.ContextLimit and used for the chat context line.
+func resolveContextLimit(model string, cfg Config) int {
+	return contextLimitFor(model, cfg.ContextLimits)
+}
+
+// contextLimitFor is resolveContextLimit over a bare override map, so serve (which holds the
+// resolved map, not a Config) can compute a per-turn limit as the model changes.
+func contextLimitFor(model string, overrides map[string]int) int {
+	if n, ok := overrides[model]; ok && n > 0 {
+		return n
+	}
+	return agent.ContextWindow(model)
 }
 
 // envVerbose overrides the default trace verbosity when no flag is given.

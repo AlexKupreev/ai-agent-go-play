@@ -16,6 +16,7 @@ import (
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
+	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -45,8 +46,9 @@ var chatCmd = &cobra.Command{
 		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
 		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
 		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
-		"[safe|balanced|permissive] show or switch the model/tier for the session, /verbose " +
-		"[on|off] toggles the trace, /exit (or Ctrl-D) quits.\n" +
+		"[safe|balanced|permissive] show or switch the model/tier for the session, /compact " +
+		"summarizes the conversation so far to free context, /verbose [on|off] toggles the " +
+		"trace, /exit (or Ctrl-D) quits.\n" +
 		"Commands (--addr): /new (alias /reset) starts a fresh session, /end closes the session, " +
 		"/exit (or Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
@@ -159,6 +161,7 @@ var chatCmd = &cobra.Command{
 				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
+				ContextLimit: resolveContextLimit(model, cfg),
 				// nil/"" in bare chat ⇒ no record_artifact and no scratch note (unchanged).
 				Manifest: manifest, ScratchDir: scratchDir,
 			}), nil
@@ -354,6 +357,40 @@ var chatCmd = &cobra.Command{
 				executor = next
 				fmt.Fprintln(os.Stderr, "(reloaded prompts and agent types)")
 				continue
+			case "/compact":
+				// Summarize the conversation so far into a compact briefing and replace the
+				// working history with it, freeing context. Manual for now (auto-compaction on a
+				// threshold is deferred); the on-disk transcript is append-only and untouched, so
+				// this only shrinks the *live* context, not the durable record.
+				if plan {
+					if len(turnLog) <= 1 {
+						fmt.Fprintln(os.Stderr, "(nothing to compact yet)")
+						continue
+					}
+					summary, err := compactSummarize(sigCh, prov, model, renderTurnLog(turnLog[:len(turnLog)-1]))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "compact failed (conversation unchanged): %v\n", err)
+						continue
+					}
+					kept := turnLog[len(turnLog)-1]
+					n := len(turnLog) - 1
+					turnLog = []chatTurn{{User: "[earlier conversation]", Answer: summary}, kept}
+					fmt.Fprintf(os.Stderr, "(compacted %d earlier %s into a summary; the last turn is kept verbatim)\n", n, plural(n, "turn"))
+					continue
+				}
+				msgs := executor.Messages()
+				if len(msgs) == 0 {
+					fmt.Fprintln(os.Stderr, "(nothing to compact yet)")
+					continue
+				}
+				summary, err := compactSummarize(sigCh, prov, model, renderMessages(msgs))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "compact failed (conversation unchanged): %v\n", err)
+					continue
+				}
+				executor.Restore([]provider.Message{provider.UserText("[Summary of the earlier conversation]\n" + summary)})
+				fmt.Fprintln(os.Stderr, "(conversation compacted into a summary)")
+				continue
 			}
 
 			before, beforeSteps := usage.Total(), usage.Steps()
@@ -382,9 +419,60 @@ var chatCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "%s   (session: %s in / %s out)\n",
 				formatUsage(turn, usage.Steps()-beforeSteps, time.Since(turnStart)),
 				humanInt(usage.Total().InputTokens), humanInt(usage.Total().OutputTokens))
+			// Context-window fill after this turn (last request's input tokens vs the model's
+			// window), so a long conversation's pressure is visible. Skipped when unknown.
+			if line := formatContext(usage.LastInput(), resolveContextLimit(model, cfg)); line != "" {
+				fmt.Fprintln(os.Stderr, line)
+			}
 		}
 		return nil
 	},
+}
+
+// compactSummarize runs the /compact model call under a cancellable context so Ctrl-C aborts
+// it (leaving the conversation unchanged). It returns the compact briefing that replaces the
+// earlier turns.
+func compactSummarize(sigCh <-chan os.Signal, prov provider.Provider, model, transcript string) (string, error) {
+	fmt.Fprintln(os.Stderr, "(compacting…)")
+	var summary string
+	err := underTurnContext(sigCh, func(ctx context.Context) error {
+		s, err := agent.Summarize(ctx, prov, model, transcript)
+		summary = s
+		return err
+	})
+	return summary, err
+}
+
+// renderMessages renders a bare-chat conversation (provider messages) to a plain transcript
+// for the summarizer: role-labelled text, including tool-result output, skipping empty turns.
+func renderMessages(msgs []provider.Message) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		var text strings.Builder
+		for _, c := range m.Content {
+			if c.Text != "" {
+				text.WriteString(c.Text)
+			}
+			if c.ToolCall != nil {
+				fmt.Fprintf(&text, "[calls %s]", c.ToolCall.Name)
+			}
+			if c.ToolResult != nil {
+				text.WriteString(c.ToolResult.Output)
+			}
+		}
+		if s := strings.TrimSpace(text.String()); s != "" {
+			fmt.Fprintf(&b, "%s: %s\n", m.Role, s)
+		}
+	}
+	return b.String()
+}
+
+// plural returns "<word>" or "<word>s" for n.
+func plural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 // runTurn runs one bare-chat turn (no planner) under a cancellable context — Ctrl-C cancels

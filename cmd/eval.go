@@ -248,6 +248,7 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: spawnDepth,
 		StatusDirs: agentStateDirs(), Limits: limits,
+		ContextLimit: resolveContextLimit(model, cfg),
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied
 

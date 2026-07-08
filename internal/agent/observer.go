@@ -133,9 +133,10 @@ func (l *LoggerObserver) Emit(e Event) {
 // can report a per-run (or, snapshotted, a per-turn) total. Every model reply carries
 // its step Usage on an EvResponse event; this sums them. Safe for concurrent use.
 type UsageObserver struct {
-	mu    sync.Mutex
-	total provider.Usage
-	steps int
+	mu        sync.Mutex
+	total     provider.Usage
+	steps     int
+	lastInput int64
 }
 
 // NewUsageObserver returns a zeroed accumulator.
@@ -150,7 +151,20 @@ func (u *UsageObserver) Emit(e Event) {
 	u.total.OutputTokens += e.Usage.OutputTokens
 	u.total.CachedTokens += e.Usage.CachedTokens
 	u.steps++
+	if e.Usage.InputTokens > 0 {
+		u.lastInput = e.Usage.InputTokens
+	}
 	u.mu.Unlock()
+}
+
+// LastInput returns the input-token count of the most recent model response — the number of
+// tokens the model actually received that step (system prompt + full conversation + tool
+// defs). It is the best proxy for current context fill: unlike Total (a sum across steps),
+// it is the size of a single request, so `LastInput / context-window` is the fill fraction.
+func (u *UsageObserver) LastInput() int64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.lastInput
 }
 
 // Total returns the token usage accumulated so far.

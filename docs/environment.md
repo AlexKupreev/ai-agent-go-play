@@ -153,6 +153,7 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `telegram_token` | `AI_AGENT_TELEGRAM_TOKEN` | Telegram bot token; empty ⇒ bot disabled. |
 | `telegram_allowed_users` | `AI_AGENT_TELEGRAM_ALLOWED_USERS` | Allowed Telegram user ids (env is comma-separated). |
 | `limits` | — | Tunable bounds (object; any field 0/absent ⇒ its built-in default). See below. |
+| `context_limits` | — | Context-window size (tokens) per model id for the usage gauge, e.g. `{"my-local-model": 32000}`. Overrides the built-in table; for private/renamed/newer endpoints it doesn't know. |
 
 Precedence everywhere: **flag > env > config value > built-in default**.
 

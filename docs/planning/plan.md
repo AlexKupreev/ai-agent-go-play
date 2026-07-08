@@ -629,11 +629,29 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
 
 ### 6d — Budget + context-window awareness (later)
 
+- [x] **Context-window awareness (Stage 1) — DONE 2026-07-08.** Know the model's context limit +
+    current fill, and surface it. `agent.ContextWindow(model)` built-in table (config-overridable
+    via `context_limits` / `resolveContextLimit`, for private/renamed endpoints); the agent tracks
+    `lastInputTokens` (the input tokens of the most recent request = current fill) and
+    `contextLimit`. Surfaced three ways: the `status` tool gains a **Context** section
+    (`used / limit (NN%)`), the `agent chat` end-of-turn line adds a **context** gauge
+    (`formatContext`), and `UsageObserver.LastInput()` exposes the signal. Tests: `TestContextWindow`,
+    `TestStatus_ContextGauge` (e2e), `TestFormatContext`, `TestResolveContextLimit`,
+    `TestStatusTool_ContextSection`.
+- [x] **Manual compaction (`/compact`) — DONE 2026-07-08.** `agent.Summarize` (one model call,
+    no tools) condenses the conversation into a briefing; `agent chat`'s `/compact` replaces the
+    **live** working history with it (deliberate mode keeps the last turn verbatim; bare mode resets
+    to the summary), freeing context. The on-disk transcript is append-only and untouched.
+    Tests: `TestSummarize`, `TestSummarize_EmptyIsError`.
+- [ ] **Auto-compaction (deferred):** trigger `/compact` automatically at a fill threshold
+    (~80%), with the compacted set stored separately so the durable session transcript stays full
+    (serve session turns re-seed from the compacted view). Stage 2.
 - [ ] Token **budget** per run/session: soft warning fed into context at ~80%, optional hard
     stop — a dial alongside the trust tier. Builds on 6a's totals.
-- [ ] Context-window awareness: know the model's context limit + current fill so the agent
-    can summarize under pressure. This is the deferred **context-window trimming** item
-    (Phase 4f), upgraded from blind truncation to the agent noticing and acting.
+- [ ] Cross-session reference (explicit "look at yesterday's results" / implicit recall of
+    stored progress): let the agent find + read prior sessions (or lean on the memory store for
+    deliberately-saved facts). Design open — see the discussion note; not the per-session "manifest"
+    framing.
 
 **Risks/notes:** keep the model-facing self-tools read-only and un-sandboxed (introspection,
 not effect). Token totals are cheap and always-on; cost/budget are opt-in extras. Don't let a

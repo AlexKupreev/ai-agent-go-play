@@ -94,6 +94,31 @@ func TestStatusTool_NoStateDirs(t *testing.T) {
 	}
 }
 
+func TestStatusTool_ContextSection(t *testing.T) {
+	// Known window with usage → percentage.
+	tool := NewStatusTool(StatusDeps{Model: "m", Tier: "safe", WorkDir: ".", Registry: NewMemoryRegistry(),
+		Context: func() (int64, int) { return 64000, 128000 }})
+	out, _ := tool.Run(context.Background(), map[string]any{})
+	if !strings.Contains(out, "Context") || !strings.Contains(out, "64,000 of 128,000 tokens used (50%)") {
+		t.Errorf("expected a 50%% context line; got:\n%s", out)
+	}
+
+	// Unknown window (limit 0) but usage present → tokens without a percentage.
+	tool = NewStatusTool(StatusDeps{Model: "m", Tier: "safe", WorkDir: ".", Registry: NewMemoryRegistry(),
+		Context: func() (int64, int) { return 5000, 0 }})
+	out, _ = tool.Run(context.Background(), map[string]any{})
+	if !strings.Contains(out, "5,000 tokens in the last request") || !strings.Contains(out, "unknown") {
+		t.Errorf("expected an unknown-window line; got:\n%s", out)
+	}
+
+	// No Context func → no section.
+	tool = NewStatusTool(StatusDeps{Model: "m", Tier: "safe", WorkDir: ".", Registry: NewMemoryRegistry()})
+	out, _ = tool.Run(context.Background(), map[string]any{})
+	if strings.Contains(out, "Context\n") {
+		t.Errorf("nil Context should omit the section; got:\n%s", out)
+	}
+}
+
 func TestStatusTool_DefaultModelLabel(t *testing.T) {
 	tool := NewStatusTool(StatusDeps{Model: "", Tier: "safe", WorkDir: ".", Registry: NewMemoryRegistry()})
 	out, _ := tool.Run(context.Background(), map[string]any{})

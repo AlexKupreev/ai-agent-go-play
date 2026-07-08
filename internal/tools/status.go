@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,12 @@ type StatusDeps struct {
 	// StateDirs are the agent's own on-disk state locations (sessions, transcripts,
 	// scratch, catalog, memory, audit). Empty ⇒ the "State on disk" section is omitted.
 	StateDirs []StateDir
+
+	// Context, when set, reports the current context-window fill: used = the input tokens of
+	// the most recent model response (0 before the first call), limit = the model's window in
+	// tokens (0 ⇒ unknown). It is a func so the reading is live at call time. Nil ⇒ the
+	// "Context" section is omitted (e.g. a bare status tool built without an agent).
+	Context func() (used int64, limit int)
 }
 
 // maxStateWalkFiles bounds the disk-usage walk so a huge runs/ tree can't stall the status
@@ -50,10 +57,11 @@ func NewStatusTool(deps StatusDeps) Tool {
 	return Tool{
 		Name: "status",
 		Description: "Report your own status: your model, trust tier, run id, and build version; how many " +
-			"authored tools and memory entries you have; the host machine's live resources (CPU count and " +
-			"load, memory, disk free, your process RSS, and uptime); and how much disk your own state " +
-			"(sessions, run transcripts, scratch cache, tool catalog, memory, audit log) is using. Use it " +
-			"to answer questions about your current configuration, how much headroom the machine has before " +
+			"authored tools and memory entries you have; how full your context window is (tokens used vs the " +
+			"model's limit); the host machine's live resources (CPU count and load, memory, disk free, your " +
+			"process RSS, and uptime); and how much disk your own state (sessions, run transcripts, scratch " +
+			"cache, tool catalog, memory, audit log) is using. Use it to answer questions about your current " +
+			"configuration, whether you are running low on context, how much headroom the machine has before " +
 			"starting heavy work, or what is consuming your disk.",
 		Parameters: map[string]any{},
 		Required:   []string{},
@@ -76,6 +84,24 @@ func NewStatusTool(deps StatusDeps) Tool {
 			fmt.Fprintf(&b, "  model: %s   tier: %s   run: %s\n", model, deps.Tier, shortID(deps.RunID))
 			fmt.Fprintf(&b, "  build: %s\n", deps.Version)
 			fmt.Fprintf(&b, "  authored tools: %d   memory entries: %d\n", nTools, nMem)
+
+			// Context-window fill: how full the conversation is, so the agent can decide to
+			// summarize/wrap up before it runs out of room.
+			if deps.Context != nil {
+				used, limit := deps.Context()
+				fmt.Fprintf(&b, "Context\n")
+				switch {
+				case limit > 0 && used > 0:
+					fmt.Fprintf(&b, "  window: %s of %s tokens used (%d%%)\n",
+						commaInt(used), commaInt(int64(limit)), int(used*100/int64(limit)))
+				case limit > 0:
+					fmt.Fprintf(&b, "  window: %s tokens (no model call yet this run)\n", commaInt(int64(limit)))
+				case used > 0:
+					fmt.Fprintf(&b, "  ~%s tokens in the last request (window size unknown for this model)\n", commaInt(used))
+				default:
+					fmt.Fprintf(&b, "  (no model call yet this run)\n")
+				}
+			}
 
 			s := hoststat.Read(deps.WorkDir)
 			fmt.Fprintf(&b, "Host\n")
@@ -179,6 +205,23 @@ func diskUsage(path string) (entries int, bytes int64, exists, truncated bool) {
 		return nil
 	})
 	return entries, bytes, true, truncated
+}
+
+// commaInt formats n with thousands separators (e.g. 128000 -> "128,000").
+func commaInt(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	var out []byte
+	for i := 0; i < len(s); i++ {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, s[i])
+	}
+	return neg + string(out)
 }
 
 // itemWord is the singular/plural of "item" for an entry count.

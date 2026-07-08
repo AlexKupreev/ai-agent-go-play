@@ -41,6 +41,10 @@ func TestUsageObserver_Accumulates(t *testing.T) {
 	if u.Steps() != 2 {
 		t.Fatalf("Steps() = %d, want 2 (one per EvResponse)", u.Steps())
 	}
+	// LastInput tracks the most recent response's input tokens (the context fill), not the sum.
+	if u.LastInput() != 5 {
+		t.Fatalf("LastInput() = %d, want 5 (the last response's input tokens)", u.LastInput())
+	}
 }
 
 // TestGatedObserver_ForwardsOnlyWhenEnabled checks that a gate suppresses events while

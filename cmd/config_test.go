@@ -106,6 +106,25 @@ func TestResolveAddr(t *testing.T) {
 }
 
 // TestResolveModel checks the precedence: --model flag > AI_AGENT_MODEL env > config value.
+func TestResolveContextLimit(t *testing.T) {
+	// Config override wins over the built-in table.
+	if got := resolveContextLimit("gpt-4o", Config{ContextLimits: map[string]int{"gpt-4o": 999}}); got != 999 {
+		t.Errorf("config override = %d, want 999", got)
+	}
+	// Override for a private/renamed model the table doesn't know.
+	if got := resolveContextLimit("my-local-model", Config{ContextLimits: map[string]int{"my-local-model": 32000}}); got != 32000 {
+		t.Errorf("private-model override = %d, want 32000", got)
+	}
+	// No override → built-in table.
+	if got := resolveContextLimit("gpt-4o", Config{}); got != 128000 {
+		t.Errorf("table fallback = %d, want 128000", got)
+	}
+	// Unknown model, no override → 0.
+	if got := resolveContextLimit("unknown-xyz", Config{}); got != 0 {
+		t.Errorf("unknown = %d, want 0", got)
+	}
+}
+
 func TestResolveModel(t *testing.T) {
 	t.Run("flag beats env and config", func(t *testing.T) {
 		t.Setenv(envModel, "env-model")

@@ -129,8 +129,9 @@ var serveCmd = &cobra.Command{
 			ledger:     usage.NewLedger(rec), // rec is the process-wide log (a Reader)
 			reader:     rec,                  // same log, read side, for recent_activity
 			prompts:    promptSrc,
-			limits:     resolveAgentLimits(cfg),
-			spawnDepth: resolveSpawnDepth(cfg),
+			limits:        resolveAgentLimits(cfg),
+			spawnDepth:    resolveSpawnDepth(cfg),
+			contextLimits: cfg.ContextLimits,
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -240,6 +241,9 @@ type serveDeps struct {
 	prompts    *promptState      // reloadable prompt customization + agent-type catalog
 	limits     agent.Limits      // per-run bounds (from config)
 	spawnDepth int               // sub-agent delegation budget (from config)
+	// contextLimits overrides the context-window size per model id for the usage gauge (from
+	// config.json context_limits). Fixed at startup; the per-turn model resolves against it.
+	contextLimits map[string]int
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -340,7 +344,8 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
 		StatusDirs: agentStateDirs(), Limits: d.limits,
-		Manifest: manifest, ScratchDir: scratchDir,
+		ContextLimit: contextLimitFor(model, d.contextLimits),
+		Manifest:     manifest, ScratchDir: scratchDir,
 	})
 }
 

@@ -36,6 +36,24 @@ func formatUsage(u provider.Usage, steps int, elapsed time.Duration) string {
 		formatTokens(u), steps, stepWord, elapsed.Round(100*time.Millisecond))
 }
 
+// formatContext renders the context-window fill for the end of a chat turn, e.g.
+//
+//	· context ~62,300 / 128,000 tokens (49%)
+//
+// used is the last request's input tokens (the current fill); limit is the model's window.
+// Returns "" when there's nothing meaningful to show (no model call yet, or an unknown window
+// with no usage), so the caller can skip the line.
+func formatContext(used int64, limit int) string {
+	switch {
+	case limit > 0 && used > 0:
+		return fmt.Sprintf("· context ~%s / %s tokens (%d%%)", humanInt(used), humanInt(int64(limit)), int(used*100/int64(limit)))
+	case used > 0:
+		return fmt.Sprintf("· context ~%s tokens (window size unknown)", humanInt(used))
+	default:
+		return ""
+	}
+}
+
 // openCentralLedger opens the process-wide audit log for appending run_usage events and
 // returns a ledger reading it, so day-wide totals include this process's runs.
 func openCentralLedger() (*audit.JSONLRecorder, *usage.Ledger, error) {

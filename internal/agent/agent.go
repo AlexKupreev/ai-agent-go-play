@@ -361,6 +361,13 @@ type Agent struct {
 	task     string // the current turn's task, used as the tool-search query
 	limits   Limits // per-run bounds (defaults already applied); planner leaves it zero
 
+	// contextLimit is the model's context-window size in tokens (0 ⇒ unknown), and
+	// lastInputTokens is the input-token count of the most recent model response — the tokens
+	// the model actually received that step, i.e. the current context fill. Together they back
+	// the context-usage gauge (the status tool's Context section, the chat end-of-turn line).
+	contextLimit    int
+	lastInputTokens int64
+
 	// spawnDepth is the remaining sub-agent spawn budget (subagents.md §3): spawn_agent
 	// refuses at ≤0 and hands the child spawnDepth-1, so "an agent that spawns agents" is
 	// terminating by construction. In v1 children carry no spawn tool, so this only bites
@@ -404,6 +411,9 @@ func newAgent(p provider.Provider, model, systemPrompt string, agentTools []tool
 		tools:        agentTools,
 		byName:       byName,
 		obs:          obs,
+		// Default context window from the built-in table (NewExecutor overrides from config);
+		// 0 when the model is unknown, which the gauge renders as "window unknown".
+		contextLimit: ContextWindow(model),
 		// Default limits for every agent (planner/critic/sub-agents); NewExecutor overrides
 		// them from ExecutorConfig.Limits. Without this the loop bound would be zero.
 		limits: Limits{}.withDefaults(),
@@ -444,6 +454,12 @@ type ExecutorConfig struct {
 	// count, HTTP response cap). Any zero field falls back to its built-in default, so the
 	// zero Limits is the current behavior. See Limits.
 	Limits Limits
+
+	// ContextLimit overrides the model's context-window size (tokens) for the context-usage
+	// gauge. 0 ⇒ derive from the built-in table by model id (ContextWindow). The cmd layer
+	// resolves it (config `context_limits`), so a private/renamed endpoint can be told its
+	// window without a code change.
+	ContextLimit int
 
 	// Manifest + ScratchDir wire the chat planner's artifact cache (docs/planning/
 	// chat-planner.md §D3–D4). When Manifest is non-nil the executor gains the
@@ -504,6 +520,12 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		Gate:     gate,
 	})
 
+	// self is the agent, assigned once it is built below. The status tool's Context reader
+	// closes over it to report live context fill (the agent's lastInputTokens/contextLimit)
+	// without internal/tools importing internal/agent — the same indirection the spawn tool
+	// uses. It is nil-guarded because the closure is only invoked at tool-call time.
+	var self *Agent
+
 	builtins := []tools.Tool{
 		tools.NewShellIn(ws, gate),
 		tools.NewRunCode(glue, limits.ScriptTimeout),
@@ -524,6 +546,12 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 			Registry:  registry,
 			Memory:    mem,
 			StateDirs: cfg.StatusDirs,
+			Context: func() (used int64, limit int) {
+				if self == nil {
+					return 0, 0
+				}
+				return self.lastInputTokens, self.contextLimit
+			},
 		}),
 	}
 	// Long-term memory is a trusted built-in (not exposed to the sandbox). Omit it
@@ -576,11 +604,17 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		builtins = append(builtins, tools.NewRecentActivityTool(auditReader))
 	}
 	a := newAgent(p, model, prompt, builtins, obs)
+	self = a
 	a.registry = registry
 	a.glue = glue
 	a.tier = tier
 	a.runID = runID
 	a.limits = limits
+	// Context-window size: an explicit config override wins, else the built-in table by model
+	// (already set by newAgent). 0 stays 0 (unknown ⇒ gauge shows tokens without a percentage).
+	if cfg.ContextLimit > 0 {
+		a.contextLimit = cfg.ContextLimit
+	}
 	a.ws = ws
 	a.docsPromptNote = docsNote
 	a.tierPolicyNote = policyNote
@@ -678,6 +712,14 @@ func (a *Agent) Messages() []provider.Message {
 // display.
 func (a *Agent) Model() string { return a.model }
 
+// ContextLimit returns the model's context-window size in tokens (0 ⇒ unknown).
+func (a *Agent) ContextLimit() int { return a.contextLimit }
+
+// LastInputTokens returns the input-token count of the most recent model response — the
+// current context fill (0 before the first model call). Divide by ContextLimit for the
+// fraction.
+func (a *Agent) LastInputTokens() int64 { return a.lastInputTokens }
+
 // SystemPrompt returns the composed system-prompt prefix this agent sends each request
 // (the stable part — the per-request date line in systemMessage is not included). It backs
 // `agent prompts show`, letting an operator inspect the effective prompt without a run.
@@ -734,6 +776,11 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		text := resp.Text()
 		toolCalls := resp.ToolCalls()
 		a.emit(Event{Kind: EvResponse, Iteration: i, Text: text, Calls: toolCalls, Usage: resp.Usage, DurationMs: durationMs})
+		// The input tokens of the request that produced this response are the current context
+		// fill (system prompt + conversation + tool defs). Track the latest for the gauge.
+		if resp.Usage.InputTokens > 0 {
+			a.lastInputTokens = resp.Usage.InputTokens
+		}
 
 		if len(toolCalls) == 0 {
 			// Keep the assistant's answer in the history so the next turn has context.

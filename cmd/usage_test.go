@@ -8,6 +8,25 @@ import (
 	"ai-agent-go-play/internal/provider"
 )
 
+func TestFormatContext(t *testing.T) {
+	cases := []struct {
+		used  int64
+		limit int
+		want  string
+	}{
+		{64000, 128000, "· context ~64,000 / 128,000 tokens (50%)"}, // 64000*100/128000 = 50
+		{100000, 128000, "· context ~100,000 / 128,000 tokens (78%)"}, // floor(78.1)
+		{0, 128000, ""},         // no usage yet → skip
+		{5000, 0, "· context ~5,000 tokens (window size unknown)"}, // unknown window
+		{0, 0, ""}, // nothing to show
+	}
+	for _, tc := range cases {
+		if got := formatContext(tc.used, tc.limit); got != tc.want {
+			t.Errorf("formatContext(%d, %d) = %q, want %q", tc.used, tc.limit, got, tc.want)
+		}
+	}
+}
+
 func TestHumanInt(t *testing.T) {
 	for _, tc := range []struct {
 		in   int64

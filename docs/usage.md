@@ -170,7 +170,10 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   session (no arg prints the current value) — in `--no-plan` the executor is rebuilt in place
   carrying the conversation, in deliberate mode the change takes effect on the next turn;
   `/attach <path>` registers a local file as an artifact the agent can read by path (deliberate
-  mode only); `/verbose [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
+  mode only); `/compact` summarizes the conversation so far into a compact briefing and replaces
+  the working history with it, freeing context (the on-disk transcript is untouched — it only
+  shrinks the *live* context; in deliberate mode the last turn is kept verbatim); `/verbose
+  [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
   and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
   `/reload` is a no-op there; in `--no-plan` it rebuilds the executor *without losing the
   conversation* — a malformed file is reported and the current setup kept); `/exit` (or
@@ -498,6 +501,11 @@ configured?" or "how much headroom does this machine have?" accurately. It retur
 
 - **Identity:** model, trust tier, current run id, and build version.
 - **Counts:** how many authored tools and memory entries it has.
+- **Context:** how full its context window is — the tokens the last model request used vs the
+  model's window size, as a percentage — so it can notice when it's running low and wrap up or
+  summarize. The window comes from a built-in table of known models, overridable per model with
+  the `context_limits` config for private/renamed endpoints; an unknown model shows tokens
+  without a percentage.
 - **Host resources:** CPU count and load average, RAM free/total, disk free/total, the
   process's RSS, Go heap/goroutines, and host uptime.
 - **State on disk:** how much space its own state occupies — the run transcripts (`runs/`),
@@ -560,6 +568,17 @@ go stale; compute cost externally from these counts if you need it).
   In chat it's the turn's usage, followed by the running session total. `in`/`out` are
   input/output tokens; `cached` (shown only when non-zero) is the cached-input portion of
   `in`; `steps` is the number of model calls.
+- **Context-window fill** — `agent chat` follows the usage line with how full the context is,
+  so a long conversation's pressure is visible:
+
+  ```text
+  · context ~62,300 / 128,000 tokens (49%)
+  ```
+
+  It's the last request's input tokens against the model's window (from a built-in table,
+  overridable with the `context_limits` config). An unknown window shows tokens without a
+  percentage; the same figure is available to the agent itself via the `status` tool. Use
+  `/compact` to summarize the conversation when it gets full (see [chat](#agent-chat)).
 - **`agent client`** and **`agent chat --addr`** print the same line after a run/turn,
   read from the engine.
 - **Over the API:** `GET /runs/{id}` (and `agent client`'s underlying `RunStatus`) include
