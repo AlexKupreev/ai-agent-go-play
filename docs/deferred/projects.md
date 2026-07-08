@@ -6,6 +6,11 @@
 > what is a "project" vs the workspace?) without a settled answer. This doc is retained as the
 > **preserved design** for a later revisit — nothing here reflects current behavior. The in-progress
 > three-scope implementation lives on the `wip/three-scope-projects` branch.
+>
+> **Superseded (for the data-scope use case) by [`../adr/spaces.md`](../adr/spaces.md).** The
+> switchable-context need (per-context memory + artifacts) is now addressed by **spaces** — a
+> *data-only* scope that deliberately drops the cwd/workspace coupling that made this ambiguous.
+> Revisit *this* doc only if a per-context **working directory** is ever actually wanted.
 
 A **project** is a named, persistent **sub-scope within a workspace** the agent can *recall by intent*
 and *switch into* mid-conversation — the thing that lets a local chat answer *"let's discuss the

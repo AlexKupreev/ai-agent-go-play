@@ -655,11 +655,14 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     `agent chat` (read-only over `<config-dir>/sessions/`, so it sees serve/Telegram conversations).
     Not sandbox-exposed. Tests: `TestSessionTools`, `TestSessionTools_EmptyStore`; roster
     live-verified via `prompts show`.
-- [ ] **Implicit recall / profile (open).** The English-lessons case ("start next lesson" → recall
-    my level/progress) is really *push* context, not *pull*: today `remember`/`recall` cover it but
-    depend on the model choosing to recall. Candidate: an always-loaded, agent-writable **profile**
-    (a reserved memory key or `PROFILE.md`) injected at session start — lighter than Projects, which
-    is a heavier named-workspace/auto-switch mechanism. Decide profile vs projects before building.
+- [ ] **Implicit recall / switchable contexts → Spaces (designed).** Resolved into a design:
+    **spaces** — switchable *data* scopes (per-space memory + artifact refs + an always-loaded notes
+    blob = the per-space "profile"), active per session and switched explicitly with `/space`. It is
+    the data-only successor to the reverted cwd-based Projects (no workspace switching), reusing the
+    session-sticky and memory/artifact machinery. Storage is sharded per space (bounding the
+    rewrite-everything cost of one `memory.json`), SQLite when it bites. See
+    [`../adr/spaces.md`](../adr/spaces.md); buildable slice is **P1** (store + list/create/switch +
+    session sticky + `/space`).
 
 **Risks/notes:** keep the model-facing self-tools read-only and un-sandboxed (introspection,
 not effect). Token totals are cheap and always-on; cost/budget are opt-in extras. Don't let a

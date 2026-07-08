@@ -1,0 +1,206 @@
+# Spaces — switchable data contexts (design & roadmap)
+
+How the agent holds **several ongoing contexts** — "my English lessons", "the tax stuff", "project
+X" — each accumulating its own memory and artifact references, switchable within or across
+conversations. This is the **data-only** successor to the reverted, cwd-based Projects
+([`../deferred/projects.md`](../deferred/projects.md)): a space is a *scope for the agent's own
+data*, **not** a working directory. That single simplification removes the trust/containment
+questions that sank Projects.
+
+Companion to [`../design.md`](../design.md) (§1 single trusted box), [`memory.md`](memory.md), and
+the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Roadmap, not current
+behavior — nothing here is built yet.**
+
+---
+
+## 0. The model in one paragraph
+
+A **space** is a named data scope: a short **notes** blob (always-loaded when the space is
+active), its own **memory** entries, and its own **artifact references**. Exactly one space is
+**active per session** (sticky, reusing the per-session model/tier machinery from
+[`../api-transport.md`](../api-transport.md)); a session inherits its space and can switch **explicitly**
+mid-conversation with `/space <name>` (or the `switch_space` tool when asked in natural language).
+Memory and artifacts written while a space is active belong to it; a top-level **global** scope
+holds everything unscoped and is visible in every space. A space is **not** a workspace/cwd — the
+shell's directory is unchanged.
+
+---
+
+## 1. Motivation
+
+The single shared memory store answers "what do I know?" but not "what do I know *about this*?" For
+recurring, stateful relationships — tutoring (recall my level + progress), a standing assistant with
+several parallel threads — the user wants the agent to **resume the right context** without dragging
+in unrelated facts, and to keep each thread's artifacts together. Two needs:
+
+- **Explicit reference** ("look at the results from the tax space") — served once memory/artifacts
+  are scoped and listable.
+- **Implicit resume** ("start my next Polish lesson") — served by the space's always-loaded notes
+  (the per-space "profile"): push context, not a pull the model must remember to do.
+
+A single global profile (one context) would be simpler, but the user has **multiple** parallel
+contexts, so spaces are the right shape. Auto-detecting which space a message is about is deferred
+(§9) — v1 switches explicitly.
+
+---
+
+## 2. What a space is NOT (the simplification vs Projects)
+
+The reverted Projects tied a project to a **filesystem workspace** (`<home>/projects/<slug>/`, cwd
+switching, containment-based trust, "who vouches for this checkout"). A space carries **none** of
+that:
+
+- **No cwd change.** The shell's working directory is set by `--workspace` as today, independent of
+  the active space. (A per-space cwd can attach later as a field if a real need appears — but it is
+  out of v1, deliberately.)
+- **No filesystem-containment trust model.** A space is the agent's own data under the config dir;
+  it introduces no new trust surface. The tier gate is unchanged.
+
+So a space is purely: *which memory namespace + which artifact set + which notes are active.* This is
+the whole feature, and why it's a fraction of Projects' cost.
+
+---
+
+## 3. Storage — and the "memory.json will get huge" question
+
+**The concern is real.** Today `internal/memory.MemoryStore` holds every entry in RAM and, on each
+`Put` (`remember`), **rewrites the whole `memory.json`** (marshal-all + atomic temp-rename). So write
+cost is O(n) in total entries and the total work to accumulate n facts is quadratic; the whole store
+is also resident in RAM. Fine for a family box with hundreds of notes; a long-lived agent that
+accumulates thousands would feel it.
+
+Spaces give a natural fix — **shard by space** — so we adopt it rather than piling every space's
+entries into the one growing file:
+
+```
+<config-dir>/
+  memory.json                     # GLOBAL scope (unscoped/default; the existing file — no migration)
+  spaces/
+    <space-id>/
+      space.json                  # metadata: name, notes (the per-space profile), timestamps
+      memory.json                 # THIS space's memory entries
+      artifacts.json              # THIS space's artifact manifest (reuses internal/artifact)
+```
+
+Consequences:
+
+- A `remember` in a space rewrites only **that space's** `memory.json` — bounded to one space's
+  size, not the whole corpus. Global writes touch only the global file.
+- Loading a space loads only its file (+ global), so RAM tracks the active space, not everything.
+- Switching is cheap (open a different small store).
+- **The filesystem is the space registry** — `spaces/` is a directory of spaces (mirrors the session
+  store's dir-of-files); `list_spaces` reads it, no separate index to keep in sync.
+
+**When even this bites, migrate to SQLite** — the codebase's stated end goal (design §9;
+`tools.md` / `memory.md` already flag the SQLite tipping point). Memory + spaces is a strong trigger:
+per-entry upsert instead of file-rewrite, indexed/space-scoped queries, and FTS for search — with a
+space becoming a *column*, not a directory. Crucially this is a **swap behind the existing
+`memory.Store` interface** (Get/Put/Search/List/Delete), so callers don't change. We build sharded
+JSON now (single-binary, consistent with the other stores) and keep the interface the seam.
+
+*(Decision made on the "guess if optimal" question: sharded-JSON now, SQLite when search or a single
+space's size bites. Not one growing file, and not SQLite pre-emptively.)*
+
+---
+
+## 4. Memory scoping
+
+- **`remember`** writes to the **active space** (its `spaces/<id>/memory.json`); with no active space,
+  to **global** (`memory.json`) — today's behavior, unchanged.
+- **`recall` / `search`** return **active-space ∪ global**, so a space sees its own notes plus shared
+  facts, but not another space's. Global-only when no space is active.
+- **Existing entries need no migration** — they live in the global `memory.json` and stay globally
+  visible (decision #2). A user/agent can promote a global fact into a space by re-saving it there.
+- Implementation: a small `ScopedStore` composing the active-space store over the global store
+  (`Put` → active; `Get/Search/List` → merge, active shadowing global on key collisions). The
+  `remember`/`recall` tools keep taking a `memory.Store`; the cmd/engine layer hands them the scoped
+  view for the active space. No tool change.
+
+---
+
+## 5. Active space = per session, switched explicitly
+
+**Per-session, sticky** — reusing the machinery shipped for per-session model/tier
+([`../api-transport.md`](../api-transport.md)): `session.Session` gains `SpaceID`; settable at
+`POST /sessions` and `PATCH /sessions/{id}`, merged per turn. Several sessions can share a space (the
+data is the space's, not the session's).
+
+**Switching mid-session is explicit** (no intent-guessing in v1):
+
+- **`/space <name>`** REPL command — re-points the active space **from that message forward**.
+  `/space` alone shows the current one; `/space list` lists them. Also `agent chat --space <name>` to
+  start in one.
+- **`switch_space(id)` / `create_space(name)` / `list_spaces`** model-facing tools — so *"let's switch
+  to the Polish project"* in natural language works, and so a space can be created on the fly.
+- Telegram: a `/space` command mirrors the REPL (a chat maps to a session, which carries the space).
+
+**Mid-session semantics:** facts/artifacts saved before a switch keep the old space; after, the new
+one — which is correct, they *were* about the old space. The conversation transcript itself is not
+re-scoped (a session can span spaces); only new memory/artifact writes follow the active space.
+
+---
+
+## 6. Tool surface
+
+All trusted, not sandbox-exposed (like `remember`/`status`). Wired when a space store is present
+(nil ⇒ omitted, like every optional dep).
+
+| Tool | Does |
+|---|---|
+| `list_spaces` | names, ids, notes preview, last-active; marks the current one |
+| `create_space(name)` | make a new space, return its id |
+| `switch_space(id)` | set the session's active space (effective from the next write/turn) |
+| `space_notes` / `update_space_notes(text)` | read / replace the active space's notes blob (the per-space profile; size-capped so it can't bloat the always-on prompt — the `/compact` discipline) |
+
+`remember` / `recall` are unchanged in signature — they operate on the scoped view (§4). The active
+space's **notes** are injected into the system prompt at session start (like `AGENTS.md`, but
+agent-writable and per-space — this is the "profile" the earlier discussion converged on, resolved
+here as a space field rather than a standalone file).
+
+---
+
+## 7. Staging
+
+- **P1 — spaces exist + switch.** `internal/space` store (dir-of-dirs, `space.json` metadata) +
+  `list_spaces`/`create_space`/`switch_space` + `Session.SpaceID` sticky (+ `POST`/`PATCH`) +
+  `/space` command + `agent chat --space`. No scoping yet — proves creation, listing, and switching.
+- **P2 — memory scoping.** The `ScopedStore` (active ∪ global); `remember` → active, `recall` →
+  merged; per-space `spaces/<id>/memory.json`. This is the core payoff.
+- **P3 — artifacts + notes.** Per-space `artifacts.json` manifest; the notes blob + injection +
+  `update_space_notes`; the always-loaded per-space profile.
+- **P4 (deferred) — SQLite backend** behind `memory.Store` when scale/search bites (§3); and any
+  per-space cwd, if ever wanted.
+
+Each stage leaves the agent working; P1 ships the switch, P2 the value.
+
+---
+
+## 8. Decisions (settled)
+
+- **Data scope, not a workspace** — no cwd change (§2).
+- **Active space per session, sticky** — reuses the model/tier session-sticky machinery (§5).
+- **Explicit switch only** in v1 (`/space`, `switch_space`); no auto-detection (§9).
+- **Global default** — unscoped/existing memory stays visible everywhere; no migration (§4).
+- **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3).
+- **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
+
+## 9. Open questions
+
+- **Auto-switch by intent** — detecting the space from what the user is discussing (implicit switch).
+  Real value for the tutoring case, but it's the hard/risky part (wrong guess scopes memory wrongly).
+  Deferred; explicit `/space` first, measure whether auto is even wanted.
+- **Deleting/merging spaces** — archive-on-delete (like sessions) vs purge; merging two spaces'
+  memory. Add when a real need appears.
+- **Cross-space search** — a `recall --all-spaces` escape hatch to search everything. Probably wanted
+  eventually; trivial once scoping exists.
+- **Notes size discipline** — the always-loaded notes must stay short; do we hard-cap, or let the
+  agent self-summarize (the `/compact` skill) when it grows? Lean: hard char cap + a nudge.
+- **Per-space cwd** — if a space ever *should* pin a directory, it attaches as a `space.json` field;
+  explicitly out of v1.
+
+## 10. Non-goals
+
+- **Multi-tenant isolation** — spaces are one user's organizational buckets on a trusted box, not a
+  security boundary (design §1). A user with shell access reaches every space's files regardless.
+- **Workspace/cwd switching** — that was Projects; deliberately dropped (§2).
+- **Automatic context detection** — v1 is explicit (§9).
