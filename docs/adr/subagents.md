@@ -284,7 +284,10 @@ compatible, not competing.
 
 Chosen ordering (`plan.md`): ship the **model-driven foreground spawn tool first** (it unlocks
 organization experiments from prompts, with no concurrency), and add the in-code fan-out pipeline
-later as a latency optimization over the *same* worker machinery. Offering both is mild redundancy
+later as a latency optimization over the *same* worker machinery. A concrete, ready-to-run form of
+the model-driven path — a coordinator that decomposes a task and delegates each step to a worker
+type — is written up as a copy-paste recipe in
+[`../recipes/plan-delegation.md`](../recipes/plan-delegation.md). Offering both is mild redundancy
 (two doors to one room), acceptable because the model-driven path generalizes beyond research while the
 pipeline stays the cheap, predictable default when a decomposition is known up front.
 
