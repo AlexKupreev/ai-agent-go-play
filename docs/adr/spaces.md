@@ -59,6 +59,26 @@ that:
 So a space is purely: *which memory namespace + which artifact set + which notes are active.* This is
 the whole feature, and why it's a fraction of Projects' cost.
 
+### Config-dir (agent-global), not workspace-scoped
+
+Spaces live under the **config dir** and are shared across **all** workspaces of that agent — because
+**space and workspace are orthogonal axes**: workspace = *which files* the agent acts on (shell cwd,
+workspace-tier prompts); space = *which memory/artifact/notes bucket* is active. The motivating cases
+("English lessons", "the tax stuff") have **no filesystem workspace at all** — the family-box
+deployment (design §1) runs one `serve` / one config-dir where cwd is barely relevant — so tying a
+space to a workspace would be wrong for exactly the case spaces exist for.
+
+This is also consistent with the two-anchor model: a space is a **partition of the agent's memory**,
+and memory lives in the config dir (the agent's identity), so spaces do too. Per-`--config-dir`
+share-nothing then falls out for free — two agents get separate spaces. Being global across
+workspaces leaks nothing: switching is explicit and only the **active** space's memory is loaded
+(+ global), so you are never in two at once and inactive spaces are never in context. Being in
+workspace `~/repos/foo` with space `english` active is allowed and harmless — independent dials.
+
+**Not covered (deliberately):** a space whose *data physically lives inside a repo* (travels with the
+checkout, git-ignored, per-repo) is the reverted workspace-sub-scope direction — revisit only on a
+concrete need. Auto-switching a space when you `cd` into a repo is the deferred auto-switch (§9).
+
 ---
 
 ## 3. Storage — and the "memory.json will get huge" question
@@ -197,6 +217,9 @@ Each stage leaves the agent working; P1 ships the switch, P2 the value.
 - **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3); chosen over
   `modernc.org/sqlite` and `bbolt` this round to avoid a new dependency and keep the `CGO_ENABLED=0`
   static binary lean (§3 alternatives).
+- **Config-dir, agent-global** — spaces live under the config dir and are shared across all
+  workspaces; space and workspace are orthogonal axes (§2). Per-`--config-dir` share-nothing gives
+  separate spaces per agent for free.
 - **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
 
 ## 9. Open questions
