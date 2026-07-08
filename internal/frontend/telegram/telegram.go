@@ -66,7 +66,7 @@ type Transport interface {
 // surface the frontend uses. *api.Client satisfies it. The bot talks to the engine in
 // terms of sessions (persistent conversations), so each chat is a running dialogue.
 type Client interface {
-	StartSession(ctx context.Context) (string, error)
+	StartSession(ctx context.Context, opts api.RunOptions) (string, error)
 	PostTurn(ctx context.Context, sessionID, text string, opts api.RunOptions) (runID string, err error)
 	CloseSession(ctx context.Context, sessionID string) error
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
@@ -220,7 +220,8 @@ func (b *Bot) sessionFor(ctx context.Context, chatID int64) (string, error) {
 	if ok {
 		return id, nil
 	}
-	id, err := b.client.StartSession(ctx)
+	// The bot inherits the engine's default model/tier; a per-chat override isn't exposed.
+	id, err := b.client.StartSession(ctx, api.RunOptions{})
 	if err != nil {
 		return "", err
 	}

@@ -253,12 +253,16 @@ func (c *Client) Reload(ctx context.Context) error {
 	return nil
 }
 
-// StartSession creates a persistent conversation on the engine and returns its id.
-func (c *Client) StartSession(ctx context.Context) (string, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/sessions", nil)
+// StartSession creates a persistent conversation on the engine and returns its id. opts
+// carries an optional initial sticky model/tier (the zero value inherits the engine
+// defaults; a turn may still override per-request).
+func (c *Client) StartSession(ctx context.Context, opts RunOptions) (string, error) {
+	body, _ := json.Marshal(startSessionRequest{RunOptions: opts})
+	req, err := c.newRequest(ctx, http.MethodPost, "/sessions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", err
@@ -272,6 +276,32 @@ func (c *Client) StartSession(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return out.SessionID, nil
+}
+
+// UpdateSession sets a session's sticky model/tier over PATCH /sessions/{id} and returns the
+// updated Info. A nil pointer leaves that field unchanged; a non-nil pointer sets it (an empty
+// string clears it back to the engine default). Passing nil for both is a read of the current
+// values.
+func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tier *string) (session.Info, error) {
+	body, _ := json.Marshal(updateSessionRequest{Model: model, Tier: tier})
+	req, err := c.newRequest(ctx, http.MethodPatch, "/sessions/"+sessionID, bytes.NewReader(body))
+	if err != nil {
+		return session.Info{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return session.Info{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return session.Info{}, fmt.Errorf("update session %s: %s", sessionID, resp.Status)
+	}
+	var out session.Info
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return session.Info{}, err
+	}
+	return out, nil
 }
 
 // ListSessions returns the engine's sessions, newest-updated first.

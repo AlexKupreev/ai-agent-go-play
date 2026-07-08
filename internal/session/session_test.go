@@ -59,6 +59,38 @@ func TestFileStore_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestFileStore_StickyModelTier proves a session's sticky model/tier round-trip through the
+// store and surface on the listing Info.
+func TestFileStore_StickyModelTier(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+
+	s, err := store.Create()
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.Model = "gpt-4o"
+	s.Tier = "safe"
+	if err := store.Save(s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := store.Get(s.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Model != "gpt-4o" || got.Tier != "safe" {
+		t.Fatalf("reloaded model/tier = %q/%q, want gpt-4o/safe", got.Model, got.Tier)
+	}
+
+	infos, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Model != "gpt-4o" || infos[0].Tier != "safe" {
+		t.Fatalf("listing Info did not carry model/tier: %+v", infos)
+	}
+}
+
 // TestFileStore_DeleteArchivesAndRestore proves Delete archives (not destroys): the closed
 // session leaves the live set and listing but its file survives under archive/, and Restore
 // brings it back resumable with its history intact.

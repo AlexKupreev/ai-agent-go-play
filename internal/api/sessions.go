@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
+	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/session"
 )
 
@@ -12,19 +14,75 @@ import (
 // is a run whose executor is seeded with the session's history, so it streams via the
 // usual GET /runs/{id}/events and its escalations park in the usual approval queue.
 
+type startSessionRequest struct {
+	RunOptions // optional initial sticky "model"/"tier" (flattened into the body)
+}
+
 type startSessionResponse struct {
 	SessionID string `json:"session_id"`
 }
 
 func handleStartSession(e *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := e.StartSession()
+		// The body is optional: an empty POST creates a session with engine defaults.
+		var req startSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if err := validateTierOpt(req.Tier); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		id, err := e.StartSession(req.RunOptions)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, startSessionResponse{SessionID: id})
 	}
+}
+
+// updateSessionRequest is the body of PATCH /sessions/{id}. Pointer fields make the update
+// per-field: a nil field is left unchanged, a present field is set (an empty string clears it
+// back to the engine default), so `/model x` cannot inadvertently wipe a previously-set tier.
+type updateSessionRequest struct {
+	Model *string `json:"model,omitempty"`
+	Tier  *string `json:"tier,omitempty"`
+}
+
+func handleUpdateSession(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req updateSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if req.Tier != nil {
+			if err := validateTierOpt(*req.Tier); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		info, err := e.UpdateSession(r.PathValue("id"), req.Model, req.Tier)
+		if err != nil {
+			sessionErrStatus(w, err)
+			return
+		}
+		writeJSON(w, info)
+	}
+}
+
+// validateTierOpt accepts an empty string (inherit the default) or a syntactically valid
+// tier name. It rejects nonsense at the transport boundary so a bad value can't be stored
+// and silently break every future turn; clamping to the serve ceiling stays the cmd layer's
+// job (resolveOpts).
+func validateTierOpt(tier string) error {
+	if tier == "" {
+		return nil
+	}
+	_, err := capability.ParseTier(tier)
+	return err
 }
 
 func handleListSessions(e *Engine) http.HandlerFunc {

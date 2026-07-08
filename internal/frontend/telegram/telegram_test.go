@@ -91,7 +91,7 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{resolved: make(chan bool, 1), answered: make(chan string, 1)}
 }
 
-func (c *fakeClient) StartSession(context.Context) (string, error) {
+func (c *fakeClient) StartSession(context.Context, api.RunOptions) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sessionCalls++

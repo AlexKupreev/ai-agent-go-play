@@ -32,6 +32,13 @@ type Session struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Messages  []provider.Message `json:"messages"`
+
+	// Model and Tier are the session's sticky per-turn overrides: a turn that does not
+	// carry its own model/tier inherits these (which in turn fall back to the engine
+	// default). Empty ⇒ inherit. Set at creation (POST /sessions) or live (PATCH
+	// /sessions/{id}); the stored tier is a REQUEST, clamped to the serve ceiling per turn.
+	Model string `json:"model,omitempty"`
+	Tier  string `json:"tier,omitempty"`
 }
 
 // Info is the lightweight listing form (no message bodies).
@@ -41,11 +48,13 @@ type Info struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Turns     int       `json:"turns"` // user messages so far
 	Title     string    `json:"title"` // first user message, truncated
+	Model     string    `json:"model,omitempty"`
+	Tier      string    `json:"tier,omitempty"`
 }
 
-// Info projects a session onto its listing form.
-func (s Session) toInfo() Info {
-	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
+// ToInfo projects a session onto its listing form.
+func (s Session) ToInfo() Info {
+	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Model: s.Model, Tier: s.Tier}
 	for _, m := range s.Messages {
 		if m.Role == provider.RoleUser {
 			info.Turns++
@@ -182,7 +191,7 @@ func (s *FileStore) List() ([]Info, error) {
 		if err != nil {
 			continue // skip a corrupt/partial file rather than fail the whole list
 		}
-		infos = append(infos, sess.toInfo())
+		infos = append(infos, sess.ToInfo())
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].UpdatedAt.After(infos[j].UpdatedAt) })
 	return infos, nil

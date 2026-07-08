@@ -277,8 +277,12 @@ func (e *Engine) launch(task, sessionID string, work func(ctx context.Context, r
 	return id
 }
 
-// StartSession creates a new persistent conversation and returns its id.
-func (e *Engine) StartSession() (string, error) {
+// StartSession creates a new persistent conversation and returns its id. opts carries an
+// optional sticky model/tier for the session (empty fields inherit the engine default); a
+// turn may still override them per-request. The stored tier is a request, clamped to the
+// serve ceiling per turn (cmd resolveOpts), so validation of its syntax is the transport
+// boundary's job — the engine core stores what it is given.
+func (e *Engine) StartSession(opts RunOptions) (string, error) {
 	if !e.SessionsEnabled() {
 		return "", ErrSessionsDisabled
 	}
@@ -286,7 +290,39 @@ func (e *Engine) StartSession() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if opts.Model != "" || opts.Tier != "" {
+		s.Model = opts.Model
+		s.Tier = opts.Tier
+		if err := e.sessions.Save(s); err != nil {
+			return "", err
+		}
+	}
 	return s.ID, nil
+}
+
+// UpdateSession changes a session's sticky model/tier. A nil pointer leaves that field
+// unchanged; a non-nil pointer sets it (an empty string clears it back to the engine
+// default). It returns the updated session Info. session.ErrNotFound if the id is unknown.
+// Like StartSession, the engine stores the tier verbatim — clamping to the serve ceiling
+// happens per turn.
+func (e *Engine) UpdateSession(id string, model, tier *string) (session.Info, error) {
+	if !e.SessionsEnabled() {
+		return session.Info{}, ErrSessionsDisabled
+	}
+	sess, err := e.sessions.Get(id)
+	if err != nil {
+		return session.Info{}, err
+	}
+	if model != nil {
+		sess.Model = *model
+	}
+	if tier != nil {
+		sess.Tier = *tier
+	}
+	if err := e.sessions.Save(sess); err != nil {
+		return session.Info{}, err
+	}
+	return sess.ToInfo(), nil
 }
 
 // ListSessions returns session metadata, newest-updated first.
@@ -341,7 +377,18 @@ func (e *Engine) PostTurn(sessionID, text string, opts RunOptions) (string, erro
 		if err != nil {
 			return "", err // closed between accept and execution
 		}
-		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, opts, obs)
+		// Merge the session's sticky model/tier under the empty turn fields: a per-turn
+		// override wins, else the session-stored value, else (still empty) the engine
+		// default applied downstream. The still-empty tier is clamped to the serve ceiling
+		// by the runner (cmd resolveOpts), so a session tier is bounded like any override.
+		turnOpts := opts
+		if turnOpts.Model == "" {
+			turnOpts.Model = sess.Model
+		}
+		if turnOpts.Tier == "" {
+			turnOpts.Tier = sess.Tier
+		}
+		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, turnOpts, obs)
 		if err != nil {
 			return "", err
 		}

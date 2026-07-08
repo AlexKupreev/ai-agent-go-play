@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/capability"
 )
 
 // runRemoteChat is `agent chat --addr`: a REPL that drives a running engine's
@@ -25,7 +26,15 @@ func runRemoteChat(addr string) error {
 		return listRemoteSessions(ctx, c, addr)
 	}
 
-	sessionID, resumed, turns, err := attachSession(ctx, c, addr)
+	// --model / --tier seed a freshly-created session's sticky overrides (validated here so a
+	// bad tier fails before we open a session). They do not disturb a resumed session, which
+	// keeps its stored stickies. /model and /tier change them live via PATCH mid-REPL.
+	initialOpts := api.RunOptions{Model: modelFlag, Tier: tierFlag}
+	if err := validateTierFlag(tierFlag); err != nil {
+		return err
+	}
+
+	sessionID, resumed, turns, curModel, curTier, err := attachSession(ctx, c, addr, initialOpts)
 	if err != nil {
 		return err
 	}
@@ -35,7 +44,8 @@ func runRemoteChat(addr string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
-	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /end close, /exit or Ctrl-D detach)")
+	fmt.Fprintf(os.Stderr, "model %s, tier %s\n", modelLabel(curModel), tierLabel(curTier))
+	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] switch for the session, /end close, /exit or Ctrl-D detach)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -55,6 +65,43 @@ func runRemoteChat(addr string) error {
 			return nil
 		}
 		line := strings.TrimSpace(scanner.Text())
+		// /model [id] and /tier [t] take an optional argument, so they are matched by prefix
+		// ahead of the exact-match switch. They set the session's sticky override on the engine
+		// (PATCH /sessions/{id}), effective from the next turn; no arg shows the current value.
+		if arg, ok := strings.CutPrefix(line, "/model"); ok {
+			arg = strings.TrimSpace(arg)
+			if arg == "" {
+				fmt.Fprintf(os.Stderr, "(model: %s; usage: /model <id>)\n", modelLabel(curModel))
+				continue
+			}
+			info, err := c.UpdateSession(ctx, sessionID, &arg, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "set model: %v\n", err)
+				continue
+			}
+			curModel = info.Model
+			fmt.Fprintf(os.Stderr, "(model set to %s — effective next turn)\n", modelLabel(curModel))
+			continue
+		}
+		if arg, ok := strings.CutPrefix(line, "/tier"); ok {
+			arg = strings.TrimSpace(arg)
+			if arg == "" {
+				fmt.Fprintf(os.Stderr, "(tier: %s; usage: /tier safe|balanced|permissive)\n", tierLabel(curTier))
+				continue
+			}
+			if err := validateTierFlag(arg); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				continue
+			}
+			info, err := c.UpdateSession(ctx, sessionID, nil, &arg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "set tier: %v\n", err)
+				continue
+			}
+			curTier = info.Tier
+			fmt.Fprintf(os.Stderr, "(tier set to %s — effective next turn; clamped to the serve ceiling)\n", tierLabel(curTier))
+			continue
+		}
 		switch line {
 		case "":
 			continue
@@ -71,15 +118,18 @@ func runRemoteChat(addr string) error {
 		case "/reset", "/new":
 			// No server-side "clear history"; a fresh session is the honest
 			// equivalent. Close the old one so it doesn't linger. /new + /reset are
-			// aliases here to match the Telegram bot's session-control verbs.
+			// aliases here to match the Telegram bot's session-control verbs. The new
+			// session carries the same initial stickies (--model/--tier), not the ones
+			// changed mid-REPL, matching a fresh `agent chat` invocation.
 			if err := c.CloseSession(ctx, sessionID); err != nil {
 				fmt.Fprintf(os.Stderr, "close old session: %v\n", err)
 			}
-			newID, err := c.StartSession(ctx)
+			newID, err := c.StartSession(ctx, initialOpts)
 			if err != nil {
 				return fmt.Errorf("start session: %w", err)
 			}
 			sessionID = newID
+			curModel, curTier = initialOpts.Model, initialOpts.Tier
 			fmt.Fprintf(os.Stderr, "(new conversation — session %s)\n", sessionID)
 			continue
 		}
@@ -108,25 +158,45 @@ func listRemoteSessions(ctx context.Context, c *api.Client, addr string) error {
 }
 
 // attachSession resolves the session to talk to: --session resumes an existing one
-// (validated against the engine's list), otherwise a new session is created.
-func attachSession(ctx context.Context, c *api.Client, addr string) (id string, resumed bool, turns int, err error) {
+// (validated against the engine's list, inheriting its stored sticky model/tier), otherwise a
+// new session is created seeded with opts. It also returns the session's current sticky
+// model/tier so the REPL can display and track them.
+func attachSession(ctx context.Context, c *api.Client, addr string, opts api.RunOptions) (id string, resumed bool, turns int, model, tier string, err error) {
 	if chatSessionFlag != "" {
 		infos, err := c.ListSessions(ctx)
 		if err != nil {
-			return "", false, 0, err
+			return "", false, 0, "", "", err
 		}
 		for _, in := range infos {
 			if in.ID == chatSessionFlag {
-				return in.ID, true, in.Turns, nil
+				return in.ID, true, in.Turns, in.Model, in.Tier, nil
 			}
 		}
-		return "", false, 0, fmt.Errorf("no session %q on %s (list them with: agent chat --addr %s --list)", chatSessionFlag, addr, addr)
+		return "", false, 0, "", "", fmt.Errorf("no session %q on %s (list them with: agent chat --addr %s --list)", chatSessionFlag, addr, addr)
 	}
-	id, err = c.StartSession(ctx)
+	id, err = c.StartSession(ctx, opts)
 	if err != nil {
-		return "", false, 0, fmt.Errorf("start session: %w", err)
+		return "", false, 0, "", "", fmt.Errorf("start session: %w", err)
 	}
-	return id, false, 0, nil
+	return id, false, 0, opts.Model, opts.Tier, nil
+}
+
+// validateTierFlag accepts an empty string (inherit the engine default) or a valid tier name,
+// giving the operator immediate local feedback before a request reaches the engine.
+func validateTierFlag(tier string) error {
+	if tier == "" {
+		return nil
+	}
+	_, err := capability.ParseTier(tier)
+	return err
+}
+
+// tierLabel renders a tier for display, naming the engine default when unset.
+func tierLabel(tier string) string {
+	if tier == "" {
+		return "(engine default)"
+	}
+	return tier
 }
 
 // runRemoteTurn posts one turn to the session and streams its reply. Ctrl-C cancels
@@ -142,7 +212,8 @@ func runRemoteTurn(sigCh <-chan os.Signal, c *api.Client, sessionID, line string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Remote chat carries no per-turn override yet (Phase 2 wires /model & /tier here).
+	// No per-turn override: /model and /tier set the session's sticky overrides on the engine
+	// (PATCH), which PostTurn merges in server-side, so the turn request stays empty.
 	runID, err := c.PostTurn(ctx, sessionID, line, api.RunOptions{})
 	if err != nil {
 		return err

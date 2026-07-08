@@ -34,8 +34,12 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   revoke it (404 if absent, audited as `tool_revoked`)
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
-- `POST /sessions` → `{session_id}`; `GET /sessions` → list; `DELETE /sessions/{id}` → close
-  (archives the conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
+- `POST /sessions` `{model?, tier?}` → `{session_id}` (optional initial sticky model/tier);
+  `GET /sessions` → list (each Info carries the session's sticky `model`/`tier`);
+  `PATCH /sessions/{id}` `{model?, tier?}` → updated Info (per-field: an omitted field is left
+  unchanged, a present field is set — an empty string clears it back to the default; 400 on a
+  malformed tier, 404 on an unknown session); `DELETE /sessions/{id}` → close (archives the
+  conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
   `POST /sessions/{id}/turns` `{text, model?, tier?}` → `{run_id}` (optional per-turn override,
   same clamp; stream the reply via `GET /runs/{run_id}/events`)
 - `POST /reload` → re-read the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) + `agents/*.md`
@@ -57,8 +61,17 @@ model falls back to the serve default, and an explicit tier is **clamped** to no
 serve-configured tier (`capability.ClampTier`), so the `serve --tier` flag is a hard ceiling a client
 cannot exceed. An invalid tier fails the run. This keeps the trust policy in cmd and the engine core
 free of it. The struct is grown by adding fields (e.g. per-role models later), never by widening the
-run/turn signatures again. *(Per-session sticky model/tier — settable at `POST /sessions` and via a
-`PATCH` — is a planned follow-up; today the override is per-request.)*
+run/turn signatures again.
+
+**Per-session sticky model/tier.** A session can carry a *sticky* model/tier so every turn
+inherits it without re-sending: set it at `POST /sessions` or change it live with
+`PATCH /sessions/{id}`. `PostTurn` merges the effective options **turn override > session-stored >
+serve default** (the still-empty fields resolve downstream), so a per-turn `model`/`tier` still
+wins for that one turn. The stored tier is a *request*: it is validated syntactically at the
+transport boundary (bad ⇒ 400) but clamped to the serve ceiling **per turn** by the cmd layer,
+exactly like a per-request override — so a stored `permissive` on a `--tier balanced` engine runs
+at `balanced`. `agent chat --addr`'s `/model` and `/tier` commands (and `--model`/`--tier` at
+launch) drive this through the `PATCH`.
 
 **No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
 approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an

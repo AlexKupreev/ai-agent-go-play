@@ -185,23 +185,29 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 `host:port` or an [alias](#engine-aliases).
 
 ```bash
-./agent chat --addr 127.0.0.1:8080          # start a new session on the engine
-./agent chat --addr home                    # same, addressing the engine by alias
-./agent chat --addr home --list             # list resumable sessions, then exit
-./agent chat --addr home --session <id>     # resume an existing conversation
+./agent chat --addr 127.0.0.1:8080              # start a new session on the engine
+./agent chat --addr home                        # same, addressing the engine by alias
+./agent chat --addr home --model gpt-4o --tier safe  # new session with a sticky model/tier
+./agent chat --addr home --list                 # list resumable sessions, then exit
+./agent chat --addr home --session <id>         # resume an existing conversation
 ```
 
 - **Commands (remote):** `/new` (alias `/reset`) starts a fresh session (closing the old
-  one); `/end` closes the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable
-  (the resume command is printed on exit). **Ctrl-C** cancels the current turn (stopping the
-  remote run) and returns you to the prompt.
+  one); `/model [id]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
+  model / trust tier (no arg prints the current value), effective from the next turn; `/end` closes
+  the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable (the resume command
+  is printed on exit). **Ctrl-C** cancels the current turn (stopping the remote run) and returns you
+  to the prompt.
 - Approvals are the engine's **shared** queue: an escalation you don't answer here is the
   same one visible to `agent audit`, other clients, and Telegram — not a local stdin gate.
   A deliberate session turn's planner clarification (`ask_user`) arrives through this same
   queue, so the engine can deliberate remotely, not just on the CLI.
-- `--model` / `--tier` and the `--no-plan` / `--no-critique` dials are **local-mode only**;
-  in remote mode the model, tier, and whether turns are deliberate are fixed by how `serve`
-  was started.
+- **`--model` / `--tier` are now remote-capable** as a **per-session sticky**: `--model`/`--tier` at
+  launch seed a new session, and `/model`/`/tier` change it live. Both are stored on the session and
+  merged per turn (turn override > session-stored > serve default); a requested tier is still
+  **clamped** to the `serve --tier` ceiling, so it can go safer but never looser than the engine
+  allows. A resumed session keeps its own stored values. The `--no-plan` / `--no-critique` dials
+  remain **serve-side only** — whether turns are deliberate is fixed by how `serve` was started.
 
 ### `agent serve`
 
