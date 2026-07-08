@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
@@ -120,8 +121,7 @@ var serveCmd = &cobra.Command{
 		deps := serveDeps{
 			prov:       newProvider(cfg),
 			workDir:    workDir,
-			model:      resolveModel(modelFlag, cfg),
-			tier:       tier,
+			defaults:   newServeDefaults(resolveModel(modelFlag, cfg), tier),
 			gate:       approvals,
 			registry:   registry,
 			mem:        mem,
@@ -179,11 +179,29 @@ var serveCmd = &cobra.Command{
 		// the tier gate. A method+path pattern outranks the "/" catch-all, so /reload wins.
 		mux := http.NewServeMux()
 		mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
+			// Re-read config defaults first (cheap, validated) so a malformed config.json or a
+			// bad tier aborts the whole reload before anything is applied — no partial reload.
+			cfg2, err := loadConfig()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			tier2, err := resolveTier(tierFlag, cfg2)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			if err := promptSrc.reload(); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			fmt.Fprintln(os.Stderr, "reloaded prompts and agent types")
+			// Retune the engine's default model + tier ceiling. Flag/env precedence is
+			// re-applied, so a --model/--tier launched engine keeps that choice; only a
+			// config-sourced default moves. Per-session/per-turn overrides are unaffected and
+			// still clamp to this (possibly new) ceiling. The prompt tier gate stays at the
+			// startup tier (which workspace-tier prompt files loaded is fixed for the process).
+			deps.defaults.set(resolveModel(modelFlag, cfg2), tier2)
+			fmt.Fprintln(os.Stderr, "reloaded prompts, agent types, and config defaults (model, tier)")
 			w.WriteHeader(http.StatusNoContent)
 		})
 		mux.Handle("/", srv)
@@ -212,8 +230,7 @@ var serveCmd = &cobra.Command{
 type serveDeps struct {
 	prov       *openaiprovider.Client
 	workDir    string
-	model      string
-	tier       capability.Tier
+	defaults   *serveDefaults // engine-wide default model + tier ceiling (reloadable)
 	gate       tools.HumanGate
 	registry   tools.Registry
 	mem        memory.Store
@@ -259,22 +276,49 @@ func (d serveDeps) openTurnIO(runID string, obs agent.Observer) (turnIO, error) 
 	}, nil
 }
 
+// serveDefaults holds the engine-wide default model and tier ceiling, re-readable at runtime
+// so POST /reload can pick up config.json edits without a restart. resolveOpts reads a
+// snapshot; the reload handler swaps in freshly-resolved values. Flag/env precedence is
+// re-applied on each reload (via resolveModel/resolveTier), so an engine launched with an
+// explicit --model/--tier keeps that choice — only a config-sourced default moves.
+type serveDefaults struct {
+	mu    sync.RWMutex
+	model string
+	tier  capability.Tier
+}
+
+func newServeDefaults(model string, tier capability.Tier) *serveDefaults {
+	return &serveDefaults{model: model, tier: tier}
+}
+
+func (s *serveDefaults) snapshot() (string, capability.Tier) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.model, s.tier
+}
+
+func (s *serveDefaults) set(model string, tier capability.Tier) {
+	s.mu.Lock()
+	s.model, s.tier = model, tier
+	s.mu.Unlock()
+}
+
 // resolveOpts applies a request's per-run overrides over the serve defaults: model falls back
-// to d.model, and an explicit tier is validated and CLAMPED to no looser than d.tier (the
-// serve-configured ceiling). An empty tier inherits d.tier; an invalid one is an error. This
-// is where the trust policy lives — the engine passes RunOptions through untouched.
+// to the default model, and an explicit tier is validated and CLAMPED to no looser than the
+// default tier (the serve-configured ceiling). An empty tier inherits the ceiling; an invalid
+// one is an error. The defaults are snapshotted (they may have been retuned by POST /reload).
+// This is where the trust policy lives — the engine passes RunOptions through untouched.
 func (d serveDeps) resolveOpts(opts api.RunOptions) (model string, tier capability.Tier, err error) {
-	model = d.model
+	model, tier = d.defaults.snapshot()
 	if opts.Model != "" {
 		model = opts.Model
 	}
-	tier = d.tier
 	if opts.Tier != "" {
 		req, perr := capability.ParseTier(opts.Tier)
 		if perr != nil {
 			return "", "", perr
 		}
-		tier = capability.ClampTier(req, d.tier)
+		tier = capability.ClampTier(req, tier)
 	}
 	return model, tier, nil
 }

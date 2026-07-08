@@ -42,8 +42,13 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
   `POST /sessions/{id}/turns` `{text, model?, tier?}` → `{run_id}` (optional per-turn override,
   same clamp; stream the reply via `GET /runs/{run_id}/events`)
-- `POST /reload` → re-read the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) + `agents/*.md`
-  from disk (400 on a malformed file, keeping the current config); the next run picks up the change
+- `POST /reload` → re-read from disk the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) +
+  `agents/*.md` **and** the `config.json` defaults (default model + tier ceiling), so an operator
+  can retune the engine without a restart (400 on a malformed file/config or bad tier, keeping the
+  current state — no partial reload); the next run picks up the change. Flag/env precedence is
+  re-applied, so an engine launched with an explicit `--model`/`--tier` keeps that choice — only a
+  config-sourced default moves. Per-session/per-turn overrides still clamp to the (possibly new)
+  ceiling. The prompt *tier gate* (which workspace-tier prompt files loaded) stays at the startup tier.
 
 A deliberate session turn also emits a `brief` event on the run's stream (the clean, rendered
 plan the executor was seeded with, plus any critique-loop notes), published out-of-band like the

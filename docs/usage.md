@@ -118,7 +118,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent client <task>` | Start & stream a run on a running engine; prompts for approvals. |
 | `agent eval <task>` | Run one task under N config variants and compare outputs + token usage. |
 | `agent prompts show` | Print the composed effective prompt (executor by default; `--planner`/`--critic`/`--all`) without a run — honors `--workspace`/`--tier`/`--context-file`/`--no-context-files`. |
-| `agent reload` | Tell a running engine to re-read its prompt + agent-type files (no restart). |
+| `agent reload` | Tell a running engine to re-read its prompt + agent-type files and `config.json` defaults (model, tier) — no restart. |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the engine's audit log. |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
@@ -387,8 +387,12 @@ After editing any of these files, pick up the changes in place:
 
 - **`agent chat`** — type **`/reload`** (rebuilds the executor, keeps the conversation).
 - **`agent serve`** — **`agent reload --addr <engine>`** (or `curl -XPOST <engine>/reload`)
-  re-reads the files so the *next* run uses them. A malformed file is rejected (HTTP 400) and
-  the engine keeps its current configuration; in-flight runs are unaffected.
+  re-reads the files **and the `config.json` defaults (default model + tier ceiling)** so the
+  *next* run uses them — retune the engine's model/tier without a restart. A malformed file or
+  config (or a bad tier) is rejected (HTTP 400) and the engine keeps its current configuration
+  entirely (no partial reload); in-flight runs are unaffected. Flag/env precedence is re-applied,
+  so an engine launched with an explicit `--model`/`--tier` keeps that choice — only a
+  config-sourced default moves.
 
 ```bash
 ./agent reload --addr 127.0.0.1:8080     # or --addr <alias>

@@ -228,10 +228,10 @@ func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit
 	return out, nil
 }
 
-// Reload tells the engine to re-read its prompt files (SYSTEM.md/AGENTS.md) and
-// agent-type catalog (agents/*.md) from disk, so edits take effect on subsequent runs
-// without restarting the engine. A malformed file leaves the current config intact and
-// returns an error.
+// Reload tells the engine to re-read, from disk, its prompt files (SYSTEM.md/AGENTS.md/
+// PLANNER.md/CRITIC.md), agent-type catalog (agents/*.md), and config.json defaults (the
+// default model + tier ceiling), so edits take effect on subsequent runs without restarting
+// the engine. A malformed file or config leaves the current state intact and returns an error.
 func (c *Client) Reload(ctx context.Context) error {
 	req, err := c.newRequest(ctx, http.MethodPost, "/reload", nil)
 	if err != nil {
