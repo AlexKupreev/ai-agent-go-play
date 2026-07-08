@@ -17,6 +17,7 @@ import (
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
+	"ai-agent-go-play/internal/session"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -111,6 +112,15 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
+		// Read-only access to past conversations (sessions written by serve / Telegram / a
+		// remote chat), so the agent can revisit "what did we discuss last time". Local chat's
+		// own conversation is in-process — not in this store — so there's no "current" id. Kept
+		// as a nil interface when the path can't resolve, so the tools are simply omitted.
+		var sessReader tools.SessionReader
+		if dir, err := sessionStorePath(); err == nil {
+			sessReader = session.NewFileStore(dir)
+		}
+
 		// Deliberate chat (--plan) is disk-backed: a session-scoped scratch dir holds working
 		// artifacts and a manifest indexes them (chat-planner.md §D3–D5). Both nil in bare chat,
 		// so the executor built below is unchanged there. The manifest lives under the run's
@@ -162,6 +172,7 @@ var chatCmd = &cobra.Command{
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
 				ContextLimit: resolveContextLimit(model, cfg),
+				Sessions:     sessReader,
 				// nil/"" in bare chat ⇒ no record_artifact and no scratch note (unchanged).
 				Manifest: manifest, ScratchDir: scratchDir,
 			}), nil

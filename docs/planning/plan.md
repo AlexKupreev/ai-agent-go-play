@@ -648,10 +648,18 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     (serve session turns re-seed from the compacted view). Stage 2.
 - [ ] Token **budget** per run/session: soft warning fed into context at ~80%, optional hard
     stop — a dial alongside the trust tier. Builds on 6a's totals.
-- [ ] Cross-session reference (explicit "look at yesterday's results" / implicit recall of
-    stored progress): let the agent find + read prior sessions (or lean on the memory store for
-    deliberately-saved facts). Design open — see the discussion note; not the per-session "manifest"
-    framing.
+- [x] **Explicit cross-session reference — DONE 2026-07-08.** Read-only session tools
+    `list_sessions` / `search_sessions` / `read_session` (`internal/tools/sessions.go`, over a
+    `SessionReader` = the session store) so *"look at yesterday's results"* resolves to a search +
+    read, not a guess. Wired via `ExecutorConfig.Sessions` in `serve` (its live store) and local
+    `agent chat` (read-only over `<config-dir>/sessions/`, so it sees serve/Telegram conversations).
+    Not sandbox-exposed. Tests: `TestSessionTools`, `TestSessionTools_EmptyStore`; roster
+    live-verified via `prompts show`.
+- [ ] **Implicit recall / profile (open).** The English-lessons case ("start next lesson" → recall
+    my level/progress) is really *push* context, not *pull*: today `remember`/`recall` cover it but
+    depend on the model choosing to recall. Candidate: an always-loaded, agent-writable **profile**
+    (a reserved memory key or `PROFILE.md`) injected at session start — lighter than Projects, which
+    is a heavier named-workspace/auto-switch mechanism. Decide profile vs projects before building.
 
 **Risks/notes:** keep the model-facing self-tools read-only and un-sandboxed (introspection,
 not effect). Token totals are cheap and always-on; cost/budget are opt-in extras. Don't let a

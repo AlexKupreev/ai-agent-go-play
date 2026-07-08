@@ -5,6 +5,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/memory"
+	"ai-agent-go-play/internal/session"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -63,12 +64,16 @@ var promptsShowCmd = &cobra.Command{
 			return err
 		}
 		prov := newProvider(cfg)
+		var sessReader tools.SessionReader
+		if dir, err := sessionStorePath(); err == nil {
+			sessReader = session.NewFileStore(dir)
+		}
 		executor := agent.NewExecutor(agent.ExecutorConfig{
 			Provider: prov, WorkDir: workDir, Model: model, Tier: tier,
 			Registry: registry, Memory: mem, Docs: selfDocs,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-			StatusDirs: agentStateDirs(),
+			StatusDirs: agentStateDirs(), Sessions: sessReader,
 		})
 
 		showExecutor := promptsAllFlag || (!promptsPlannerFlag && !promptsCriticFlag)

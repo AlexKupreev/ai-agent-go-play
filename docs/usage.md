@@ -625,6 +625,18 @@ any frontend — the engine exposes *sessions*. A session is a persisted convers
 *turn* is a run whose executor is seeded with the session's history, so it streams and
 parks approvals exactly like any run.
 
+**Revisiting past conversations.** The agent can look back at earlier sessions through three
+read-only, trusted tools (wired wherever a session store is present — `agent serve` and
+`agent chat`, which reads the sessions written by serve/Telegram):
+
+- `list_sessions` — recent conversations (id, title, turns, last-active), newest first.
+- `search_sessions <query>` — the best-matching stored sessions for a topic, with snippets.
+- `read_session <id>` — the full transcript of one session (long ones truncated).
+
+So *"look at the results we discussed yesterday"* resolves to a search/read, not a guess. These
+never modify a session — they only read the durable record. (For facts you want carried forward
+automatically, prefer `remember`/`recall`, which is push-nothing, pull-on-demand memory.)
+
 The ergonomic way to drive a session from the terminal is **[`agent chat --addr`](#agent-chat)**
 (start / `--list` / `--session <id>` to resume). The raw HTTP surface below is what it (and
 the Telegram bot) sit on:

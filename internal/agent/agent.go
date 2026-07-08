@@ -445,6 +445,11 @@ type ExecutorConfig struct {
 	Usage       tools.UsageContext // token-usage ledger; nil Ledger ⇒ usage tool omitted
 	AuditReader audit.Reader       // audit query side; nil ⇒ recent_activity omitted
 
+	// Sessions, when set, wires the read-only session-introspection tools (list/search/
+	// read_session) so the agent can revisit earlier conversations. Nil ⇒ those tools are
+	// omitted (e.g. one-shot runs with no session store). See tools.NewSessionTools.
+	Sessions tools.SessionReader
+
 	// StatusDirs are the agent's on-disk state locations (sessions, transcripts, scratch,
 	// catalog, memory, audit), surfaced by the status tool's disk-usage section. The cmd
 	// layer resolves them (internal/agent/tools resolve no paths); empty ⇒ section omitted.
@@ -602,6 +607,14 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// Self-audit: review its own recorded activity. Omitted when no reader is wired.
 	if auditReader != nil {
 		builtins = append(builtins, tools.NewRecentActivityTool(auditReader))
+	}
+	// Session introspection: revisit earlier conversations (list/search/read). Read-only,
+	// trusted, not sandbox-exposed. Omitted when no session store is wired.
+	if cfg.Sessions != nil {
+		builtins = append(builtins, tools.NewSessionTools(tools.SessionToolDeps{
+			Reader:    cfg.Sessions,
+			CurrentID: cfg.Usage.SessionID,
+		})...)
 	}
 	a := newAgent(p, model, prompt, builtins, obs)
 	self = a

@@ -132,6 +132,7 @@ var serveCmd = &cobra.Command{
 			limits:        resolveAgentLimits(cfg),
 			spawnDepth:    resolveSpawnDepth(cfg),
 			contextLimits: cfg.ContextLimits,
+			sessions:      sessions,
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -241,6 +242,7 @@ type serveDeps struct {
 	prompts    *promptState      // reloadable prompt customization + agent-type catalog
 	limits     agent.Limits      // per-run bounds (from config)
 	spawnDepth int               // sub-agent delegation budget (from config)
+	sessions   session.Store     // durable session store, for the read-only session tools
 	// contextLimits overrides the context-window size per model id for the usage gauge (from
 	// config.json context_limits). Fixed at startup; the per-turn model resolves against it.
 	contextLimits map[string]int
@@ -345,6 +347,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
 		StatusDirs: agentStateDirs(), Limits: d.limits,
 		ContextLimit: contextLimitFor(model, d.contextLimits),
+		Sessions:     d.sessions,
 		Manifest:     manifest, ScratchDir: scratchDir,
 	})
 }
