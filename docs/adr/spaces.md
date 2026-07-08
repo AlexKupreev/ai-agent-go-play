@@ -98,8 +98,21 @@ space becoming a *column*, not a directory. Crucially this is a **swap behind th
 `memory.Store` interface** (Get/Put/Search/List/Delete), so callers don't change. We build sharded
 JSON now (single-binary, consistent with the other stores) and keep the interface the seam.
 
-*(Decision made on the "guess if optimal" question: sharded-JSON now, SQLite when search or a single
-space's size bites. Not one growing file, and not SQLite pre-emptively.)*
+*(Decision made on the "guess if optimal" question: **sharded-JSON now**, SQLite when search or a
+single space's size bites. Not one growing file, and not SQLite pre-emptively.)*
+
+**Alternatives weighed (2026-07-08), sharded-JSON chosen:**
+
+- **`modernc.org/sqlite`** (pure-Go, so it survives the `CGO_ENABLED=0` static build — the cgo
+  `mattn/go-sqlite3` does not) — SQL + FTS + a `space_id` column, and the stated end-goal of one
+  transactional store. Rejected *for now* only for its weight (notably larger binary + slower builds);
+  it stays the migration target.
+- **`bbolt`** (pure-Go B+tree KV, small) — per-key writes with buckets mapping 1:1 to spaces; the
+  neatest technical fit, but KV-only (no relational/audit consolidation) and still a new dep.
+- **Sharded JSON (chosen)** — no new dependency, keeps the lean static binary, and bounds each
+  `remember` rewrite to one space's file. Its residual cost (rewrite a space's whole file per `Put`,
+  active space resident in RAM) is acceptable at family scale, and the `memory.Store` interface makes
+  the eventual swap to SQLite/bbolt a one-package change — so nothing here forecloses it.
 
 ---
 
@@ -181,7 +194,9 @@ Each stage leaves the agent working; P1 ships the switch, P2 the value.
 - **Active space per session, sticky** — reuses the model/tier session-sticky machinery (§5).
 - **Explicit switch only** in v1 (`/space`, `switch_space`); no auto-detection (§9).
 - **Global default** — unscoped/existing memory stays visible everywhere; no migration (§4).
-- **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3).
+- **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3); chosen over
+  `modernc.org/sqlite` and `bbolt` this round to avoid a new dependency and keep the `CGO_ENABLED=0`
+  static binary lean (§3 alternatives).
 - **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
 
 ## 9. Open questions
