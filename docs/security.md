@@ -48,6 +48,19 @@ runaway response sizes.
 (e.g. cloud-metadata `169.254.169.254`) and the broker would have fetched it. The allowlist is the
 entire boundary, so it must hold across every hop.
 
+### 1a′. Secret injection (credentials the model never sees)
+
+An `http_get` cap may name a stored secret (`secret` + `secret_in`, e.g. `header:x-api-key`). The
+broker resolves the value from config (`secrets`) and sets it on the request **host-side**, so the
+credential never enters the sandbox's Lua state, the authored tool's source, the tool catalog, or the
+audit log — only the secret's *name* is recorded (`arg: "host [secret:name]"`). It is **bounded to
+the same host allowlist** as the fetch (and the redirect re-validation above), so it can't be steered
+off the approved host. **Fail-closed:** a cap naming a secret with no matching store, or an unknown
+secret, is denied rather than fetched bare. A secret-bearing cap **always requires operator
+approval**, even on `permissive` — the grant of a host+secret pairing is the one place to catch
+misuse. Managed with `agent config set-secret`/`rm-secret`/`secrets` (values never printed). See
+[`adr/external-apis.md`](adr/external-apis.md) §2.
+
 ### 1b. Symlink-resolved path containment
 
 `pathAllowed` / `resolvePath` (`capability.go`) resolve symlinks on **both** the prefix and the

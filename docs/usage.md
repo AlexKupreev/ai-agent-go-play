@@ -127,6 +127,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent tool revoke <name>` | Remove an authored tool. |
 | `agent config set-key\|set-base-url\|set-model\|set-tier\|set-verbose` | Save API key / OpenAI-compatible base URL / default model / default tier / default trace verbosity. |
 | `agent config set-engine\|rm-engine\|engines` | Name an engine address as an alias for `--addr` (and list/remove them). |
+| `agent config set-secret\|rm-secret\|secrets` | Store / remove / list (names only) credentials an authored tool can inject into an approved `http_get`, never model-visible. See [`adr/external-apis.md`](adr/external-apis.md). |
 
 Every command that talks to a running engine takes `--addr`, which accepts a literal
 `host:port` **or** an alias saved with `agent config set-engine` (see [engine

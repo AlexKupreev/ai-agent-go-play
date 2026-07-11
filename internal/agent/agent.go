@@ -436,6 +436,12 @@ type ExecutorConfig struct {
 	Audit    audit.Recorder    // brokered-effect audit sink
 	Tier     capability.Tier   // trust tier governing capability auto-approval
 
+	// Secrets resolves a named secret (config `secrets`) for the broker to inject into an
+	// authored tool's brokered HTTP request, host-side — the value never reaches the model or
+	// the sandbox. Nil ⇒ no secret store; a capability that names a secret is denied. The cmd
+	// layer builds it from config; see docs/adr/external-apis.md §2.
+	Secrets func(name string) (string, bool)
+
 	// Gate is the human-in-the-loop seam: it gates risky actions (destructive shell,
 	// capability escalation) and answers the executor's ask_user questions. Pass a
 	// queue-backed gate to route both over the API to a frontend. Nil defaults to
@@ -510,6 +516,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// cycle; the broker only invokes it at run time.
 	broker := capability.NewBroker(rec, nil)
 	broker.MaxHTTPBytes = cfg.Limits.MaxHTTPBytes // 0 ⇒ broker applies its own default
+	broker.Secrets = cfg.Secrets                  // nil ⇒ a cap that names a secret is denied
 	glue := sandbox.NewLuaGlue(broker)
 
 	// Working-directory anchor: the shell reads it live at each command (a mutable anchor that

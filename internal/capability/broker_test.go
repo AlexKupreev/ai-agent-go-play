@@ -26,6 +26,94 @@ func fakeHTTP(body string) *http.Client {
 	})}
 }
 
+// capturingHTTP returns a client whose transport records the last request it saw, so a test
+// can assert what the broker injected (header/query) without a live server.
+func capturingHTTP(seen **http.Request) *http.Client {
+	return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		*seen = r
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
+	})}
+}
+
+// TestBrokerHTTPGet_SecretInjection covers the three secret placements/failure modes: a
+// header secret and a query secret reach the request with the resolved value, while the value
+// never appears in the audit log (only the name); a named-but-unresolvable secret and a
+// missing secret store both deny (fail closed).
+func TestBrokerHTTPGet_SecretInjection(t *testing.T) {
+	t.Run("header", func(t *testing.T) {
+		rec := &audit.MemoryRecorder{}
+		b := NewBroker(rec, nil)
+		var seen *http.Request
+		b.HTTP = capturingHTTP(&seen)
+		b.Secrets = func(name string) (string, bool) {
+			if name == "scrapingant" {
+				return "SECRETVAL", true
+			}
+			return "", false
+		}
+		grant := &GrantContext{Run: "r1", Granted: []Capability{
+			{Kind: HTTPGet, Hosts: []string{"api.scrapingant.com"}, Secret: "scrapingant", SecretIn: "header:x-api-key"},
+		}}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://api.scrapingant.com/v2/general?url=x"); err != nil {
+			t.Fatalf("HTTPGet: %v", err)
+		}
+		if got := seen.Header.Get("x-api-key"); got != "SECRETVAL" {
+			t.Fatalf("injected header = %q, want SECRETVAL", got)
+		}
+		// The audit summary names the secret but never carries its value.
+		ev := lastEvent(t, rec)
+		arg, _ := ev.Fields["arg"].(string)
+		if !strings.Contains(arg, "secret:scrapingant") {
+			t.Errorf("audit arg %q should name the secret", arg)
+		}
+		if strings.Contains(arg, "SECRETVAL") {
+			t.Errorf("audit arg %q leaked the secret value", arg)
+		}
+	})
+
+	t.Run("query", func(t *testing.T) {
+		b := NewBroker(&audit.MemoryRecorder{}, nil)
+		var seen *http.Request
+		b.HTTP = capturingHTTP(&seen)
+		b.Secrets = func(string) (string, bool) { return "QSECRET", true }
+		grant := &GrantContext{Run: "r1", Granted: []Capability{
+			{Kind: HTTPGet, Hosts: []string{"api.scrapingant.com"}, Secret: "scrapingant", SecretIn: "query:x-api-key"},
+		}}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://api.scrapingant.com/v2/general?url=x"); err != nil {
+			t.Fatalf("HTTPGet: %v", err)
+		}
+		if got := seen.URL.Query().Get("x-api-key"); got != "QSECRET" {
+			t.Fatalf("injected query param = %q, want QSECRET", got)
+		}
+		if got := seen.URL.Query().Get("url"); got != "x" {
+			t.Fatalf("existing query param url = %q, want it preserved", got)
+		}
+	})
+
+	t.Run("unknown secret denies", func(t *testing.T) {
+		b := NewBroker(&audit.MemoryRecorder{}, nil)
+		b.HTTP = fakeHTTP("ok")
+		b.Secrets = func(string) (string, bool) { return "", false }
+		grant := &GrantContext{Run: "r1", Granted: []Capability{
+			{Kind: HTTPGet, Hosts: []string{"h.com"}, Secret: "missing", SecretIn: "header:k"},
+		}}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://h.com/x"); err == nil {
+			t.Fatal("unknown secret should deny")
+		}
+	})
+
+	t.Run("no secret store denies", func(t *testing.T) {
+		b := NewBroker(&audit.MemoryRecorder{}, nil) // Secrets nil
+		b.HTTP = fakeHTTP("ok")
+		grant := &GrantContext{Run: "r1", Granted: []Capability{
+			{Kind: HTTPGet, Hosts: []string{"h.com"}, Secret: "s", SecretIn: "header:k"},
+		}}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://h.com/x"); err == nil {
+			t.Fatal("a secret-bearing cap with no secret store should deny (fail closed)")
+		}
+	})
+}
+
 func lastEvent(t *testing.T, rec *audit.MemoryRecorder) audit.Event {
 	t.Helper()
 	ev := rec.Snapshot()

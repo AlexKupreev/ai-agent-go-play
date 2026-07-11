@@ -43,6 +43,12 @@ type Config struct {
 	// value that is not a known alias is used verbatim (see resolveAddr).
 	Engines map[string]string `json:"engines,omitempty"`
 
+	// Secrets maps a name to a credential the capability broker injects into an authored
+	// tool's brokered HTTP request (a cap's `secret`/`secret_in`), host-side — the value
+	// never reaches the model, the sandbox, the tool catalog, or the audit log. Managed by
+	// `config set-secret`/`rm-secret`/`secrets`. See docs/adr/external-apis.md §2.
+	Secrets map[string]string `json:"secrets,omitempty"`
+
 	// Limits tunes the built-in bounds without a rebuild (0/unset ⇒ the built-in default).
 	// omitzero (not omitempty) so an all-default Limits is dropped from config.json entirely.
 	Limits ConfigLimits `json:"limits,omitzero"`
@@ -216,6 +222,66 @@ var enginesCmd = &cobra.Command{
 	},
 }
 
+var setSecretCmd = &cobra.Command{
+	Use:   "set-secret <name> <value>",
+	Short: "Store a secret an authored tool can inject into an approved http_get (never model-visible)",
+	Long: "Save a credential under a name. An agent-authored tool can then request an http_get " +
+		"capability that references the secret by name (`secret`/`secret_in`); the broker injects " +
+		"the value host-side into a header or query param bounded to the tool's approved host. The " +
+		"value never reaches the model, the sandbox, the tool catalog, or the audit log — only the " +
+		"name is recorded. Granting such a capability always requires your approval. See " +
+		"docs/adr/external-apis.md.",
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, value := args[0], args[1]
+		if strings.TrimSpace(name) == "" || value == "" {
+			return fmt.Errorf("both a name and a value are required")
+		}
+		cfg := loadConfigOrEmpty()
+		if cfg.Secrets == nil {
+			cfg.Secrets = map[string]string{}
+		}
+		cfg.Secrets[name] = value
+		return saveConfig(cfg)
+	},
+}
+
+var rmSecretCmd = &cobra.Command{
+	Use:   "rm-secret <name>",
+	Short: "Remove a stored secret",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		if _, ok := cfg.Secrets[args[0]]; !ok {
+			return fmt.Errorf("no secret %q", args[0])
+		}
+		delete(cfg.Secrets, args[0])
+		return saveConfig(cfg)
+	},
+}
+
+var secretsCmd = &cobra.Command{
+	Use:   "secrets",
+	Short: "List stored secret names (values are never printed)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfigOrEmpty()
+		if len(cfg.Secrets) == 0 {
+			fmt.Println("no secrets (add one with: agent config set-secret <name> <value>)")
+			return nil
+		}
+		names := make([]string, 0, len(cfg.Secrets))
+		for n := range cfg.Secrets {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			fmt.Println(n)
+		}
+		return nil
+	},
+}
+
 func init() {
 	configCmd.AddCommand(setKeyCmd)
 	configCmd.AddCommand(setBaseURLCmd)
@@ -225,6 +291,24 @@ func init() {
 	configCmd.AddCommand(setEngineCmd)
 	configCmd.AddCommand(rmEngineCmd)
 	configCmd.AddCommand(enginesCmd)
+	configCmd.AddCommand(setSecretCmd)
+	configCmd.AddCommand(rmSecretCmd)
+	configCmd.AddCommand(secretsCmd)
+}
+
+// secretsResolver returns a lookup over the configured secrets for the capability broker
+// (ExecutorConfig.Secrets). It returns nil when no secrets are configured, so a capability
+// that names one is denied (fail closed). The map is copied so a later config reload can't
+// mutate what a running executor closed over.
+func secretsResolver(cfg Config) func(name string) (string, bool) {
+	if len(cfg.Secrets) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(cfg.Secrets))
+	for k, v := range cfg.Secrets {
+		m[k] = v
+	}
+	return func(name string) (string, bool) { v, ok := m[name]; return v, ok }
 }
 
 // configDirFlag is bound to the persistent --config-dir flag (see cmd/root.go).

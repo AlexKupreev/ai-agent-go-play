@@ -126,3 +126,45 @@ func TestClampTier(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilitySecretPlacement(t *testing.T) {
+	ok := []struct{ in, where, key string }{
+		{"header:x-api-key", "header", "x-api-key"},
+		{"header:Authorization", "header", "Authorization"},
+		{"query:token", "query", "token"},
+	}
+	for _, c := range ok {
+		w, k, err := (Capability{SecretIn: c.in}).SecretPlacement()
+		if err != nil || w != c.where || k != c.key {
+			t.Errorf("%q → (%q,%q,%v), want (%q,%q,nil)", c.in, w, k, err, c.where, c.key)
+		}
+	}
+	for _, bad := range []string{"", "x-api-key", "cookie:c", "header:", ":k"} {
+		if _, _, err := (Capability{SecretIn: bad}).SecretPlacement(); err == nil {
+			t.Errorf("SecretPlacement(%q) should error", bad)
+		}
+	}
+}
+
+func TestCapabilityValidate(t *testing.T) {
+	// No secret: always valid regardless of kind.
+	if err := (Capability{Kind: ReadFile}).Validate(); err != nil {
+		t.Errorf("non-secret cap should validate: %v", err)
+	}
+	// Well-formed secret on http_get: valid.
+	if err := (Capability{Kind: HTTPGet, Secret: "s", SecretIn: "header:k"}).Validate(); err != nil {
+		t.Errorf("valid secret cap rejected: %v", err)
+	}
+	// Secret on a non-http_get cap: rejected.
+	if err := (Capability{Kind: ReadFile, Secret: "s", SecretIn: "header:k"}).Validate(); err == nil {
+		t.Error("secret on a read_file cap should be rejected")
+	}
+	// secret_in without secret name: rejected.
+	if err := (Capability{Kind: HTTPGet, SecretIn: "header:k"}).Validate(); err == nil {
+		t.Error("secret_in without a secret name should be rejected")
+	}
+	// Bad placement: rejected.
+	if err := (Capability{Kind: HTTPGet, Secret: "s", SecretIn: "cookie:c"}).Validate(); err == nil {
+		t.Error("bad placement should be rejected")
+	}
+}

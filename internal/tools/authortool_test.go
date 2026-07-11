@@ -219,3 +219,42 @@ func hasAuthoredEvent(rec *audit.MemoryRecorder, name string) bool {
 	}
 	return false
 }
+
+// A secret-bearing http_get cap forces approval even on the permissive tier (the one moment
+// to catch a credential pointed at the wrong host); declining rejects before any effect.
+func TestAuthorTool_SecretCapForcesApprovalOnPermissive(t *testing.T) {
+	f := newAuthorFixture(t, capability.TierPermissive, false) // confirm answers no
+	args := authorArgs("scrape", `return http_get("https://api.scrapingant.com/x")`, "return true")
+	args["required_caps"] = []any{map[string]any{
+		"kind": "http_get", "hosts": []any{"api.scrapingant.com"},
+		"secret": "scrapingant", "secret_in": "header:x-api-key",
+	}}
+	out, _ := f.tool.Run(context.Background(), args)
+	if f.confirm.calls != 1 {
+		t.Fatalf("a secret cap should force one approval even on permissive, got %d", f.confirm.calls)
+	}
+	if !strings.Contains(out, "declined") {
+		t.Errorf("expected decline rejection, got %q", out)
+	}
+	if _, ok := f.reg.Get("scrape"); ok {
+		t.Error("declined tool should not be registered")
+	}
+}
+
+// A malformed secret placement is rejected at authoring (capability validation), before any
+// approval or effect.
+func TestAuthorTool_BadSecretPlacement_Rejected(t *testing.T) {
+	f := newAuthorFixture(t, capability.TierPermissive, true)
+	args := authorArgs("scrape", `return http_get("https://h.com/x")`, "return true")
+	args["required_caps"] = []any{map[string]any{
+		"kind": "http_get", "hosts": []any{"h.com"},
+		"secret": "s", "secret_in": "cookie:c",
+	}}
+	out, _ := f.tool.Run(context.Background(), args)
+	if !strings.Contains(out, "secret_in") {
+		t.Errorf("expected a secret-placement rejection, got %q", out)
+	}
+	if _, ok := f.reg.Get("scrape"); ok {
+		t.Error("invalid tool should not be registered")
+	}
+}

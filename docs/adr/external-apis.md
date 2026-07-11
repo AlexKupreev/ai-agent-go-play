@@ -10,7 +10,14 @@ Companion to [`../security.md`](../security.md) (the capability broker + tiers t
 [`../design.md`](../design.md) §1 (single static binary, one trusted box — the constraint that rules
 plugins out).
 
-**Status: decided in principle (embed via config-gated capability + secret injection); not built.**
+**Status: the secret-injection primitive (§2) is BUILT.** The `Capability` carries `secret`/
+`secret_in`; the broker resolves the value from config (`secrets`) and injects it into an
+`http_get` host-side (header or query param), bounded to the cap's host allowlist — never entering
+the sandbox, the tool source, or the audit log (only the name is recorded). Secret-bearing caps
+always require operator approval (even on permissive). Managed with `agent config
+set-secret`/`rm-secret`/`secrets`. Authored-tool integrations (§1B) work through it now. **Not
+built:** the ScrapingAnt-specific `web_fetch` enhancement (§1A) — with §2 in place it is a thin
+optional add whenever wanted; and any plugin/MCP path (§1C, deliberately deferred).
 
 ---
 
@@ -46,7 +53,7 @@ built.
 
 ---
 
-## 2. Secret injection — the missing primitive (unblocks B, and A cleanly)
+## 2. Secret injection — the missing primitive (unblocks B, and A cleanly)  *(BUILT)*
 
 The reusable thing to build. Give a capability a **named secret reference** the broker resolves
 host-side and injects at call time; the script names the secret but never sees its value.

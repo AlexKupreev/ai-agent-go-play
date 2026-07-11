@@ -44,6 +44,13 @@ type Broker struct {
 	// Exposed reports whether a trusted built-in has been deliberately opened to
 	// the sandbox. Consulted only for Trusted names. Nil ⇒ none exposed.
 	Exposed func(name string) bool
+
+	// Secrets resolves a named secret (a capability's Secret field) to its value, which
+	// HTTPGet injects into the request host-side (a header or query param). The value never
+	// enters the sandbox, the tool source, or the audit log — only the secret's name is
+	// recorded. Nil ⇒ no secret store; a cap that names a secret is denied (fail closed).
+	// See docs/adr/external-apis.md §2.
+	Secrets func(name string) (string, bool)
 }
 
 func (b *Broker) trusted(name string) bool { return b.Trusted != nil && b.Trusted(name) }
@@ -95,10 +102,44 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 		b.record(g, HTTPGet, u.Host, false)
 		return "", denied(HTTPGet, u.Host)
 	}
+	// The audit summary carries the secret's NAME (not value) when one is used, so the log
+	// shows a credential was exercised without ever recording it.
+	summary := u.Host
+	if c.Secret != "" {
+		summary += " [secret:" + c.Secret + "]"
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
+	}
+	// Inject a named secret host-side, if the cap requests one. It is bounded to the same
+	// host allowlist as the fetch (the request only reaches allowed hosts, and redirects are
+	// re-checked below), so the credential can't be steered off the approved host. Fail
+	// closed: a named-but-unresolvable secret denies the call rather than fetching without it.
+	if c.Secret != "" {
+		if b.Secrets == nil {
+			b.record(g, HTTPGet, summary, false)
+			return "", denied(HTTPGet, "secret "+c.Secret+" requested but no secret store is configured")
+		}
+		val, found := b.Secrets(c.Secret)
+		if !found || val == "" {
+			b.record(g, HTTPGet, summary, false)
+			return "", denied(HTTPGet, "unknown or empty secret "+c.Secret)
+		}
+		where, key, perr := c.SecretPlacement()
+		if perr != nil {
+			b.record(g, HTTPGet, summary, false)
+			return "", fmt.Errorf("http_get: %w", perr)
+		}
+		switch where {
+		case "header":
+			req.Header.Set(key, val)
+		case "query":
+			q := req.URL.Query()
+			q.Set(key, val)
+			req.URL.RawQuery = q.Encode()
+		}
 	}
 	base := b.HTTP
 	if base == nil {
@@ -134,7 +175,7 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 	if err != nil {
 		return "", err
 	}
-	b.record(g, HTTPGet, u.Host, true)
+	b.record(g, HTTPGet, summary, true)
 	return string(body), nil
 }
 

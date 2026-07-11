@@ -133,6 +133,7 @@ var serveCmd = &cobra.Command{
 			spawnDepth:    resolveSpawnDepth(cfg),
 			contextLimits: cfg.ContextLimits,
 			sessions:      sessions,
+			secrets:       secretsResolver(cfg),
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -254,6 +255,9 @@ type serveDeps struct {
 	// contextLimits overrides the context-window size per model id for the usage gauge (from
 	// config.json context_limits). Fixed at startup; the per-turn model resolves against it.
 	contextLimits map[string]int
+	// secrets resolves a named secret for the broker to inject into an authored tool's
+	// brokered HTTP request, host-side (config `secrets`). Nil ⇒ no secret store.
+	secrets func(name string) (string, bool)
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -357,6 +361,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		ContextLimit: contextLimitFor(model, d.contextLimits),
 		Sessions:     d.sessions,
 		Manifest:     manifest, ScratchDir: scratchDir,
+		Secrets: d.secrets,
 	})
 }
 

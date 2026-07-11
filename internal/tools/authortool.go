@@ -59,9 +59,13 @@ func NewAuthorTool(d AuthorToolDeps) Tool {
 			"code":         map[string]any{"type": "string", "description": "Lua body: reads `input`, ends with `return <value>`"},
 			"test":         map[string]any{"type": "string", "description": "Lua smoke test: call tool({...}) and `return true` on success"},
 			"required_caps": map[string]any{
-				"type":        "array",
-				"description": "capabilities the tool needs, e.g. [{\"kind\":\"http_get\",\"hosts\":[\"api.example.com\"]}]",
-				"items":       map[string]any{"type": "object"},
+				"type": "array",
+				"description": "capabilities the tool needs, e.g. [{\"kind\":\"http_get\",\"hosts\":[\"api.example.com\"]}]. " +
+					"To call a keyed external API, add a stored secret to an http_get cap by name — " +
+					"{\"kind\":\"http_get\",\"hosts\":[\"api.svc.com\"],\"secret\":\"svc\",\"secret_in\":\"header:x-api-key\"} " +
+					"(or \"query:<param>\"); the operator stores it with `agent config set-secret <name>`, and the broker " +
+					"injects the value host-side — you never see it. A secret cap always needs operator approval.",
+				"items": map[string]any{"type": "object"},
 			},
 			"scope": map[string]any{"type": "string", "description": "ephemeral (this run only) | shared (persists). Default ephemeral.", "enum": []any{"ephemeral", "user", "shared"}},
 		},
@@ -164,7 +168,10 @@ func (d AuthorToolDeps) validate(spec ToolSpec) string {
 func (d AuthorToolDeps) approve(ctx context.Context, spec ToolSpec) string {
 	var beyond []string
 	for _, c := range spec.RequiredCaps {
-		if !d.Tier.AutoApproves(c.Kind) {
+		// A secret-bearing cap ALWAYS requires approval, even on permissive: the one moment
+		// to catch a credential being pointed at the wrong host is when the host+secret pairing
+		// is granted. Otherwise, the tier's auto-approve policy decides.
+		if c.Secret != "" || !d.Tier.AutoApproves(c.Kind) {
 			beyond = append(beyond, capSummary(c))
 		}
 	}
@@ -245,6 +252,9 @@ func parseCaps(v any) ([]capability.Capability, error) {
 		if c.Kind == "" {
 			return nil, fmt.Errorf("each capability needs a non-empty \"kind\"")
 		}
+		if err := c.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	return caps, nil
 }
@@ -265,7 +275,11 @@ func parseScope(v any) (Scope, error) {
 func capSummary(c capability.Capability) string {
 	switch c.Kind {
 	case capability.HTTPGet:
-		return fmt.Sprintf("http_get → %s", strings.Join(c.Hosts, ", "))
+		s := fmt.Sprintf("http_get → %s", strings.Join(c.Hosts, ", "))
+		if c.Secret != "" {
+			s += fmt.Sprintf(" (secret %q in %s)", c.Secret, c.SecretIn)
+		}
+		return s
 	case capability.ReadFile, capability.WriteFile:
 		return fmt.Sprintf("%s → %s", c.Kind, c.PathPrefix)
 	case capability.CallTool:

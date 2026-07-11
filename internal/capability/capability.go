@@ -33,6 +33,49 @@ type Capability struct {
 	Hosts      []string `json:"hosts,omitempty"`       // HTTPGet: host patterns ("example.com", "*.example.com")
 	PathPrefix string   `json:"path_prefix,omitempty"` // ReadFile/WriteFile: paths must live under this prefix
 	Tools      []string `json:"tools,omitempty"`       // CallTool: allowed tool names ("*" = any)
+
+	// Secret (HTTPGet only) names a stored secret (config `secrets`) the broker resolves and
+	// injects into the request host-side — the authored script names it but never sees the
+	// value, which stays out of the sandbox, the tool source, and the audit log
+	// (docs/adr/external-apis.md §2). SecretIn places it: "header:<Name>" or "query:<param>".
+	// A cap that names a secret always requires human approval (author_tool), never auto.
+	Secret   string `json:"secret,omitempty"`
+	SecretIn string `json:"secret_in,omitempty"`
+}
+
+// SecretPlacement parses SecretIn into where ("header"|"query") and the header/param key.
+// It errors on a malformed or unsupported placement, so a bad grant is caught at authoring
+// (author_tool validation) rather than silently dropping the credential at runtime.
+func (c Capability) SecretPlacement() (where, key string, err error) {
+	kind, name, ok := strings.Cut(c.SecretIn, ":")
+	name = strings.TrimSpace(name)
+	if !ok || name == "" {
+		return "", "", fmt.Errorf("secret_in must be %q or %q, got %q", "header:<Name>", "query:<param>", c.SecretIn)
+	}
+	switch kind {
+	case "header", "query":
+		return kind, name, nil
+	default:
+		return "", "", fmt.Errorf("secret_in placement must be \"header\" or \"query\", got %q", kind)
+	}
+}
+
+// Validate checks the internal consistency of a capability that isn't already enforced by
+// the allowlist match at call time — currently, that a secret is only attached to an HTTPGet
+// cap and carries a well-formed placement. Called by author_tool so a malformed grant is
+// rejected up front.
+func (c Capability) Validate() error {
+	if c.Secret == "" && c.SecretIn == "" {
+		return nil
+	}
+	if c.Kind != HTTPGet {
+		return fmt.Errorf("secret is only supported on an http_get capability, not %q", c.Kind)
+	}
+	if c.Secret == "" {
+		return fmt.Errorf("secret_in is set but secret (the secret name) is empty")
+	}
+	_, _, err := c.SecretPlacement()
+	return err
 }
 
 // Tier is the default-allow policy band for a run (generalizes pi's
