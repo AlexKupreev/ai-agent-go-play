@@ -335,3 +335,34 @@ func TestConfigDirPrecedence(t *testing.T) {
 		}
 	})
 }
+
+func TestSecretsResolver(t *testing.T) {
+	// No config, no env → nil (fail closed: a cap naming a secret is denied).
+	if r := secretsResolver(Config{}); r != nil {
+		t.Fatal("empty config + no env should yield a nil resolver")
+	}
+
+	// Config-only secret resolves.
+	r := secretsResolver(Config{Secrets: map[string]string{"scrapingant": "cfgval"}})
+	if r == nil {
+		t.Fatal("config secret should yield a resolver")
+	}
+	if v, ok := r("scrapingant"); !ok || v != "cfgval" {
+		t.Fatalf("config secret = (%q,%v), want (cfgval,true)", v, ok)
+	}
+	if _, ok := r("nope"); ok {
+		t.Error("unknown secret should not resolve")
+	}
+
+	// AI_AGENT_SECRET_* env supplies a secret (lowercased name) and overrides config —
+	// the deployment path (e.g. `fly secrets set`).
+	t.Setenv("AI_AGENT_SECRET_SCRAPINGANT", "envval")
+	t.Setenv("AI_AGENT_SECRET_OTHER", "o")
+	r = secretsResolver(Config{Secrets: map[string]string{"scrapingant": "cfgval"}})
+	if v, ok := r("scrapingant"); !ok || v != "envval" {
+		t.Fatalf("env should override config: got (%q,%v), want (envval,true)", v, ok)
+	}
+	if v, ok := r("other"); !ok || v != "o" {
+		t.Fatalf("env-only secret = (%q,%v), want (o,true)", v, ok)
+	}
+}

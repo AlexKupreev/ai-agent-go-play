@@ -63,7 +63,8 @@ func NewAuthorTool(d AuthorToolDeps) Tool {
 				"description": "capabilities the tool needs, e.g. [{\"kind\":\"http_get\",\"hosts\":[\"api.example.com\"]}]. " +
 					"To call a keyed external API, add a stored secret to an http_get cap by name — " +
 					"{\"kind\":\"http_get\",\"hosts\":[\"api.svc.com\"],\"secret\":\"svc\",\"secret_in\":\"header:x-api-key\"} " +
-					"(or \"query:<param>\"); the operator stores it with `agent config set-secret <name>`, and the broker " +
+					"(secret_in is \"header:<Name>\", \"query:<param>\", or \"bearer\" for Authorization: Bearer <token>); " +
+					"the operator stores it with `agent config set-secret <name>`, and the broker " +
 					"injects the value host-side — you never see it. A secret cap always needs operator approval.",
 				"items": map[string]any{"type": "object"},
 			},

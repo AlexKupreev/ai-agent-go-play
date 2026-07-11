@@ -37,26 +37,33 @@ type Capability struct {
 	// Secret (HTTPGet only) names a stored secret (config `secrets`) the broker resolves and
 	// injects into the request host-side — the authored script names it but never sees the
 	// value, which stays out of the sandbox, the tool source, and the audit log
-	// (docs/adr/external-apis.md §2). SecretIn places it: "header:<Name>" or "query:<param>".
-	// A cap that names a secret always requires human approval (author_tool), never auto.
+	// (docs/adr/external-apis.md §2). SecretIn places it: "header:<Name>", "query:<param>", or
+	// "bearer" (shorthand for the Authorization: Bearer <value> scheme). A cap that names a
+	// secret always requires human approval (author_tool), never auto.
 	Secret   string `json:"secret,omitempty"`
 	SecretIn string `json:"secret_in,omitempty"`
 }
 
-// SecretPlacement parses SecretIn into where ("header"|"query") and the header/param key.
-// It errors on a malformed or unsupported placement, so a bad grant is caught at authoring
-// (author_tool validation) rather than silently dropping the credential at runtime.
-func (c Capability) SecretPlacement() (where, key string, err error) {
+// SecretPlacement parses SecretIn into where ("header"|"query"), the header/param key, and a
+// prefix prepended to the value (non-empty only for the "bearer" scheme). It errors on a
+// malformed or unsupported placement, so a bad grant is caught at authoring (author_tool
+// validation) rather than silently dropping the credential at runtime.
+func (c Capability) SecretPlacement() (where, key, prefix string, err error) {
+	// "bearer" is a shorthand for the ubiquitous OAuth2 scheme: Authorization: Bearer <token>,
+	// so the stored secret can be the raw token rather than "Bearer …".
+	if c.SecretIn == "bearer" {
+		return "header", "Authorization", "Bearer ", nil
+	}
 	kind, name, ok := strings.Cut(c.SecretIn, ":")
 	name = strings.TrimSpace(name)
 	if !ok || name == "" {
-		return "", "", fmt.Errorf("secret_in must be %q or %q, got %q", "header:<Name>", "query:<param>", c.SecretIn)
+		return "", "", "", fmt.Errorf("secret_in must be %q, %q, or %q, got %q", "header:<Name>", "query:<param>", "bearer", c.SecretIn)
 	}
 	switch kind {
 	case "header", "query":
-		return kind, name, nil
+		return kind, name, "", nil
 	default:
-		return "", "", fmt.Errorf("secret_in placement must be \"header\" or \"query\", got %q", kind)
+		return "", "", "", fmt.Errorf("secret_in placement must be \"header\", \"query\", or \"bearer\", got %q", kind)
 	}
 }
 
@@ -74,7 +81,7 @@ func (c Capability) Validate() error {
 	if c.Secret == "" {
 		return fmt.Errorf("secret_in is set but secret (the secret name) is empty")
 	}
-	_, _, err := c.SecretPlacement()
+	_, _, _, err := c.SecretPlacement()
 	return err
 }
 

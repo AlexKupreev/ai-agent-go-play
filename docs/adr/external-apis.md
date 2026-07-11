@@ -58,17 +58,24 @@ built.
 The reusable thing to build. Give a capability a **named secret reference** the broker resolves
 host-side and injects at call time; the script names the secret but never sees its value.
 
-- **Config:** a `secrets` map in `config.json` (`{"scrapingant": "…", "…": "…"}`), set via a new
+- **Config:** a `secrets` map in `config.json` (`{"scrapingant": "…", "…": "…"}`), set via
   `agent config set-secret <name> <value>` (writing the same file `openai_key` lives in — same trust
-  boundary, already as sensitive as the API key). File-mode `0600` as today.
-- **Capability shape:** extend `Capability` with an optional `Secret string` (a *name*, not a value)
-  and, for HTTP, a placement (`header:Authorization` / `header:x-api-key` / `query:token`). The broker,
-  on `HTTPGet`, looks up `secrets[name]` and sets the header/param — **the value never enters the Lua
-  `LState`, the tool source, `tools.json`, or the audit log** (the audit records `secret:scrapingant
-  used`, not its value).
-- **Approval:** granting a tool a `Secret`-bearing capability is a tier-gated escalation like any
-  network cap — the human approves "may use secret `scrapingant` against `api.scrapingant.com`" at
-  authoring time.
+  boundary, already as sensitive as the API key). File-mode `0600`. **Deployment:** each secret is
+  *also* overridable from the environment as `AI_AGENT_SECRET_<NAME>` (lowercased; env wins over
+  config), so an automated deploy injects it via the platform's secret store — `fly secrets set
+  AI_AGENT_SECRET_SCRAPINGANT=…` — with no boot-time write and nothing on the state volume (the
+  12-factor path, matching how the Telegram token is provided).
+- **Capability shape:** `Capability` carries an optional `Secret` (a *name*, not a value) and a
+  placement `SecretIn`: `header:<Name>`, `query:<param>`, or `bearer` (shorthand for
+  `Authorization: Bearer <token>`, so the stored secret is the raw token). The broker, on `HTTPGet`,
+  looks up the secret and sets the header/param — **the value never enters the Lua `LState`, the tool
+  source, `tools.json`, or the audit log** (the audit records `[secret:scrapingant]`, not the value),
+  and it is bounded to the cap's host allowlist (+ the redirect re-validation), so it can't be
+  steered off the approved host. Fail-closed: a named-but-unresolvable secret denies the call.
+- **Approval:** a `Secret`-bearing capability **always** requires human approval — even on
+  `permissive`, since the host+secret grant is the one place to catch a credential aimed at the wrong
+  host. The human approves "http_get → api.scrapingant.com (secret "scrapingant" in header:x-api-key)"
+  at authoring time.
 
 This keeps the invariant the sandbox is built on — *scripts get capabilities, not credentials* — and
 generalizes: the next keyed API is `set-secret` + an authored tool, no code change.

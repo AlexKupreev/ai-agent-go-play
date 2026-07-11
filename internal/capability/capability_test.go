@@ -128,19 +128,20 @@ func TestClampTier(t *testing.T) {
 }
 
 func TestCapabilitySecretPlacement(t *testing.T) {
-	ok := []struct{ in, where, key string }{
-		{"header:x-api-key", "header", "x-api-key"},
-		{"header:Authorization", "header", "Authorization"},
-		{"query:token", "query", "token"},
+	ok := []struct{ in, where, key, prefix string }{
+		{"header:x-api-key", "header", "x-api-key", ""},
+		{"header:Authorization", "header", "Authorization", ""},
+		{"query:token", "query", "token", ""},
+		{"bearer", "header", "Authorization", "Bearer "},
 	}
 	for _, c := range ok {
-		w, k, err := (Capability{SecretIn: c.in}).SecretPlacement()
-		if err != nil || w != c.where || k != c.key {
-			t.Errorf("%q → (%q,%q,%v), want (%q,%q,nil)", c.in, w, k, err, c.where, c.key)
+		w, k, p, err := (Capability{SecretIn: c.in}).SecretPlacement()
+		if err != nil || w != c.where || k != c.key || p != c.prefix {
+			t.Errorf("%q → (%q,%q,%q,%v), want (%q,%q,%q,nil)", c.in, w, k, p, err, c.where, c.key, c.prefix)
 		}
 	}
 	for _, bad := range []string{"", "x-api-key", "cookie:c", "header:", ":k"} {
-		if _, _, err := (Capability{SecretIn: bad}).SecretPlacement(); err == nil {
+		if _, _, _, err := (Capability{SecretIn: bad}).SecretPlacement(); err == nil {
 			t.Errorf("SecretPlacement(%q) should error", bad)
 		}
 	}

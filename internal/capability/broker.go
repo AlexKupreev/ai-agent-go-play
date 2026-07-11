@@ -127,17 +127,17 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 			b.record(g, HTTPGet, summary, false)
 			return "", denied(HTTPGet, "unknown or empty secret "+c.Secret)
 		}
-		where, key, perr := c.SecretPlacement()
+		where, key, prefix, perr := c.SecretPlacement()
 		if perr != nil {
 			b.record(g, HTTPGet, summary, false)
 			return "", fmt.Errorf("http_get: %w", perr)
 		}
 		switch where {
 		case "header":
-			req.Header.Set(key, val)
+			req.Header.Set(key, prefix+val)
 		case "query":
 			q := req.URL.Query()
-			q.Set(key, val)
+			q.Set(key, prefix+val)
 			req.URL.RawQuery = q.Encode()
 		}
 	}

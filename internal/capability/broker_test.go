@@ -71,6 +71,22 @@ func TestBrokerHTTPGet_SecretInjection(t *testing.T) {
 		}
 	})
 
+	t.Run("bearer", func(t *testing.T) {
+		b := NewBroker(&audit.MemoryRecorder{}, nil)
+		var seen *http.Request
+		b.HTTP = capturingHTTP(&seen)
+		b.Secrets = func(string) (string, bool) { return "TOKEN", true }
+		grant := &GrantContext{Run: "r1", Granted: []Capability{
+			{Kind: HTTPGet, Hosts: []string{"api.svc.com"}, Secret: "svc", SecretIn: "bearer"},
+		}}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://api.svc.com/x"); err != nil {
+			t.Fatalf("HTTPGet: %v", err)
+		}
+		if got := seen.Header.Get("Authorization"); got != "Bearer TOKEN" {
+			t.Fatalf("Authorization header = %q, want \"Bearer TOKEN\"", got)
+		}
+	})
+
 	t.Run("query", func(t *testing.T) {
 		b := NewBroker(&audit.MemoryRecorder{}, nil)
 		var seen *http.Request

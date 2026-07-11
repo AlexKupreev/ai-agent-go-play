@@ -296,17 +296,31 @@ func init() {
 	configCmd.AddCommand(secretsCmd)
 }
 
+// envSecretPrefix is the env-var prefix for a broker secret: AI_AGENT_SECRET_<NAME> supplies
+// the secret named <name> (lowercased). It lets an automated deployment inject secrets via the
+// platform's secret store (e.g. `fly secrets set AI_AGENT_SECRET_SCRAPINGANT=…`) without writing
+// them to the config volume — the 12-factor path, matching how the Telegram token is provided.
+const envSecretPrefix = "AI_AGENT_SECRET_"
+
 // secretsResolver returns a lookup over the configured secrets for the capability broker
-// (ExecutorConfig.Secrets). It returns nil when no secrets are configured, so a capability
-// that names one is denied (fail closed). The map is copied so a later config reload can't
-// mutate what a running executor closed over.
+// (ExecutorConfig.Secrets), merging config.json `secrets` with AI_AGENT_SECRET_* env vars
+// (env wins, matching the flag > env > config precedence). It returns nil when none are set,
+// so a capability that names a secret is denied (fail closed). The map is snapshotted so a
+// later config reload can't mutate what a running executor closed over.
 func secretsResolver(cfg Config) func(name string) (string, bool) {
-	if len(cfg.Secrets) == 0 {
-		return nil
-	}
 	m := make(map[string]string, len(cfg.Secrets))
 	for k, v := range cfg.Secrets {
 		m[k] = v
+	}
+	for _, kv := range os.Environ() {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || v == "" || !strings.HasPrefix(k, envSecretPrefix) {
+			continue
+		}
+		m[strings.ToLower(strings.TrimPrefix(k, envSecretPrefix))] = v
+	}
+	if len(m) == 0 {
+		return nil
 	}
 	return func(name string) (string, bool) { v, ok := m[name]; return v, ok }
 }

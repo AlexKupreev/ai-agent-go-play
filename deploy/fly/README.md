@@ -19,6 +19,11 @@ from a phone.
   `fly secrets`. The OpenAI key has no in-app env override, so the entrypoint writes
   it into the config dir at boot via `agent config set-key`; the Telegram token and
   allowlist are read from the environment by `serve` directly.
+- **API tokens for authored tools** (the capability-broker `secrets`, e.g. ScrapingAnt)
+  are read straight from the environment as `AI_AGENT_SECRET_<NAME>` — no boot-time write,
+  no volume state. `fly secrets set AI_AGENT_SECRET_SCRAPINGANT=…` and an authored `http_get`
+  tool that names `scrapingant` gets the value injected host-side (never model-visible). See
+  [`../../docs/adr/external-apis.md`](../../docs/adr/external-apis.md).
 
 Prerequisites: [`flyctl`](https://fly.io/docs/flyctl/install/), a Fly account, a
 Telegram bot token from [@BotFather](https://t.me/BotFather), and your Telegram
@@ -52,6 +57,8 @@ fly volumes create agent_data --region waw --size 1 -a ai-agent
 # 3. Set secrets.
 fly secrets set OPENAI_API_KEY=sk-... -a ai-agent
 fly secrets set AI_AGENT_TELEGRAM_TOKEN=123456:abcdef -a ai-agent
+# Optional: API tokens for authored tools (broker secrets), one per external API:
+fly secrets set AI_AGENT_SECRET_SCRAPINGANT=sk_... -a ai-agent
 
 # 4. Deploy.
 fly deploy -c deploy/fly/fly.one-agent.toml
