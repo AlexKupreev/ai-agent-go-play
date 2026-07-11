@@ -15,6 +15,7 @@ is the *how*.
 - [Customizing the agent — prompts & agent types](#customizing-the-agent--prompts--agent-types)
 - [Comparing configurations — `agent eval`](#comparing-configurations--agent-eval)
 - [Self-authored tools](#self-authored-tools)
+- [Using an external API (secrets)](#using-an-external-api-secrets)
 - [Long-term memory](#long-term-memory)
 - [Self-documentation](#self-documentation)
 - [Self-status](#self-status)
@@ -463,6 +464,63 @@ reflect it, not just the on-disk file:
 Over the API you can also inspect a tool's full source: `GET /tools`, `GET
 /tools/search?q=`, `GET /tools/{name}` (includes implementation source), `DELETE
 /tools/{name}`.
+
+---
+
+## Using an external API (secrets)
+
+To let the agent call a **keyed third-party API** (a scraper, a data provider, …), you store the
+credential once and the agent authors an `http_get` tool that references it **by name**. The
+value is injected into the request host-side — it never reaches the model, the sandbox, the tool
+catalog, or the audit log. This is the general path for any keyed API; no per-API code (design in
+[`adr/external-apis.md`](adr/external-apis.md)).
+
+**1. Store the token** (once):
+
+```bash
+./agent config set-secret scrapingant sk_your_token   # value stored in config.json (mode 0600)
+./agent config secrets                                 # lists NAMES only — never values
+./agent config rm-secret scrapingant                   # remove one
+```
+
+**2. Ask the agent to author a tool** that uses it (in `agent chat` / Telegram / `agent run`),
+e.g. *"author a tool that scrapes a URL via ScrapingAnt using the `scrapingant` secret."* The
+agent requests an `http_get` capability that names the secret and its placement:
+
+```json
+{ "kind": "http_get", "hosts": ["api.scrapingant.com"],
+  "secret": "scrapingant", "secret_in": "header:x-api-key" }
+```
+
+`secret_in` is one of `header:<Name>`, `query:<param>`, or `bearer` (shorthand for
+`Authorization: Bearer <token>`, so you store the raw token).
+
+**3. Approve it once.** A secret-bearing capability **always** prompts — even on `permissive` —
+so you confirm *this token goes to this host*:
+
+```
+Authorize tool "scrape" with elevated capabilities
+http_get → api.scrapingant.com (secret "scrapingant" in header:x-api-key)
+```
+
+Approve, and the tool is registered and reusable. At call time the broker injects the value,
+bounded to the cap's host allowlist (and re-checked across redirects), and audits
+`http_get → api.scrapingant.com [secret:scrapingant]` — the name, never the value.
+
+**Guardrails.** Fail-closed: if the secret isn't stored, a tool naming it is *denied*, not run
+without it. If the agent pointed the secret at a different host, you'd see that host in the
+approval and reject it — and even approved, the value only travels to allowlisted hosts.
+
+**Deployment (no value on disk).** Instead of `set-secret`, supply each secret from the
+environment as `AI_AGENT_SECRET_<NAME>` (uppercase name; the agent reads it lowercased). This is
+the 12-factor path for an automated deploy — e.g. on Fly.io:
+
+```bash
+fly secrets set AI_AGENT_SECRET_SCRAPINGANT=sk_your_token -a your-app
+```
+
+Env wins over `config.json`, and nothing is written to the state volume. See
+[`../deploy/fly/README.md`](../deploy/fly/README.md).
 
 ---
 
