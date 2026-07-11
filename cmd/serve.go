@@ -161,11 +161,19 @@ var serveCmd = &cobra.Command{
 		if runsBase, err := runsDir(); err == nil {
 			engine.SetRunStore(fileRunStore{base: runsBase})
 		}
-		// Closing a session archives its conversation (recoverable); its scratch cache is
-		// large and re-derivable, so reap it here — this is also the reaper for session-scratch/.
-		engine.SetSessionCloseHook(func(sessionID string) {
-			if dir, err := sessionScratchDir(sessionID); err == nil {
+		// Closing a session archives its conversation (recoverable), so its scratch cache is
+		// reaped keeping any user-provided files (re-derivable agent artifacts go); a purge is
+		// an explicit whole-session deletion, so it takes everything. This is the reaper for
+		// session-scratch/.
+		engine.SetSessionCloseHook(func(sessionID string, purge bool) {
+			dir, err := sessionScratchDir(sessionID)
+			if err != nil {
+				return
+			}
+			if purge {
 				_ = os.RemoveAll(dir)
+			} else {
+				_ = artifact.ReapScratch(dir)
 			}
 		})
 		// Push parked escalations (and their resolutions) onto the owning run's event

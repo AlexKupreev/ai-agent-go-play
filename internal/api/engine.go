@@ -138,10 +138,12 @@ type Engine struct {
 	// spend is reviewable through the same log as every other effect. Optional.
 	auditRec audit.Recorder
 
-	// onSessionClose, when set, fires (best-effort) after a session is archived, so the cmd
-	// layer can reap the session's scratch cache — the engine core knows nothing of disk
-	// paths, so this is its seam to them. Optional.
-	onSessionClose func(sessionID string)
+	// onSessionClose, when set, fires (best-effort) after a session is archived or purged, so
+	// the cmd layer can reap the session's scratch cache — the engine core knows nothing of
+	// disk paths, so this is its seam to them. The purge flag distinguishes the two: a close
+	// (archive) reap preserves user-provided files (the conversation is recoverable), while a
+	// purge is an explicit whole-session deletion and takes everything. Optional.
+	onSessionClose func(sessionID string, purge bool)
 
 	// runStore, when set, persists a run's final RunInfo when it reaches a terminal state
 	// (Save) and reloads it for a run the engine has since evicted (Load). It lets run
@@ -179,8 +181,10 @@ func (e *Engine) SessionsEnabled() bool { return e.sessions != nil && e.turns !=
 func (e *Engine) SetAuditRecorder(rec audit.Recorder) { e.auditRec = rec }
 
 // SetSessionCloseHook installs a best-effort callback fired after a session is archived
-// (CloseSession), so the cmd layer can reap that session's scratch cache. Optional.
-func (e *Engine) SetSessionCloseHook(fn func(sessionID string)) { e.onSessionClose = fn }
+// (CloseSession, purge=false) or purged (PurgeSession, purge=true), so the cmd layer can reap
+// that session's scratch cache — preserving user files on a close, taking everything on a
+// purge. Optional.
+func (e *Engine) SetSessionCloseHook(fn func(sessionID string, purge bool)) { e.onSessionClose = fn }
 
 // SetRunStore installs a store that persists a run's final RunInfo on completion and serves
 // it back as a RunStatus fallback once the run is evicted. Optional. See RunStore.
@@ -349,9 +353,10 @@ func (e *Engine) CloseSession(id string) error {
 	delete(e.sessLocks, id)
 	e.sessLocksMu.Unlock()
 	// Reap the session's scratch cache (large, re-derivable artifacts we don't archive with
-	// the conversation). Best-effort — the hook resolves the path and removes it.
+	// the conversation). Best-effort — the hook resolves the path and, on this close, keeps
+	// any user-provided files while removing the re-derivable rest.
 	if e.onSessionClose != nil {
-		e.onSessionClose(id)
+		e.onSessionClose(id, false)
 	}
 	return nil
 }
@@ -375,7 +380,7 @@ func (e *Engine) PurgeSession(id string) error {
 	delete(e.sessLocks, id)
 	e.sessLocksMu.Unlock()
 	if e.onSessionClose != nil {
-		e.onSessionClose(id)
+		e.onSessionClose(id, true)
 	}
 	if e.auditRec != nil {
 		e.auditRec.Record(audit.Event{

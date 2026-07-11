@@ -245,8 +245,12 @@ func TestCloseSessionFiresHook(t *testing.T) {
 	e := NewEngine(RunnerFunc(fakeRunner))
 	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
 
-	got := make(chan string, 1)
-	e.SetSessionCloseHook(func(id string) { got <- id })
+	type reap struct {
+		id    string
+		purge bool
+	}
+	got := make(chan reap, 1)
+	e.SetSessionCloseHook(func(id string, purge bool) { got <- reap{id, purge} })
 
 	sid, err := e.StartSession(RunOptions{})
 	if err != nil {
@@ -256,9 +260,12 @@ func TestCloseSessionFiresHook(t *testing.T) {
 		t.Fatalf("CloseSession: %v", err)
 	}
 	select {
-	case id := <-got:
-		if id != sid {
-			t.Fatalf("close hook got id %q, want %q", id, sid)
+	case r := <-got:
+		if r.id != sid {
+			t.Fatalf("close hook got id %q, want %q", r.id, sid)
+		}
+		if r.purge {
+			t.Fatal("close hook fired with purge=true, want false for an archive close")
 		}
 	default:
 		t.Fatal("close hook was not fired")
@@ -292,8 +299,12 @@ func TestEngine_PurgeSession(t *testing.T) {
 	e.EnableSessions(store, echoTurns())
 	e.SetAuditRecorder(rec)
 
-	reaped := make(chan string, 1)
-	e.SetSessionCloseHook(func(id string) { reaped <- id })
+	type reap struct {
+		id    string
+		purge bool
+	}
+	reaped := make(chan reap, 1)
+	e.SetSessionCloseHook(func(id string, purge bool) { reaped <- reap{id, purge} })
 
 	sid, err := e.StartSession(RunOptions{})
 	if err != nil {
@@ -309,11 +320,14 @@ func TestEngine_PurgeSession(t *testing.T) {
 	if err := e.RestoreSession(sid); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("RestoreSession after purge = %v, want ErrNotFound", err)
 	}
-	// The scratch-reap hook fired with the purged id.
+	// The scratch-reap hook fired with the purged id and purge=true (take everything).
 	select {
-	case id := <-reaped:
-		if id != sid {
-			t.Fatalf("reap hook got %q, want %q", id, sid)
+	case r := <-reaped:
+		if r.id != sid {
+			t.Fatalf("reap hook got %q, want %q", r.id, sid)
+		}
+		if !r.purge {
+			t.Fatal("purge fired the reap hook with purge=false, want true")
 		}
 	default:
 		t.Fatal("purge did not fire the scratch-reap hook")

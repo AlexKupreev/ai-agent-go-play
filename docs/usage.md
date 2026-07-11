@@ -665,9 +665,11 @@ only — the system prompt is re-seeded from current code each turn.
 **Closing a session archives it, it doesn't destroy it.** `/end` (and `DELETE /sessions/{id}`)
 moves the conversation to `<config-dir>/sessions/archive/<id>.json` rather than deleting it, so
 a mistaken close is recoverable. Archived sessions drop out of the resumable listing (`--list`,
-`GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) *is* removed on close —
+`GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) is reaped on close —
 it holds large, re-derivable artifacts, and the manifest records each one's source so a later
-turn re-fetches it if needed.
+turn re-fetches it if needed. (The reaper keeps any user-provided files, for when file upload
+lands; agent-materialized and unrecorded scratch go. A purge, being a whole-session deletion,
+removes the cache in full.)
 
 **Restore and purge are the recovery/destructive counterparts, on every client.** A closed
 session is brought back with `agent session restore <id>` (or `POST /sessions/{id}/restore`),

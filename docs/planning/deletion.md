@@ -14,9 +14,13 @@ session model ([`plan.md`](plan.md) Phase 4f).
 (`Engine.PurgeSession`/`RestoreSession`), HTTP (`DELETE /sessions/{id}/purge`,
 `POST /sessions/{id}/restore`), the `api.Client`, the `agent session list|purge|restore` CLI, the
 `/purge` command in `agent chat --addr` and Telegram, id validation, and the `session_purged`
-audit event. `Store` now carries `Purge`/`Restore` (promoted from `FileStore`). §3 (file removal +
-provenance-aware reaper) remains **requirements + options, not built** — it lands with the
-[`file-upload.md`](file-upload.md) ingest slice (§4 sequencing).
+audit event. `Store` now carries `Purge`/`Restore` (promoted from `FileStore`).
+
+**Status: §3's provenance-aware reaper is also BUILT** — `artifact.ReapScratch` keeps
+`origin:user` files on a *close* (archive) and prunes the manifest to them, while a *purge*
+still wipes everything; the engine's close hook now carries a `purge bool` to pick between the
+two. The other half of §3 (`Manifest.Remove` + a `remove_file` verb) remains **not built** — it
+lands with the [`file-upload.md`](file-upload.md) ingest slice (§4 sequencing).
 
 ---
 
@@ -89,12 +93,15 @@ behavior, recoverable); purge is the explicit escalation. This matches sessions'
   `Append`; `withinDir` guard reused). This is the primitive the manifest is missing.
 - **`remove_file(path)` built-in** — trusted, not sandbox-exposed (like `record_artifact`), reusing
   the scratch-dir containment. Human surface: `agent session files rm <path>` or a REPL `/rm`.
-- **Provenance-aware reaper (R4)** — change the `onSessionClose` hook from
-  `os.RemoveAll(scratchDir)` to: read the manifest, delete only `origin:agent` files (+ the manifest
-  itself if empty), leave `origin:user` files in place. Until uploads exist there are no `user`
-  entries, so this is a no-op change now that becomes correct-by-construction when they land. **This
-  is the one change worth making even before uploads ship**, so the reaper is never retrofitted under
-  a live upload feature.
+- **Provenance-aware reaper (R4) — ✅ BUILT.** `artifact.ReapScratch(dir)` replaces the close
+  hook's `os.RemoveAll`: it preserves `origin:user` files, removes everything else (recorded agent
+  artifacts *and* unrecorded scratch — so nothing re-derivable leaks), and prunes the manifest to
+  the surviving user files. With no `user` entries (today's only case) it falls back to
+  `os.RemoveAll`, so behavior is unchanged now and correct-by-construction once uploads land. The
+  distinction is intent-carried: the engine's close hook took a `purge bool`, so a **close**
+  (archive, recoverable) runs `ReapScratch` while a **purge** (explicit whole-session deletion)
+  keeps the full `os.RemoveAll`. Making this change before uploads ship is the cheap insurance the
+  sequencing (§4) calls out — the reaper is never retrofitted under a live upload feature.
 
 ---
 
@@ -103,7 +110,8 @@ behavior, recoverable); purge is the explicit escalation. This matches sessions'
 1. **Session purge + restore (§2)** — ✅ **DONE.** Smallest, self-contained, exercised already-tested
    store code; closed the archive/restore symmetry gap. Shipped on every session client (CLI REPL,
    remote REPL, Telegram, HTTP) plus the `agent session` management command.
-2. **Provenance-aware reaper (§3, reaper only)** — tiny, no new surface, removes a latent hazard
+2. **Provenance-aware reaper (§3, reaper only)** — ✅ **DONE.** `artifact.ReapScratch` +
+   the close/purge `purge bool` on the engine hook; no new surface, removes the latent hazard
    before uploads exist.
 3. **File removal verb (§3, rest)** — pairs with, and is easiest to land *alongside*, the
    [`file-upload.md`](file-upload.md) ingest slice, since both touch the same manifest. Defer until

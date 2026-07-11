@@ -9,11 +9,17 @@ package artifact
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ManifestName is the on-disk filename of a session's manifest inside its scratch dir.
+const ManifestName = "manifest.json"
 
 // Origin records who produced an artifact. It drives retention (§D5): user-provided files
 // are never auto-reaped, agent-derived files are subject to review. v1 has no reaper, but
@@ -107,6 +113,89 @@ func (m *Manifest) Render() string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// KeepOnly rewrites the manifest to retain only entries for which keep returns true,
+// persisting the result atomically. The scratch reaper uses it to drop the agent-artifact
+// entries whose files it removed, leaving the manifest describing exactly the surviving
+// (user-provided) files.
+func (m *Manifest) KeepOnly(keep func(Entry) bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := m.entries[:0:0]
+	for _, e := range m.entries {
+		if keep(e) {
+			kept = append(kept, e)
+		}
+	}
+	m.entries = kept
+	return m.flushLocked()
+}
+
+// ReapScratch cleans a session's scratch directory when the session is closed (archived),
+// preserving only the files the user provided (Origin == user) — which the file-upload
+// lifecycle keeps until an explicit deletion (docs/planning/deletion.md §3). Agent-materialized
+// artifacts and any unrecorded scratch are re-derivable, so they are removed; the manifest is
+// pruned to the surviving user files.
+//
+// Today no upload path exists, so every manifest entry is agent-origin and this reaps the whole
+// directory — identical to the os.RemoveAll it replaces — but it becomes correct-by-construction
+// the moment user uploads land. (A *purge*, being an explicit whole-session deletion, removes
+// everything and does not call this — see the engine's purge path.)
+func ReapScratch(dir string) error {
+	m, err := New(filepath.Join(dir, ManifestName))
+	if err != nil {
+		// Unreadable/corrupt manifest: fall back to a full wipe (the prior behavior).
+		return os.RemoveAll(dir)
+	}
+	preserve := map[string]bool{}
+	for _, e := range m.List() {
+		if e.Origin == OriginUser {
+			preserve[resolveUnder(dir, e.Path)] = true
+		}
+	}
+	if len(preserve) == 0 {
+		return os.RemoveAll(dir) // nothing to keep — the common (and, today, only) case
+	}
+	// Keep the manifest itself so the surviving user files stay tracked.
+	preserve[filepath.Clean(filepath.Join(dir, ManifestName))] = true
+
+	var dirs []string
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			dirs = append(dirs, p)
+			return nil
+		}
+		if !preserve[filepath.Clean(p)] {
+			return os.Remove(p)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// Prune directories emptied by the removals, deepest first; leave dir itself. os.Remove
+	// is a no-op error (ignored) on a directory that still holds a preserved file.
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, p := range dirs {
+		if p != dir {
+			_ = os.Remove(p)
+		}
+	}
+	// Drop the agent entries whose files were removed; keep only the user files.
+	return m.KeepOnly(func(e Entry) bool { return e.Origin == OriginUser })
+}
+
+// resolveUnder resolves a manifest path (which may be relative to dir or absolute) to a
+// cleaned absolute path for set membership, mirroring record_artifact's containment logic.
+func resolveUnder(dir, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(dir, path))
 }
 
 // flushLocked writes the manifest to disk atomically (temp file + rename). Caller holds mu.
