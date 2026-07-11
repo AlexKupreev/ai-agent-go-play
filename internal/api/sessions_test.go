@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/session"
 )
@@ -278,6 +279,135 @@ func TestEngine_PostTurnUnknownSession(t *testing.T) {
 	}
 	if _, err := e.PostTurn(sid, "hi", RunOptions{}); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("PostTurn after close = %v, want ErrNotFound", err)
+	}
+}
+
+// TestEngine_PurgeSession proves the destructive path: purge removes a session for good
+// (Get is ErrNotFound after, and it cannot be restored), fires the scratch-reap hook, and
+// records a session_purged audit event; an unknown id is ErrNotFound.
+func TestEngine_PurgeSession(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	rec := &audit.MemoryRecorder{}
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, echoTurns())
+	e.SetAuditRecorder(rec)
+
+	reaped := make(chan string, 1)
+	e.SetSessionCloseHook(func(id string) { reaped <- id })
+
+	sid, err := e.StartSession(RunOptions{})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if err := e.PurgeSession(sid); err != nil {
+		t.Fatalf("PurgeSession: %v", err)
+	}
+	// The bytes are gone (not archived), so it can be neither fetched nor restored.
+	if _, err := store.Get(sid); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("Get after purge = %v, want ErrNotFound", err)
+	}
+	if err := e.RestoreSession(sid); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("RestoreSession after purge = %v, want ErrNotFound", err)
+	}
+	// The scratch-reap hook fired with the purged id.
+	select {
+	case id := <-reaped:
+		if id != sid {
+			t.Fatalf("reap hook got %q, want %q", id, sid)
+		}
+	default:
+		t.Fatal("purge did not fire the scratch-reap hook")
+	}
+	// The purge is on the audit log.
+	events, _ := rec.Tail(0, audit.Filter{Type: audit.EventSessionPurged})
+	if len(events) != 1 || events[0].Fields["session"] != sid {
+		t.Fatalf("audit events = %+v, want one session_purged for %s", events, sid)
+	}
+	// Turn lock released (ids never reused).
+	e.sessLocksMu.Lock()
+	_, held := e.sessLocks[sid]
+	e.sessLocksMu.Unlock()
+	if held {
+		t.Errorf("turn lock for purged session %s still held", sid)
+	}
+
+	if err := e.PurgeSession("nope"); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("PurgeSession unknown = %v, want ErrNotFound", err)
+	}
+}
+
+// TestEngine_RestoreSession proves close→restore round-trips: a closed (archived) session
+// is invisible to Get/List but comes back live after Restore; purging an archived session
+// then makes Restore impossible.
+func TestEngine_RestoreSession(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, echoTurns())
+
+	sid, _ := e.StartSession(RunOptions{})
+	if err := e.CloseSession(sid); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	// Archived: not live.
+	if _, err := store.Get(sid); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("Get after close = %v, want ErrNotFound (archived)", err)
+	}
+	// Restore brings it back.
+	if err := e.RestoreSession(sid); err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
+	if _, err := store.Get(sid); err != nil {
+		t.Fatalf("Get after restore = %v, want it live", err)
+	}
+	if err := e.RestoreSession("nope"); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("RestoreSession unknown = %v, want ErrNotFound", err)
+	}
+
+	// Close then purge the archived copy: no restore afterwards.
+	_ = e.CloseSession(sid)
+	if err := e.PurgeSession(sid); err != nil {
+		t.Fatalf("PurgeSession archived: %v", err)
+	}
+	if err := e.RestoreSession(sid); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("RestoreSession after purge-of-archived = %v, want ErrNotFound", err)
+	}
+}
+
+// TestHTTP_PurgeAndRestoreSession drives the destructive/recovery verbs through the real
+// HTTP transport + client, including the boundary cases (bad id ⇒ 400, unknown ⇒ 404).
+func TestHTTP_PurgeAndRestoreSession(t *testing.T) {
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
+	srv := httptest.NewServer(NewServer(e, nil, nil, nil, nil))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	ctx := context.Background()
+
+	sid, err := c.StartSession(ctx, RunOptions{})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	// Close (archive) then restore over the wire.
+	if err := c.CloseSession(ctx, sid); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	if err := c.RestoreSession(ctx, sid); err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
+	infos, _ := c.ListSessions(ctx)
+	if len(infos) != 1 || infos[0].ID != sid {
+		t.Fatalf("restored session not live in listing: %+v", infos)
+	}
+	// Purge over the wire, then it is gone (restore 404s).
+	if err := c.PurgeSession(ctx, sid); err != nil {
+		t.Fatalf("PurgeSession: %v", err)
+	}
+	if err := c.RestoreSession(ctx, sid); err == nil {
+		t.Fatal("RestoreSession after purge returned nil, want a 404")
+	}
+	// A malformed id (non-hex) is rejected at the boundary (400, not a disk touch).
+	if err := c.PurgeSession(ctx, "not-a-hex-id"); err == nil {
+		t.Fatal("PurgeSession with a malformed id returned nil, want a 400")
 	}
 }
 

@@ -69,6 +69,7 @@ type Client interface {
 	StartSession(ctx context.Context, opts api.RunOptions) (string, error)
 	PostTurn(ctx context.Context, sessionID, text string, opts api.RunOptions) (runID string, err error)
 	CloseSession(ctx context.Context, sessionID string) error
+	PurgeSession(ctx context.Context, sessionID string) error
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
 	Answer(ctx context.Context, id, text string) error
@@ -80,9 +81,10 @@ type Client interface {
 // conversation): a message runs a turn and streams its events back to the chat; a
 // parked approval becomes an Approve/Deny inline keyboard resolved over the API, and a
 // parked ask_user question is sent as a prompt whose next chat reply is the answer.
-// /new (alias /reset) starts a fresh session, /end terminates the current one, and
-// /reload re-reads the engine's prompt files + agent-type catalog (effective from the
-// next turn). The /new + /reset + /end verbs match the CLI chat REPL.
+// /new (alias /reset) starts a fresh session, /end terminates (archives) the current one,
+// /purge deletes it for good, and /reload re-reads the engine's prompt files + agent-type
+// catalog (effective from the next turn). The /new + /reset + /end + /purge verbs match the
+// CLI chat REPL.
 type Bot struct {
 	transport Transport
 	client    Client
@@ -197,6 +199,14 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		} else {
 			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
 		}
+	case "/purge":
+		// Irreversible counterpart to /end: hard-delete this chat's conversation instead of
+		// archiving it. Single-user allowlisted chat, so the command name is the confirmation.
+		if b.purgeChat(ctx, m.ChatID) {
+			_ = b.transport.Send(ctx, m.ChatID, "session purged — permanently deleted", nil)
+		} else {
+			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
+		}
 	case "/reload":
 		// Re-read SYSTEM.md/AGENTS.md and the agents/*.md catalog on the engine. A
 		// malformed file leaves the running config intact and returns an error. The
@@ -208,7 +218,7 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		}
 		_ = b.transport.Send(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message", nil)
 	default:
-		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /reload (re-read prompts + agent types)", nil)
+		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /reload (re-read prompts + agent types)", nil)
 	}
 }
 
@@ -244,6 +254,23 @@ func (b *Bot) closeChat(ctx context.Context, chatID int64) bool {
 	}
 	if err := b.client.CloseSession(ctx, id); err != nil {
 		fmt.Fprintf(os.Stderr, "telegram: close session %s: %v\n", id, err)
+	}
+	return true
+}
+
+// purgeChat irreversibly deletes the chat's session (if any) on the engine and drops the
+// mapping — the hard-delete sibling of closeChat. Returns whether a session was active.
+func (b *Bot) purgeChat(ctx context.Context, chatID int64) bool {
+	b.mu.Lock()
+	id, ok := b.sessions[chatID]
+	delete(b.sessions, chatID)
+	delete(b.pendingQ, chatID)
+	b.mu.Unlock()
+	if !ok {
+		return false
+	}
+	if err := b.client.PurgeSession(ctx, id); err != nil {
+		fmt.Fprintf(os.Stderr, "telegram: purge session %s: %v\n", id, err)
 	}
 	return true
 }

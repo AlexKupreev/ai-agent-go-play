@@ -21,6 +21,7 @@ const (
 	EventToolRevoked         = "tool_revoked"
 	EventMemoryWrite         = "memory_write"
 	EventRunUsage            = "run_usage"
+	EventSessionPurged       = "session_purged"
 )
 
 // Event is one append-only record.

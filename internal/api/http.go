@@ -45,6 +45,11 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 		mux.HandleFunc("GET /sessions", handleListSessions(e))
 		mux.HandleFunc("PATCH /sessions/{id}", handleUpdateSession(e))
 		mux.HandleFunc("DELETE /sessions/{id}", handleCloseSession(e))
+		// Distinct sub-paths for the destructive purge and the recovery restore, so
+		// neither rides on the archiving DELETE. Literal segments take precedence over
+		// {id}, so they coexist with the routes above.
+		mux.HandleFunc("DELETE /sessions/{id}/purge", handlePurgeSession(e))
+		mux.HandleFunc("POST /sessions/{id}/restore", handleRestoreSession(e))
 		mux.HandleFunc("POST /sessions/{id}/turns", handlePostTurn(e))
 	}
 	return mux

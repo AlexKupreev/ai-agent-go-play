@@ -74,6 +74,7 @@ type fakeClient struct {
 	lastTurnText  string
 	lastSessionID string
 	closedID      string
+	purgedID      string
 	resolveID     string
 	resolveOK     bool
 	reloadCalls   int
@@ -111,6 +112,13 @@ func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closedID = sessionID
+	return nil
+}
+
+func (c *fakeClient) PurgeSession(_ context.Context, sessionID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.purgedID = sessionID
 	return nil
 }
 
@@ -326,9 +334,22 @@ func TestBot_NewAndEndCommands(t *testing.T) {
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/end"}}
 	tr.waitForSend(t, func(m sentMessage) bool { return m.text == "session ended" })
 	cl.mu.Lock()
-	defer cl.mu.Unlock()
 	if cl.closedID != "sess1" {
+		cl.mu.Unlock()
 		t.Fatalf("closed session = %q, want sess1", cl.closedID)
+	}
+	cl.mu.Unlock()
+
+	// /purge hard-deletes a fresh session (the irreversible sibling of /end): start one,
+	// then purge it.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/purge"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "purged") })
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.purgedID != "sess1" {
+		t.Fatalf("purged session = %q, want sess1", cl.purgedID)
 	}
 }
 

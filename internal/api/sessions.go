@@ -5,10 +5,20 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/session"
 )
+
+// sessionIDPattern bounds a path-supplied session id to hex (the shape session.newID
+// produces) so a destructive purge/restore can't be steered at a crafted path. It is a
+// belt-and-suspenders guard on top of the mux's single-segment {id}: no separators, no
+// traversal.
+var sessionIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{1,64}$`)
+
+// validSessionID reports whether id is a well-formed session id.
+func validSessionID(id string) bool { return sessionIDPattern.MatchString(id) }
 
 // Session endpoints layer persistent multi-turn conversations on top of runs: a turn
 // is a run whose executor is seeded with the session's history, so it streams via the
@@ -102,6 +112,41 @@ func handleListSessions(e *Engine) http.HandlerFunc {
 func handleCloseSession(e *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := e.CloseSession(r.PathValue("id")); err != nil {
+			sessionErrStatus(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handlePurgeSession serves DELETE /sessions/{id}/purge — the irreversible removal (a
+// distinct sub-path from the archiving DELETE /sessions/{id}, so a destructive verb never
+// hinges on a droppable query flag). The id is validated before it reaches disk.
+func handlePurgeSession(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !validSessionID(id) {
+			http.Error(w, "invalid session id", http.StatusBadRequest)
+			return
+		}
+		if err := e.PurgeSession(id); err != nil {
+			sessionErrStatus(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleRestoreSession serves POST /sessions/{id}/restore — un-archive a closed session so
+// it is resumable again.
+func handleRestoreSession(e *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !validSessionID(id) {
+			http.Error(w, "invalid session id", http.StatusBadRequest)
+			return
+		}
+		if err := e.RestoreSession(id); err != nil {
 			sessionErrStatus(w, err)
 			return
 		}

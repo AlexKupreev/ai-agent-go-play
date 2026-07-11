@@ -94,7 +94,7 @@ audit log; destructive actions and escalations route through a human-approval ga
 
 ```text
 main.go                    entry point
-cmd/                       CLI commands (cobra): run, chat, serve, client, eval, reload, stop, config, tool, audit, usage
+cmd/                       CLI commands (cobra): run, chat, serve, client, eval, reload, stop, config, tool, audit, usage, session
 internal/
   agent/                   planner + executor ReAct loop, event observers
   tools/                   built-in tools, tool registry, author_tool, sandbox contract, approvals

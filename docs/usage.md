@@ -121,6 +121,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent reload` | Tell a running engine to re-read its prompt + agent-type files and `config.json` defaults (model, tier) — no restart. |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the engine's audit log. |
+| `agent session list\|purge\|restore` | Manage a running engine's persistent conversations: list resumable ones, purge one irreversibly (`-y` skips the confirm), or restore a closed (archived) one. |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
@@ -198,7 +199,8 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 - **Commands (remote):** `/new` (alias `/reset`) starts a fresh session (closing the old
   one); `/model [id]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
   model / trust tier (no arg prints the current value), effective from the next turn; `/end` closes
-  the current session; `/exit` (or Ctrl-D) **detaches** and leaves it resumable (the resume command
+  (archives) the current session and `/purge` deletes it for good; `/exit` (or Ctrl-D) **detaches**
+  and leaves it resumable (the resume command
   is printed on exit). **Ctrl-C** cancels the current turn (stopping the remote run) and returns you
   to the prompt.
 - Approvals are the engine's **shared** queue: an escalation you don't answer here is the
@@ -647,9 +649,11 @@ curl -s -XPOST http://127.0.0.1:8080/sessions            # → {"session_id":"�
 # run a turn; stream its reply on the returned run id
 curl -s -XPOST http://127.0.0.1:8080/sessions/<sid>/turns -d '{"text":"hello"}'   # → {"run_id":"…"}
 curl -N  http://127.0.0.1:8080/runs/<run_id>/events
-# list / terminate
+# list / close (archive) / restore / purge (irreversible)
 curl -s http://127.0.0.1:8080/sessions
-curl -XDELETE http://127.0.0.1:8080/sessions/<sid>
+curl -XDELETE http://127.0.0.1:8080/sessions/<sid>            # close → archive (recoverable)
+curl -XPOST   http://127.0.0.1:8080/sessions/<sid>/restore    # un-archive a closed session
+curl -XDELETE http://127.0.0.1:8080/sessions/<sid>/purge      # delete for good (+ scratch cache)
 ```
 
 Sessions persist as one JSON file per session under `<config-dir>/sessions/`, so they
@@ -660,12 +664,20 @@ only — the system prompt is re-seeded from current code each turn.
 
 **Closing a session archives it, it doesn't destroy it.** `/end` (and `DELETE /sessions/{id}`)
 moves the conversation to `<config-dir>/sessions/archive/<id>.json` rather than deleting it, so
-a mistaken close is recoverable: move the file back up to `<config-dir>/sessions/` and resume
-it with `agent chat --addr <engine> --session <id>`. Archived sessions drop out of the resumable
-listing (`--list`, `GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) *is*
-removed on close — it holds large, re-derivable artifacts, and the manifest records each one's
-source so a later turn re-fetches it if needed. (There is no built-in "purge for real" surface
-yet; delete an archived file by hand to reclaim its space.)
+a mistaken close is recoverable. Archived sessions drop out of the resumable listing (`--list`,
+`GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) *is* removed on close —
+it holds large, re-derivable artifacts, and the manifest records each one's source so a later
+turn re-fetches it if needed.
+
+**Restore and purge are the recovery/destructive counterparts, on every client.** A closed
+session is brought back with `agent session restore <id>` (or `POST /sessions/{id}/restore`),
+after which it resumes with `agent chat --addr <engine> --session <id>`. To delete a session
+for good — the conversation *and* its scratch cache, irreversibly, whether live or archived —
+use `agent session purge <id>` (confirms unless `-y`), the `/purge` command in `agent chat
+--addr` and Telegram, or `DELETE /sessions/{id}/purge`. A purge is recorded to the audit log as
+a `session_purged` event (`agent audit --type session_purged`). `agent session list` shows the
+resumable sessions. *(There is no archived-session listing yet — restore by the id shown when
+you closed it; see [`../planning/deletion.md`](../planning/deletion.md) §5.)*
 
 Each completed run/turn also writes a compact `info.json` (task, state, result, token usage,
 timings) into its transcript dir, so a run's status survives both the engine's in-memory
@@ -677,11 +689,11 @@ retention cap and a restart: `GET /runs/{id}` falls back to it once the live run
 A Telegram bot can act as a peer client of the engine. Each chat maps to a **session**
 (a persistent conversation, below): a message runs a turn with retained context, events
 stream back, and a parked approval becomes an Approve/Deny inline keyboard. Chat commands:
-**`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates the current one
-(a session is also created automatically on your first message), and **`/reload`** re-reads the
-engine's prompt files + agent-type catalog (effective from your next message — the same
-management action as `agent reload`, gated by the bot's allowlist). The `/new` + `/reset` +
-`/end` verbs match the CLI chat REPL. It is **entirely optional**: with no token set, the
+**`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates (archives) the
+current one, **`/purge`** deletes it for good (a session is also created automatically on your
+first message), and **`/reload`** re-reads the engine's prompt files + agent-type catalog
+(effective from your next message — the same management action as `agent reload`, gated by the
+bot's allowlist). The `/new` + `/reset` + `/end` + `/purge` verbs match the CLI chat REPL. It is **entirely optional**: with no token set, the
 engine runs exactly as normal.
 
 Enable it by supplying a token (config *or* env; env wins) plus an allowlist of Telegram

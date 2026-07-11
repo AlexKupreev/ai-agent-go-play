@@ -67,12 +67,18 @@ func (s Session) ToInfo() Info {
 }
 
 // Store persists sessions. Implementations must be safe for concurrent use.
+//
+// Delete/Restore/Purge form the lifecycle the management plane drives: Delete archives
+// (recoverably), Restore un-archives, and Purge removes for good — the destructive
+// counterpart. See docs/planning/deletion.md.
 type Store interface {
 	Create() (Session, error)
 	Get(id string) (Session, error) // ErrNotFound if absent
 	Save(s Session) error
-	Delete(id string) error // ErrNotFound if absent
-	List() ([]Info, error)  // newest-updated first
+	Delete(id string) error  // archive (recoverable); ErrNotFound if not live
+	Restore(id string) error // un-archive; ErrNotFound if no archived session
+	Purge(id string) error   // irreversible removal, live or archived; ErrNotFound if neither
+	List() ([]Info, error)   // newest-updated first
 }
 
 // archiveSubdir holds sessions closed via Delete. Closing archives rather than deletes, so a

@@ -193,7 +193,7 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | `<config-dir>/memory.json` | Long-term memory store. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
 | `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
-| `<config-dir>/sessions/archive/<id>.json` | Closed conversations, **archived not deleted** (`/end` / `DELETE /sessions/{id}`). Excluded from the resumable listing; move one back up a level to resume it. |
+| `<config-dir>/sessions/archive/<id>.json` | Closed conversations, **archived not deleted** (`/end` / `DELETE /sessions/{id}`). Excluded from the resumable listing; `agent session restore <id>` un-archives it, `agent session purge <id>` removes it for good. |
 | `<config-dir>/session-scratch/<id>/` | Deliberate `serve` turns: a session's disk-backed artifact cache + `manifest.json`, persistent across turns/restarts (keyed by session id). Reaped when the session is closed; cache-with-fallback keeps a stale/absent file correct otherwise. |
 | `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**) + `info.json` (final run metadata), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
 | `<config-dir>/SYSTEM.md`, `AGENTS.md`, `PLANNER.md`, `CRITIC.md` | Global prompt customization (optional; `PLANNER.md`/`CRITIC.md` override the planner/critic). |
@@ -215,4 +215,6 @@ Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-d
 
 All are created on first use; deleting them resets the corresponding state. One exception: closing
 a **session** archives it under `sessions/archive/` rather than removing it (so a mistaken `/end`
-is recoverable) — delete an archived file by hand to reclaim its space.
+is recoverable) — `agent session restore <id>` brings it back, and `agent session purge <id>`
+(or `/purge` in `agent chat --addr` / Telegram, or `DELETE /sessions/{id}/purge`) removes it
+irreversibly and reaps its scratch cache.

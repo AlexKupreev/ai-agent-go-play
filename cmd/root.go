@@ -52,4 +52,5 @@ func init() {
 	rootCmd.AddCommand(auditCmd)
 	rootCmd.AddCommand(usageCmd)
 	rootCmd.AddCommand(reloadCmd)
+	rootCmd.AddCommand(sessionCmd)
 }

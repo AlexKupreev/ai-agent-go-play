@@ -356,6 +356,47 @@ func (e *Engine) CloseSession(id string) error {
 	return nil
 }
 
+// PurgeSession irreversibly removes a session — live or archived — and reaps its scratch
+// cache. It is the destructive counterpart to CloseSession (which only archives): there is
+// no recovery, so nothing is preserved. session.ErrNotFound if neither a live nor an
+// archived session with the id exists. The purge is audited (EventSessionPurged) when a
+// recorder is wired, so destructive management shows up on the same review surface as every
+// other effect.
+func (e *Engine) PurgeSession(id string) error {
+	if !e.SessionsEnabled() {
+		return ErrSessionsDisabled
+	}
+	if err := e.sessions.Purge(id); err != nil {
+		return err
+	}
+	// Free the turn lock (ids are never reused) and reap the scratch cache — the same
+	// housekeeping CloseSession does, but with no archive to keep artifacts for.
+	e.sessLocksMu.Lock()
+	delete(e.sessLocks, id)
+	e.sessLocksMu.Unlock()
+	if e.onSessionClose != nil {
+		e.onSessionClose(id)
+	}
+	if e.auditRec != nil {
+		e.auditRec.Record(audit.Event{
+			Type:   audit.EventSessionPurged,
+			At:     time.Now().UTC(),
+			Fields: map[string]any{"session": id},
+		})
+	}
+	return nil
+}
+
+// RestoreSession moves an archived (closed) session back to the live set so it can be
+// resumed, closing the loop CloseSession opens. session.ErrNotFound if no archived session
+// with the id exists.
+func (e *Engine) RestoreSession(id string) error {
+	if !e.SessionsEnabled() {
+		return ErrSessionsDisabled
+	}
+	return e.sessions.Restore(id)
+}
+
 // PostTurn runs one turn against a session: it starts a run (streamable via the usual
 // run endpoints) that loads the session's history, runs text seeded with it, and
 // persists the updated history. Turns within a session are serialized so the history

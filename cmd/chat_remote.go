@@ -45,7 +45,7 @@ func runRemoteChat(addr string) error {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
 	fmt.Fprintf(os.Stderr, "model %s, tier %s\n", modelLabel(curModel), tierLabel(curTier))
-	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] switch for the session, /end close, /exit or Ctrl-D detach)")
+	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] switch for the session, /end close, /purge delete for good, /exit or Ctrl-D detach)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -113,6 +113,15 @@ func runRemoteChat(addr string) error {
 				fmt.Fprintf(os.Stderr, "close session: %v\n", err)
 			} else {
 				fmt.Fprintln(os.Stderr, "(session closed)")
+			}
+			return nil
+		case "/purge":
+			// Irreversible: hard-delete this conversation instead of archiving it. No undo,
+			// so detach afterwards.
+			if err := c.PurgeSession(ctx, sessionID); err != nil {
+				fmt.Fprintf(os.Stderr, "purge session: %v\n", err)
+			} else {
+				fmt.Fprintln(os.Stderr, "(session purged — permanently deleted)")
 			}
 			return nil
 		case "/reset", "/new":

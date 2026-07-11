@@ -342,6 +342,41 @@ func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// PurgeSession irreversibly removes a session on the engine (live or archived) and reaps
+// its scratch cache — the destructive counterpart to CloseSession, which only archives.
+func (c *Client) PurgeSession(ctx context.Context, sessionID string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/sessions/"+sessionID+"/purge", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("purge session %s: %s", sessionID, resp.Status)
+	}
+	return nil
+}
+
+// RestoreSession un-archives a closed session on the engine so it is resumable again.
+func (c *Client) RestoreSession(ctx context.Context, sessionID string) error {
+	req, err := c.newRequest(ctx, http.MethodPost, "/sessions/"+sessionID+"/restore", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("restore session %s: %s", sessionID, resp.Status)
+	}
+	return nil
+}
+
 // PostTurn submits a turn to a session and returns the run id to stream for its reply. opts
 // carries an optional per-turn model/tier override (the zero value inherits the session /
 // engine defaults).
