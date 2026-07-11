@@ -100,11 +100,9 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		memPath, err := memoryPath()
-		if err != nil {
-			return err
-		}
-		mem, err := memory.NewPersistentStore(memPath)
+		// Memory is workspace-local (<workspace>/.agent/memory.json, spaces.md). One-shot
+		// runs have no session to carry an active space, so they use the global scope.
+		mem, err := memory.NewPersistentStore(memoryPath(workDir))
 		if err != nil {
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
@@ -133,7 +131,7 @@ var runCmd = &cobra.Command{
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
-			StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
+			StatusDirs: agentStateDirs(workDir), Limits: resolveAgentLimits(cfg),
 			ContextLimit: resolveContextLimit(model, cfg),
 			Secrets:      secretsResolver(cfg),
 		})

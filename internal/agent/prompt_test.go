@@ -7,7 +7,9 @@ import (
 
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
+	"ai-agent-go-play/internal/space"
 	"ai-agent-go-play/internal/tools"
 )
 
@@ -220,5 +222,57 @@ func TestNewExecutor_NoPromptFilesUsesBase(t *testing.T) {
 	}
 	if !strings.HasPrefix(prov.system, executorPrompt) {
 		t.Errorf("base prompt not used unmodified; system = %q", prov.system)
+	}
+}
+
+// TestEnvironmentSummary_MemoryAndSpace proves the planner's environment view names
+// long-term memory when a store is wired — and the active space with its notes — so a
+// deliberate turn plans a recall instead of briefing "the chat is the only source"
+// (the failure observed live: a remembered fact in the active space went unconsulted
+// because the planner didn't know memory existed).
+func TestEnvironmentSummary_MemoryAndSpace(t *testing.T) {
+	// No memory wired ⇒ no memory section.
+	bare := NewExecutor(ExecutorConfig{
+		Provider: &systemCapture{}, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+	})
+	if strings.Contains(bare.EnvironmentSummary(), "Long-term memory") {
+		t.Error("EnvironmentSummary mentions memory with no store wired")
+	}
+
+	// Memory without a space ⇒ the recall nudge, no space line.
+	mem := memory.NewMemoryStore()
+	withMem := NewExecutor(ExecutorConfig{
+		Provider: &systemCapture{}, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced, Memory: mem,
+	})
+	env := withMem.EnvironmentSummary()
+	if !strings.Contains(env, "Long-term memory") || !strings.Contains(env, "recall") {
+		t.Errorf("EnvironmentSummary missing the memory/recall note:\n%s", env)
+	}
+	if strings.Contains(env, "Active space") {
+		t.Errorf("EnvironmentSummary names a space with none active:\n%s", env)
+	}
+
+	// Memory + active space ⇒ space id and its standing notes appear.
+	store := space.NewStore(t.TempDir() + "/spaces")
+	sp, err := store.Create("polish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.Notes = "learner level saved under user.level"
+	if err := store.Save(sp); err != nil {
+		t.Fatal(err)
+	}
+	withSpace := NewExecutor(ExecutorConfig{
+		Provider: &systemCapture{}, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced, Memory: mem,
+		Space: tools.SpaceContext{Store: store, ActiveID: "polish"},
+	})
+	env = withSpace.EnvironmentSummary()
+	for _, w := range []string{`Active space: "polish"`, "learner level saved under user.level"} {
+		if !strings.Contains(env, w) {
+			t.Errorf("EnvironmentSummary missing %q:\n%s", w, env)
+		}
 	}
 }

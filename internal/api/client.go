@@ -278,12 +278,12 @@ func (c *Client) StartSession(ctx context.Context, opts RunOptions) (string, err
 	return out.SessionID, nil
 }
 
-// UpdateSession sets a session's sticky model/tier over PATCH /sessions/{id} and returns the
-// updated Info. A nil pointer leaves that field unchanged; a non-nil pointer sets it (an empty
-// string clears it back to the engine default). Passing nil for both is a read of the current
-// values.
-func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tier *string) (session.Info, error) {
-	body, _ := json.Marshal(updateSessionRequest{Model: model, Tier: tier})
+// UpdateSession sets a session's sticky model/tier/space over PATCH /sessions/{id} and returns
+// the updated Info. A nil pointer leaves that field unchanged; a non-nil pointer sets it (an
+// empty string clears it back to the engine default / global scope). Passing nil for all is a
+// read of the current values.
+func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tier, space *string) (session.Info, error) {
+	body, _ := json.Marshal(updateSessionRequest{Model: model, Tier: tier, Space: space})
 	req, err := c.newRequest(ctx, http.MethodPatch, "/sessions/"+sessionID, bytes.NewReader(body))
 	if err != nil {
 		return session.Info{}, err

@@ -79,6 +79,7 @@ func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID, sessionID string, pr
 type RunOptions struct {
 	Model string `json:"model,omitempty"` // model for this run's agents; "" ⇒ engine default
 	Tier  string `json:"tier,omitempty"`  // requested tier, clamped to ≤ the serve tier; "" ⇒ engine default
+	Space string `json:"space,omitempty"` // active space id for this turn's memory scope + notes; "" ⇒ global
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -294,9 +295,10 @@ func (e *Engine) StartSession(opts RunOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if opts.Model != "" || opts.Tier != "" {
+	if opts.Model != "" || opts.Tier != "" || opts.Space != "" {
 		s.Model = opts.Model
 		s.Tier = opts.Tier
+		s.Space = opts.Space
 		if err := e.sessions.Save(s); err != nil {
 			return "", err
 		}
@@ -304,12 +306,13 @@ func (e *Engine) StartSession(opts RunOptions) (string, error) {
 	return s.ID, nil
 }
 
-// UpdateSession changes a session's sticky model/tier. A nil pointer leaves that field
-// unchanged; a non-nil pointer sets it (an empty string clears it back to the engine
+// UpdateSession changes a session's sticky model/tier/space. A nil pointer leaves that
+// field unchanged; a non-nil pointer sets it (an empty string clears it back to the engine
 // default). It returns the updated session Info. session.ErrNotFound if the id is unknown.
 // Like StartSession, the engine stores the tier verbatim — clamping to the serve ceiling
-// happens per turn.
-func (e *Engine) UpdateSession(id string, model, tier *string) (session.Info, error) {
+// happens per turn — and stores the space id verbatim too: resolving it against the space
+// store is the turn runner's job (an unknown space fails the turn with a clear error).
+func (e *Engine) UpdateSession(id string, model, tier, space *string) (session.Info, error) {
 	if !e.SessionsEnabled() {
 		return session.Info{}, ErrSessionsDisabled
 	}
@@ -322,6 +325,9 @@ func (e *Engine) UpdateSession(id string, model, tier *string) (session.Info, er
 	}
 	if tier != nil {
 		sess.Tier = *tier
+	}
+	if space != nil {
+		sess.Space = *space
 	}
 	if err := e.sessions.Save(sess); err != nil {
 		return session.Info{}, err
@@ -434,9 +440,20 @@ func (e *Engine) PostTurn(sessionID, text string, opts RunOptions) (string, erro
 		if turnOpts.Tier == "" {
 			turnOpts.Tier = sess.Tier
 		}
+		if turnOpts.Space == "" {
+			turnOpts.Space = sess.Space
+		}
 		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, turnOpts, obs)
 		if err != nil {
 			return "", err
+		}
+		// Re-read the session before persisting the history: a tool may have changed the
+		// sticky fields mid-turn (switch_space writes Space through the store), and saving
+		// the pre-turn snapshot would silently revert that. The per-session lock is held
+		// for the whole turn, so this read-modify-write cannot interleave with another turn.
+		sess, err = e.sessions.Get(sessionID)
+		if err != nil {
+			return "", err // closed mid-turn
 		}
 		sess.Messages = updated
 		if err := e.sessions.Save(sess); err != nil {

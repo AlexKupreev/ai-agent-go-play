@@ -167,16 +167,22 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   **critic** judges the answer against the plan's success criteria and re-plans a shortfall
   (up to `--max-revisions`, default 1). `--no-plan` drops to a bare executor with retained
   history; `--no-critique` keeps the planner but skips the critic loop. The brief and any
-  critique notes are printed to stderr, distinct from the final answer on stdout.
+  critique notes go to stderr, distinct from the final answer on stdout — as a **one-line
+  summary** by default (the refined-task line); `/verbose on` shows the full brief block
+  (context, success criteria, assumptions). The disk transcript keeps the full brief either way.
 - **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/model
   [id]` and `/tier [safe|balanced|permissive]` show or switch the model / trust tier for the
   session (no arg prints the current value) — in `--no-plan` the executor is rebuilt in place
   carrying the conversation, in deliberate mode the change takes effect on the next turn;
-  `/attach <path>` registers a local file as an artifact the agent can read by path (deliberate
+  `/space [name]` shows or switches the active [space](#spaces--switchable-data-contexts)
+  (`/space list` lists them, `/space -` returns to the global scope; also `--space <name>` at
+  launch) — switching re-scopes memory and loads the space's notes, same rebuild semantics as
+  `/model`; `/attach <path>` registers a local file as an artifact the agent can read by path (deliberate
   mode only); `/compact` summarizes the conversation so far into a compact briefing and replaces
   the working history with it, freeing context (the on-disk transcript is untouched — it only
   shrinks the *live* context; in deliberate mode the last turn is kept verbatim); `/verbose
-  [on|off]` toggles the tool-call trace; `/reload` re-reads the prompt files
+  [on|off]` toggles the tool-call trace **and** the full brief block (off ⇒ one-line brief
+  summaries); `/reload` re-reads the prompt files
   and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
   `/reload` is a no-op there; in `--no-plan` it rebuilds the executor *without losing the
   conversation* — a malformed file is reported and the current setup kept); `/exit` (or
@@ -200,7 +206,9 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 
 - **Commands (remote):** `/new` (alias `/reset`) starts a fresh session (closing the old
   one); `/model [id]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
-  model / trust tier (no arg prints the current value), effective from the next turn; `/end` closes
+  model / trust tier (no arg prints the current value), effective from the next turn; `/space
+  [name]` shows or switches the session's sticky [space](#spaces--switchable-data-contexts)
+  (`/space -` returns to the global scope), effective from the next turn; `/end` closes
   (archives) the current session and `/purge` deletes it for good; `/exit` (or Ctrl-D) **detaches**
   and leaves it resumable (the resume command
   is printed on exit). **Ctrl-C** cancels the current turn (stopping the remote run) and returns you
@@ -527,9 +535,50 @@ Env wins over `config.json`, and nothing is written to the state volume. See
 ## Long-term memory
 
 The agent has `remember` / `recall` built-ins backed by a persistent store at
-`~/.config/ai-agent/memory.json`. A fact remembered in one run is recallable by later
-runs. Every write is audited (`memory_write`). There is no CLI surface for it yet — it is
-driven by the agent during a run.
+`<workspace>/.agent/memory.json` — memory is **workspace-local**: each workspace (the
+directory the agent acts on, `--workspace` or the cwd) has its own memory, so two
+differently-tuned agents in different workspaces don't share notes, and committing or
+`.gitignore`-ing `.agent/` is an ordinary file decision. A fact remembered in one run is
+recallable by later runs in that workspace. Every write is audited (`memory_write`).
+There is no CLI surface for it yet — it is driven by the agent during a run.
+
+Two consequences of the workspace-local move (memory previously lived at
+`<config-dir>/memory.json`): for `serve`/Telegram point `--workspace` at a **persistent**
+directory so memory survives restarts, and if you had an old config-dir `memory.json`,
+move it to `<workspace>/.agent/memory.json` to keep its entries.
+
+---
+
+## Spaces — switchable data contexts
+
+A **space** is a named scope for the agent's own data — "my English lessons", "the tax
+stuff" — with its **own memory** and a short, **always-loaded notes blob** (the per-space
+profile). Exactly one space is active per session; with none active, memory works in the
+**global scope** exactly as before. Spaces let the agent resume the right context ("start
+my next Polish lesson") without dragging in unrelated facts. A space is *data only* — it
+does **not** change the working directory or trust tier. Design: `docs/adr/spaces.md`
+(not embedded; this section is the reference).
+
+- **Storage:** `<workspace>/.agent/spaces/<id>/` — `space.json` (name + notes) and that
+  space's `memory.json`. The directory is the registry; ids are slugs of the name.
+- **Scoping:** while a space is active, `remember` writes to it and `recall` reads it
+  *plus* the global scope (the space shadows global on key collisions). Unscoped facts
+  stay visible everywhere.
+- **Notes = deliberate context.** The active space's notes are injected into the system
+  prompt every turn (like an `AGENTS.md` section, but agent-writable and per-space) —
+  use them for standing guidelines, goals, and state for that context. Capped at 4000
+  characters so the always-on prompt stays lean; the agent maintains them with
+  `update_space_notes`. You can also edit `space.json` by hand and `/reload` is not
+  needed — notes are re-read every turn.
+- **Tools** (trusted, not sandbox-exposed): `list_spaces`, `create_space(name)`,
+  `switch_space(space)` — so *"switch to the Polish project"* in natural language works —
+  plus `space_notes` / `update_space_notes`. A switch takes effect from the next turn.
+- **Commands:** local chat `/space` (show), `/space list`, `/space <name>`, `/space -`
+  (back to global), and `agent chat --space <name>`; remote chat and Telegram `/space
+  <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`.
+- **API:** `POST /sessions` and `PATCH /sessions/{id}` accept `"space"`; `POST /runs` and
+  turns accept a per-request `"space"` override. The session carries the active space
+  (sticky, like model/tier); an unknown space id fails the turn with a clear error.
 
 ---
 

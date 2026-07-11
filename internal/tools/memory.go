@@ -61,7 +61,7 @@ func NewRecallTool(store memory.Store) Tool {
 			"before starting a task in case a past run saved something useful.",
 		Parameters: map[string]any{
 			"key":   map[string]any{"type": "string", "description": "exact key to fetch"},
-			"query": map[string]any{"type": "string", "description": "search terms; returns the most relevant entries"},
+			"query": map[string]any{"type": "string", "description": "search terms (matched on shared words); returns the most relevant entries, or the most recent ones if nothing matches literally"},
 			"limit": map[string]any{"type": "integer", "description": "max entries to return (default 5)"},
 		},
 		Required: []string{},
@@ -79,17 +79,33 @@ func NewRecallTool(store memory.Store) Tool {
 				return formatEntries([]memory.Entry{e}), nil
 			}
 
-			var entries []memory.Entry
 			if query, ok := args["query"].(string); ok && strings.TrimSpace(query) != "" {
-				entries = store.Search(query, limit)
-			} else {
-				entries = store.List()
-				if len(entries) > limit {
-					entries = entries[:limit]
+				if entries := store.Search(query, limit); len(entries) > 0 {
+					return formatEntries(entries), nil
 				}
+				// Search is token-overlap, so it misses when the query and the stored value
+				// share no literal words — a different language/script (a Russian query over an
+				// English note), a synonym, or a fact phrased unexpectedly. A false "nothing"
+				// here is worse than noise: the agent concludes the fact isn't stored when it is.
+				// So fall back to listing recent entries — for a small personal store the agent
+				// can just read the few results and find the relevant one itself.
+				all := store.List()
+				if len(all) == 0 {
+					return "memory is empty (no entries saved yet)", nil
+				}
+				if len(all) > limit {
+					all = all[:limit]
+				}
+				return fmt.Sprintf("no direct match for %q; the %d most recent memory entries (read them — the one you want may be phrased differently):\n%s",
+					strings.TrimSpace(query), len(all), formatEntries(all)), nil
+			}
+
+			entries := store.List()
+			if len(entries) > limit {
+				entries = entries[:limit]
 			}
 			if len(entries) == 0 {
-				return "memory is empty (nothing matched)", nil
+				return "memory is empty (no entries saved yet)", nil
 			}
 			return formatEntries(entries), nil
 		},

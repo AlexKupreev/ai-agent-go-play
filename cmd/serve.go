@@ -19,6 +19,7 @@ import (
 	"ai-agent-go-play/internal/provider"
 	openaiprovider "ai-agent-go-play/internal/provider/openai"
 	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/space"
 	"ai-agent-go-play/internal/tools"
 	"ai-agent-go-play/internal/usage"
 
@@ -65,16 +66,21 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		// One memory store, shared across runs: a fact remembered in one run is
-		// recallable by later runs (the cross-run guarantee 4d is about).
-		memPath, err := memoryPath()
+		workDir, err := resolveWorkspace()
 		if err != nil {
 			return err
 		}
-		mem, err := memory.NewPersistentStore(memPath)
+
+		// One global memory store, shared across runs: a fact remembered in one run is
+		// recallable by later runs (the cross-run guarantee 4d is about). It is
+		// workspace-local now (<workspace>/.agent/memory.json, spaces.md) — point
+		// --workspace at a persistent dir so it survives restarts. Space shards layer
+		// over it per turn via the session's active space.
+		mem, err := memory.NewPersistentStore(memoryPath(workDir))
 		if err != nil {
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
+		spaces := space.NewStore(spacesDir(workDir))
 
 		// One process-wide audit log, shared across runs and exposed at GET /audit:
 		// every run's effects (plus management-plane effects like a tool revoked over
@@ -106,10 +112,6 @@ var serveCmd = &cobra.Command{
 		}
 		sessions := session.NewFileStore(sessStoreDir)
 
-		workDir, err := resolveWorkspace()
-		if err != nil {
-			return err
-		}
 		// Read the operator's prompt customization + agent-type catalog into a reloadable
 		// holder: every run's executor reads the current snapshot (so the cached
 		// system-prompt prefix stays stable within a run, prompts.md §0), and POST /reload
@@ -134,6 +136,8 @@ var serveCmd = &cobra.Command{
 			contextLimits: cfg.ContextLimits,
 			sessions:      sessions,
 			secrets:       secretsResolver(cfg),
+			spaces:        spaces,
+			spaceMems:     newSpaceMemCache(spaces),
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -258,6 +262,11 @@ type serveDeps struct {
 	// secrets resolves a named secret for the broker to inject into an authored tool's
 	// brokered HTTP request, host-side (config `secrets`). Nil ⇒ no secret store.
 	secrets func(name string) (string, bool)
+	// spaces + spaceMems wire switchable data contexts (spaces.md): the store manages
+	// <workspace>/.agent/spaces/, the cache shares one memory shard per space across
+	// concurrent sessions so writes serialize instead of racing whole-file rewrites.
+	spaces    *space.Store
+	spaceMems *spaceMemCache
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -342,39 +351,67 @@ func (d serveDeps) resolveOpts(opts api.RunOptions) (model string, tier capabili
 }
 
 // newExecutor builds a fresh executor over already-open per-turn IO (rec + obs), using the
-// resolved model + tier for this run. manifest + scratchDir wire the artifact cache (nil/""
-// for the plain, non-deliberate path). It opens no files, so it is safe to call repeatedly
-// within one turn (the deliberate pipeline does).
-func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.Tier, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) *agent.Agent {
+// resolved model + tier for this run. spaceID is the active space (from the session sticky /
+// per-request override): it scopes memory to that space's shard over the global store and
+// loads the space's notes into the prompt; "" runs in the global scope. manifest + scratchDir
+// wire the artifact cache (nil/"" for the plain, non-deliberate path). It opens at most the
+// space's memory shard (cached process-wide), so it is safe to call repeatedly within one
+// turn (the deliberate pipeline does). An unknown spaceID is an error — failing the turn
+// loudly beats silently writing memory into the wrong scope.
+func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.Tier, spaceID string, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) (*agent.Agent, error) {
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
 	// Snapshot the current prompts + catalog once, so a concurrent /reload can't change the
 	// executor's prompt mid-run (prompts.md §0).
 	prompts, catalog := d.prompts.snapshot()
+	mem, spaceNote, err := spaceScope(d.spaces, spaceID, d.mem, d.spaceMems)
+	if err != nil {
+		return nil, err
+	}
+	spaceCtx := tools.SpaceContext{Store: d.spaces, ActiveID: spaceID}
+	if sessionID != "" {
+		// switch_space persists the session's sticky space through the store; the engine
+		// re-reads the session before saving the turn's history, so the change survives
+		// (and applies from the next turn). One-shot runs have no session ⇒ no Switch.
+		spaceCtx.Switch = func(id string) error {
+			sess, err := d.sessions.Get(sessionID)
+			if err != nil {
+				return err
+			}
+			sess.Space = id
+			return d.sessions.Save(sess)
+		}
+	}
 	return agent.NewExecutor(agent.ExecutorConfig{
 		Provider: d.prov, WorkDir: d.workDir, Model: model, RunID: runID,
-		Observer: obs, Registry: d.registry, Memory: d.mem, Docs: selfDocs,
+		Observer: obs, Registry: d.registry, Memory: mem, Docs: selfDocs,
 		Audit: rec, Tier: tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
-		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+		SystemPromptOverride: prompts.Override, PromptAppends: withSpaceNote(prompts.Appends, spaceNote),
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
-		StatusDirs: agentStateDirs(), Limits: d.limits,
+		Space:      spaceCtx,
+		StatusDirs: agentStateDirs(d.workDir), Limits: d.limits,
 		ContextLimit: contextLimitFor(model, d.contextLimits),
 		Sessions:     d.sessions,
 		Manifest:     manifest, ScratchDir: scratchDir,
 		Secrets: d.secrets,
-	})
+	}), nil
 }
 
 // buildExecutor constructs a fresh executor for one run/turn, keyed by the engine's runID
 // (so the transcript, audit Run field, and parked approvals share one id) and using the
-// resolved model + tier. It returns a cleanup to defer. Shared by the plain runner and the
-// non-deliberate session turn runner.
-func (d serveDeps) buildExecutor(runID, sessionID, model string, tier capability.Tier, obs agent.Observer) (*agent.Agent, func(), error) {
+// resolved model + tier + active space. It returns a cleanup to defer. Shared by the plain
+// runner and the non-deliberate session turn runner.
+func (d serveDeps) buildExecutor(runID, sessionID, model string, tier capability.Tier, spaceID string, obs agent.Observer) (*agent.Agent, func(), error) {
 	io, err := d.openTurnIO(runID, obs)
 	if err != nil {
 		return nil, nil, err
 	}
-	return d.newExecutor(runID, sessionID, model, tier, nil, "", io.rec, io.obsAll), io.cleanup, nil
+	ex, err := d.newExecutor(runID, sessionID, model, tier, spaceID, nil, "", io.rec, io.obsAll)
+	if err != nil {
+		io.cleanup()
+		return nil, nil, err
+	}
+	return ex, io.cleanup, nil
 }
 
 // runner drives a single-shot run: a fresh executor with no prior context.
@@ -384,7 +421,7 @@ func (d serveDeps) runner() api.Runner {
 		if err != nil {
 			return "", err
 		}
-		ex, cleanup, err := d.buildExecutor(runID, "", model, tier, obs)
+		ex, cleanup, err := d.buildExecutor(runID, "", model, tier, opts.Space, obs)
 		if err != nil {
 			return "", err
 		}
@@ -401,7 +438,7 @@ func (d serveDeps) turnRunner() api.TurnRunner {
 		if err != nil {
 			return "", nil, err
 		}
-		ex, cleanup, err := d.buildExecutor(runID, sessionID, model, tier, obs)
+		ex, cleanup, err := d.buildExecutor(runID, sessionID, model, tier, opts.Space, obs)
 		if err != nil {
 			return "", nil, err
 		}
@@ -457,7 +494,7 @@ func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish
 		internal := agent.Internalized(io.obsAll)
 		deps := deliberateDeps{
 			buildExecutor: func() (*agent.Agent, error) {
-				return d.newExecutor(runID, sessionID, model, tier, manifest, scratchDir, io.rec, io.obsAll), nil
+				return d.newExecutor(runID, sessionID, model, tier, opts.Space, manifest, scratchDir, io.rec, io.obsAll)
 			},
 			buildPlanner: func(environment, manifestView string) (*agent.Agent, error) {
 				prompts, _ := d.prompts.snapshot()

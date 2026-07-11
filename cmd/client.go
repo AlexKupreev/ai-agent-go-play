@@ -109,6 +109,12 @@ func printEvent(e api.Event) {
 	case api.KindDone:
 		// Terminal marker only: its Text duplicates the final EvResponse (already
 		// printed above), so don't render it again.
+	case api.KindBrief:
+		// A deliberate turn's plan (or critique note), summarized to one line — the
+		// full block lives in the run transcript. Stderr, like the local chat REPL.
+		if e.Text != "" {
+			fmt.Fprintf(os.Stderr, "[brief] %s\n", api.SummarizeBrief(e.Text))
+		}
 	case api.KindApprovalRequested:
 		fmt.Printf("\n[escalation %s] %s: %s\n", e.ApprovalID, e.Tool, e.Text)
 	case api.KindApprovalResolved:

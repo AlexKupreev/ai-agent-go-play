@@ -85,7 +85,7 @@ func TestEngine_SessionStickyModelTier(t *testing.T) {
 	}
 
 	// UpdateSession changes the stickies live and returns the updated Info.
-	info, err := e.UpdateSession(sid, strptr("m3"), strptr("permissive"))
+	info, err := e.UpdateSession(sid, strptr("m3"), strptr("permissive"), nil)
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestHTTP_SessionStickyOverrides(t *testing.T) {
 		t.Fatalf("listing did not reflect POST stickies: %+v", infos)
 	}
 
-	info, err := c.UpdateSession(ctx, sid, nil, strptr("balanced"))
+	info, err := c.UpdateSession(ctx, sid, nil, strptr("balanced"), nil)
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
@@ -133,10 +133,10 @@ func TestHTTP_SessionStickyOverrides(t *testing.T) {
 		t.Fatalf("PATCH result = %+v, want model kept, tier balanced", info)
 	}
 
-	if _, err := c.UpdateSession(ctx, sid, nil, strptr("bogus")); err == nil {
+	if _, err := c.UpdateSession(ctx, sid, nil, strptr("bogus"), nil); err == nil {
 		t.Fatal("UpdateSession with a bad tier returned nil error, want a 400")
 	}
-	if _, err := c.UpdateSession(ctx, "missing", strptr("m"), nil); err == nil {
+	if _, err := c.UpdateSession(ctx, "missing", strptr("m"), nil, nil); err == nil {
 		t.Fatal("UpdateSession on an unknown session returned nil error, want a 404")
 	}
 }
@@ -147,13 +147,13 @@ func TestEngine_UpdateSessionUnknown(t *testing.T) {
 	e := NewEngine(RunnerFunc(fakeRunner))
 	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
 
-	if _, err := e.UpdateSession("nope", strptr("m"), nil); !errors.Is(err, session.ErrNotFound) {
+	if _, err := e.UpdateSession("nope", strptr("m"), nil, nil); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("UpdateSession unknown = %v, want ErrNotFound", err)
 	}
 
 	sid, _ := e.StartSession(RunOptions{Model: "keep", Tier: "safe"})
 	// A nil field is left unchanged; a present field is set.
-	info, err := e.UpdateSession(sid, nil, strptr("balanced"))
+	info, err := e.UpdateSession(sid, nil, strptr("balanced"), nil)
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
@@ -432,5 +432,82 @@ func TestEngine_SessionsDisabled(t *testing.T) {
 	}
 	if e.SessionsEnabled() {
 		t.Fatal("SessionsEnabled true without EnableSessions")
+	}
+}
+
+// TestEngine_SessionStickySpace proves the space sticky rides the same lifecycle as
+// model/tier (spaces.md §5): persisted at StartSession, merged into turn options,
+// changed live by UpdateSession.
+func TestEngine_SessionStickySpace(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	rec := &recordingTurns{}
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, rec)
+
+	sid, err := e.StartSession(RunOptions{Space: "polish"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if got, _ := store.Get(sid); got.Space != "polish" {
+		t.Fatalf("StartSession stored space %q, want polish", got.Space)
+	}
+	r1, err := e.PostTurn(sid, "a", RunOptions{})
+	if err != nil {
+		t.Fatalf("PostTurn: %v", err)
+	}
+	waitRunState(t, e, r1, StateDone)
+	if opts := rec.last(); opts.Space != "polish" {
+		t.Fatalf("turn opts = %+v, want space polish from the session sticky", opts)
+	}
+	info, err := e.UpdateSession(sid, nil, nil, strptr("tax"))
+	if err != nil || info.Space != "tax" {
+		t.Fatalf("UpdateSession space = %+v, %v; want tax", info, err)
+	}
+	// Clearing returns the session to the global scope.
+	if info, err = e.UpdateSession(sid, nil, nil, strptr("")); err != nil || info.Space != "" {
+		t.Fatalf("UpdateSession clear = %+v, %v; want empty", info, err)
+	}
+}
+
+// TestEngine_MidTurnSessionEditSurvivesPersist proves the switch_space path: a tool that
+// updates the session's sticky fields THROUGH the store mid-turn (as the serve turn
+// runner's Switch callback does) is not clobbered when the engine persists the turn's
+// history afterwards — PostTurn re-reads the session before saving.
+func TestEngine_MidTurnSessionEditSurvivesPersist(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	e := NewEngine(RunnerFunc(fakeRunner))
+	turns := TurnRunnerFunc(func(_ context.Context, _, sessionID string, prior []provider.Message, text string, _ RunOptions, _ agent.Observer) (string, []provider.Message, error) {
+		// Mid-turn: the switch_space tool re-points the session's space via the store.
+		sess, err := store.Get(sessionID)
+		if err != nil {
+			return "", nil, err
+		}
+		sess.Space = "switched-mid-turn"
+		if err := store.Save(sess); err != nil {
+			return "", nil, err
+		}
+		return "ok", append(append([]provider.Message{}, prior...), provider.UserText(text)), nil
+	})
+	e.EnableSessions(store, turns)
+
+	sid, err := e.StartSession(RunOptions{})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	r1, err := e.PostTurn(sid, "switch to polish", RunOptions{})
+	if err != nil {
+		t.Fatalf("PostTurn: %v", err)
+	}
+	waitRunState(t, e, r1, StateDone)
+
+	got, err := store.Get(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Space != "switched-mid-turn" {
+		t.Fatalf("session space = %q after the turn, want the mid-turn switch preserved", got.Space)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("session has %d messages, want 1 (history still persisted)", len(got.Messages))
 	}
 }

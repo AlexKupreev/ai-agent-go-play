@@ -6,6 +6,7 @@ import (
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/space"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -59,7 +60,7 @@ var promptsShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		mem, err := loadMemoryForInspect()
+		mem, err := loadMemoryForInspect(workDir)
 		if err != nil {
 			return err
 		}
@@ -73,7 +74,8 @@ var promptsShowCmd = &cobra.Command{
 			Registry: registry, Memory: mem, Docs: selfDocs,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
-			StatusDirs: agentStateDirs(), Sessions: sessReader,
+			Space:      tools.SpaceContext{Store: space.NewStore(spacesDir(workDir))},
+			StatusDirs: agentStateDirs(workDir), Sessions: sessReader,
 		})
 
 		showExecutor := promptsAllFlag || (!promptsPlannerFlag && !promptsCriticFlag)
@@ -107,13 +109,10 @@ func loadRegistryForInspect() (tools.Registry, error) {
 	return tools.NewPersistentRegistry(catPath)
 }
 
-// loadMemoryForInspect loads the persistent memory store for prompt inspection.
-func loadMemoryForInspect() (memory.Store, error) {
-	memPath, err := memoryPath()
-	if err != nil {
-		return nil, err
-	}
-	return memory.NewPersistentStore(memPath)
+// loadMemoryForInspect loads the workspace's persistent memory store (global scope) for
+// prompt inspection.
+func loadMemoryForInspect(workDir string) (memory.Store, error) {
+	return memory.NewPersistentStore(memoryPath(workDir))
 }
 
 func init() {

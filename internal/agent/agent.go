@@ -223,8 +223,33 @@ func (a *Agent) EnvironmentSummary() string {
 	b.WriteString("Tools the execution agent has right now:\n")
 	b.WriteString(a.toolRoster())
 	fmt.Fprintf(&b, "\n\nTrust tier: %s.\n", a.tier)
+	if a.envMemoryNote != "" {
+		b.WriteString(a.envMemoryNote + "\n")
+	}
 	if line := hostResourceLine(a.statDir()); line != "" {
 		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// memoryEnvironmentNote renders the long-term-memory section of EnvironmentSummary: the
+// planner must know remembered facts exist beyond the transcript, or its brief will
+// (correctly, from its own view) tell the executor the chat is the only source. When a
+// space is active its identity and notes are included — the planner is the context-aware
+// component, so the space profile belongs in its view too.
+func memoryEnvironmentNote(sc tools.SpaceContext) string {
+	var b strings.Builder
+	b.WriteString("Long-term memory: the execution agent has persistent cross-conversation memory " +
+		"(recall/remember). The chat transcript is NOT the only source of user facts — when the " +
+		"user references something previously saved or discussed in an earlier conversation " +
+		"(\"my level\", \"what I told you\", \"last time\"), the brief should direct the executor " +
+		"to check recall before concluding the information is unavailable.")
+	if sc.Store == nil || sc.ActiveID == "" {
+		return b.String()
+	}
+	fmt.Fprintf(&b, "\nActive space: %q — memory is scoped to this named context (plus the global scope).", sc.ActiveID)
+	if sp, err := sc.Store.Get(sc.ActiveID); err == nil && strings.TrimSpace(sp.Notes) != "" {
+		fmt.Fprintf(&b, " Its standing notes:\n%s", strings.TrimSpace(sp.Notes))
 	}
 	return b.String()
 }
@@ -368,6 +393,12 @@ type Agent struct {
 	contextLimit    int
 	lastInputTokens int64
 
+	// envMemoryNote describes the executor's long-term memory (and active space, if any)
+	// for the planner's EnvironmentSummary. Without it the planner briefs from the
+	// conversation alone — and a brief like "respond based only on the chat" steers the
+	// executor away from recall even when the remembered fact exists. "" ⇒ no memory wired.
+	envMemoryNote string
+
 	// spawnDepth is the remaining sub-agent spawn budget (subagents.md §3): spawn_agent
 	// refuses at ≤0 and hands the child spawnDepth-1, so "an agent that spawns agents" is
 	// terminating by construction. In v1 children carry no spawn tool, so this only bites
@@ -455,6 +486,12 @@ type ExecutorConfig struct {
 	// read_session) so the agent can revisit earlier conversations. Nil ⇒ those tools are
 	// omitted (e.g. one-shot runs with no session store). See tools.NewSessionTools.
 	Sessions tools.SessionReader
+
+	// Space wires the space tools (list/create/switch_space, space_notes) when a space
+	// store is present (docs/adr/spaces.md §6). The cmd layer also scopes cfg.Memory to
+	// the active space (memory.ScopedStore) and appends the space's notes to the prompt —
+	// this field only surfaces the management tools. Zero value ⇒ tools omitted.
+	Space tools.SpaceContext
 
 	// StatusDirs are the agent's on-disk state locations (sessions, transcripts, scratch,
 	// catalog, memory, audit), surfaced by the status tool's disk-usage section. The cmd
@@ -623,6 +660,11 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 			CurrentID: cfg.Usage.SessionID,
 		})...)
 	}
+	// Spaces: switchable data contexts (list/create/switch, notes). Trusted, not
+	// sandbox-exposed; omitted when no space store is wired (spaces.md §6).
+	if cfg.Space.Store != nil {
+		builtins = append(builtins, tools.NewSpaceTools(cfg.Space)...)
+	}
 	a := newAgent(p, model, prompt, builtins, obs)
 	self = a
 	a.registry = registry
@@ -630,6 +672,11 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	a.tier = tier
 	a.runID = runID
 	a.limits = limits
+	// Surface memory (and the active space) in the planner's environment view, so a
+	// deliberate turn plans a recall instead of briefing "the chat is the only source".
+	if mem != nil {
+		a.envMemoryNote = memoryEnvironmentNote(cfg.Space)
+	}
 	// Context-window size: an explicit config override wins, else the built-in table by model
 	// (already set by newAgent). 0 stays 0 (unknown ⇒ gauge shows tokens without a percentage).
 	if cfg.ContextLimit > 0 {

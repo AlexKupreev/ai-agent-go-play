@@ -11,10 +11,12 @@ set -euo pipefail
 : "${OPENAI_API_KEY:?set it once: fly secrets set OPENAI_API_KEY=sk-...}"
 
 # All persistent state lives on the volume (default mount /data). config/tools/
-# memory/audit under the config dir; per-run transcripts under the sessions dir.
+# audit under the config dir; per-run transcripts under the sessions dir; memory
+# + spaces under the workspace's .agent/ (we cd into WORKDIR below, so they land
+# on the volume too — docs/adr/spaces.md).
 export AI_AGENT_CONFIG_DIR="${AI_AGENT_CONFIG_DIR:-/data/config}"
 export AI_AGENT_SESSIONS_DIR="${AI_AGENT_SESSIONS_DIR:-/data/sessions}"
-WORKDIR="${AGENT_WORKDIR:-/data/workspace}" # cwd for the shell tool; persisted
+WORKDIR="${AGENT_WORKDIR:-/data/workspace}" # cwd for the shell tool + memory/spaces home; persisted
 
 mkdir -p "$AI_AGENT_CONFIG_DIR" "$AI_AGENT_SESSIONS_DIR" "$WORKDIR"
 

@@ -11,6 +11,7 @@ import (
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/space"
 )
 
 // runRemoteChat is `agent chat --addr`: a REPL that drives a running engine's
@@ -26,15 +27,17 @@ func runRemoteChat(addr string) error {
 		return listRemoteSessions(ctx, c, addr)
 	}
 
-	// --model / --tier seed a freshly-created session's sticky overrides (validated here so a
-	// bad tier fails before we open a session). They do not disturb a resumed session, which
-	// keeps its stored stickies. /model and /tier change them live via PATCH mid-REPL.
-	initialOpts := api.RunOptions{Model: modelFlag, Tier: tierFlag}
+	// --model / --tier / --space seed a freshly-created session's sticky overrides (validated
+	// here so a bad tier fails before we open a session). They do not disturb a resumed
+	// session, which keeps its stored stickies. /model, /tier, and /space change them live via
+	// PATCH mid-REPL. The space value is slugged to its id form; the engine validates it
+	// against the store at turn time (spaces live workspace-side).
+	initialOpts := api.RunOptions{Model: modelFlag, Tier: tierFlag, Space: space.Slug(chatSpaceFlag)}
 	if err := validateTierFlag(tierFlag); err != nil {
 		return err
 	}
 
-	sessionID, resumed, turns, curModel, curTier, err := attachSession(ctx, c, addr, initialOpts)
+	sessionID, resumed, turns, curModel, curTier, curSpace, err := attachSession(ctx, c, addr, initialOpts)
 	if err != nil {
 		return err
 	}
@@ -44,8 +47,8 @@ func runRemoteChat(addr string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
-	fmt.Fprintf(os.Stderr, "model %s, tier %s\n", modelLabel(curModel), tierLabel(curTier))
-	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] switch for the session, /end close, /purge delete for good, /exit or Ctrl-D detach)")
+	fmt.Fprintf(os.Stderr, "model %s, tier %s, space %s\n", modelLabel(curModel), tierLabel(curTier), spaceLabel(curSpace))
+	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] & /space [name] switch for the session, /end close, /purge delete for good, /exit or Ctrl-D detach)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -74,7 +77,7 @@ func runRemoteChat(addr string) error {
 				fmt.Fprintf(os.Stderr, "(model: %s; usage: /model <id>)\n", modelLabel(curModel))
 				continue
 			}
-			info, err := c.UpdateSession(ctx, sessionID, &arg, nil)
+			info, err := c.UpdateSession(ctx, sessionID, &arg, nil, nil)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "set model: %v\n", err)
 				continue
@@ -93,13 +96,36 @@ func runRemoteChat(addr string) error {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				continue
 			}
-			info, err := c.UpdateSession(ctx, sessionID, nil, &arg)
+			info, err := c.UpdateSession(ctx, sessionID, nil, &arg, nil)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "set tier: %v\n", err)
 				continue
 			}
 			curTier = info.Tier
 			fmt.Fprintf(os.Stderr, "(tier set to %s — effective next turn; clamped to the serve ceiling)\n", tierLabel(curTier))
+			continue
+		}
+		// /space [name] switches the session's active space (spaces.md §5): the value is
+		// slugged to its id and stored as the session sticky; `-` returns to the global
+		// scope. The engine resolves it against the workspace's space store at turn time,
+		// so an unknown space fails that turn with a clear error (switch back or create it).
+		if arg, ok := strings.CutPrefix(line, "/space"); ok {
+			arg = strings.TrimSpace(arg)
+			if arg == "" {
+				fmt.Fprintf(os.Stderr, "(space: %s; usage: /space <name-or-id>, /space - for global)\n", spaceLabel(curSpace))
+				continue
+			}
+			val := space.Slug(arg)
+			if arg == "-" {
+				val = ""
+			}
+			info, err := c.UpdateSession(ctx, sessionID, nil, nil, &val)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "set space: %v\n", err)
+				continue
+			}
+			curSpace = info.Space
+			fmt.Fprintf(os.Stderr, "(space set to %s — effective next turn)\n", spaceLabel(curSpace))
 			continue
 		}
 		switch line {
@@ -138,7 +164,7 @@ func runRemoteChat(addr string) error {
 				return fmt.Errorf("start session: %w", err)
 			}
 			sessionID = newID
-			curModel, curTier = initialOpts.Model, initialOpts.Tier
+			curModel, curTier, curSpace = initialOpts.Model, initialOpts.Tier, initialOpts.Space
 			fmt.Fprintf(os.Stderr, "(new conversation — session %s)\n", sessionID)
 			continue
 		}
@@ -167,27 +193,27 @@ func listRemoteSessions(ctx context.Context, c *api.Client, addr string) error {
 }
 
 // attachSession resolves the session to talk to: --session resumes an existing one
-// (validated against the engine's list, inheriting its stored sticky model/tier), otherwise a
-// new session is created seeded with opts. It also returns the session's current sticky
-// model/tier so the REPL can display and track them.
-func attachSession(ctx context.Context, c *api.Client, addr string, opts api.RunOptions) (id string, resumed bool, turns int, model, tier string, err error) {
+// (validated against the engine's list, inheriting its stored sticky model/tier/space),
+// otherwise a new session is created seeded with opts. It also returns the session's current
+// stickies so the REPL can display and track them.
+func attachSession(ctx context.Context, c *api.Client, addr string, opts api.RunOptions) (id string, resumed bool, turns int, model, tier, spaceID string, err error) {
 	if chatSessionFlag != "" {
 		infos, err := c.ListSessions(ctx)
 		if err != nil {
-			return "", false, 0, "", "", err
+			return "", false, 0, "", "", "", err
 		}
 		for _, in := range infos {
 			if in.ID == chatSessionFlag {
-				return in.ID, true, in.Turns, in.Model, in.Tier, nil
+				return in.ID, true, in.Turns, in.Model, in.Tier, in.Space, nil
 			}
 		}
-		return "", false, 0, "", "", fmt.Errorf("no session %q on %s (list them with: agent chat --addr %s --list)", chatSessionFlag, addr, addr)
+		return "", false, 0, "", "", "", fmt.Errorf("no session %q on %s (list them with: agent chat --addr %s --list)", chatSessionFlag, addr, addr)
 	}
 	id, err = c.StartSession(ctx, opts)
 	if err != nil {
-		return "", false, 0, "", "", fmt.Errorf("start session: %w", err)
+		return "", false, 0, "", "", "", fmt.Errorf("start session: %w", err)
 	}
-	return id, false, 0, opts.Model, opts.Tier, nil
+	return id, false, 0, opts.Model, opts.Tier, opts.Space, nil
 }
 
 // validateTierFlag accepts an empty string (inherit the engine default) or a valid tier name,
@@ -206,6 +232,14 @@ func tierLabel(tier string) string {
 		return "(engine default)"
 	}
 	return tier
+}
+
+// spaceLabel renders a space id for display, naming the global scope when unset.
+func spaceLabel(id string) string {
+	if id == "" {
+		return "(global scope)"
+	}
+	return id
 }
 
 // runRemoteTurn posts one turn to the session and streams its reply. Ctrl-C cancels

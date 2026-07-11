@@ -35,7 +35,7 @@ func TestAttachSession(t *testing.T) {
 
 	t.Run("no --session starts a new one", func(t *testing.T) {
 		chatSessionFlag = ""
-		id, resumed, turns, _, _, err := attachSession(ctx, c, "test", api.RunOptions{})
+		id, resumed, turns, _, _, _, err := attachSession(ctx, c, "test", api.RunOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +50,7 @@ func TestAttachSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		chatSessionFlag = existing
-		id, resumed, _, _, _, err := attachSession(ctx, c, "test", api.RunOptions{})
+		id, resumed, _, _, _, _, err := attachSession(ctx, c, "test", api.RunOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestAttachSession(t *testing.T) {
 
 	t.Run("--session with an unknown id errors", func(t *testing.T) {
 		chatSessionFlag = "does-not-exist"
-		if _, _, _, _, _, err := attachSession(ctx, c, "test", api.RunOptions{}); err == nil {
+		if _, _, _, _, _, _, err := attachSession(ctx, c, "test", api.RunOptions{}); err == nil {
 			t.Fatal("attachSession() with unknown id returned nil error, want a not-found error")
 		}
 	})

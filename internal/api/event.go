@@ -4,7 +4,11 @@
 // attaches to the same core — see docs/api-transport.md.
 package api
 
-import "ai-agent-go-play/internal/agent"
+import (
+	"strings"
+
+	"ai-agent-go-play/internal/agent"
+)
 
 // Event is the wire form of a run event: a stable, transport-neutral schema that
 // every adapter (SSE today, JSON-RPC later) serializes identically. It is decoupled
@@ -59,6 +63,33 @@ const (
 // deliberation distinctly instead of receiving the planner's raw structured output. Text
 // holds the brief/note; a frontend may show or ignore it.
 const KindBrief = "brief"
+
+// SummarizeBrief reduces a KindBrief text to its one-line display form: the first content
+// line (the refined task), with a leading "(label)" line — a critique revision marker —
+// kept as a prefix. The full brief is deliberately chatty (context, success criteria,
+// assumptions), so clients show it only on request (e.g. chat's /verbose); the run
+// transcript always keeps the whole thing. Shared here so every frontend renders briefs
+// the same way.
+func SummarizeBrief(text string) string {
+	label := ""
+	rest := text
+	for {
+		line, tail, more := strings.Cut(rest, "\n")
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			// skip blank lines
+		case label == "" && strings.HasPrefix(line, "(") && strings.HasSuffix(line, ")"):
+			label = line + " "
+		default:
+			return label + line
+		}
+		if !more {
+			return strings.TrimSpace(label)
+		}
+		rest = tail
+	}
+}
 
 // Approval escalation event kinds. Emitted into a run's stream by the shared
 // ApprovalQueue so a streaming frontend learns of a parked escalation (and its

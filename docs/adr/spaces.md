@@ -8,8 +8,12 @@ data*, **not** a working directory. That single simplification removes the trust
 questions that sank Projects.
 
 Companion to [`../design.md`](../design.md) (§1 single trusted box), [`memory.md`](memory.md), and
-the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Roadmap, not current
-behavior — nothing here is built yet.**
+the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Status (2026-07-11):
+P1 + P2 + P3-notes are BUILT** (`internal/space`, `memory.ScopedStore`, the five space tools,
+`Session.Space` sticky + POST/PATCH, `/space` in local/remote chat + Telegram, `--space`, notes
+injected into the system prompt, and the workspace-local move of memory to
+`<workspace>/.agent/`). Per-space **artifact manifests** (the rest of P3) and P4 remain
+roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table, `memory.md`.
 
 ---
 
@@ -221,17 +225,21 @@ here as a space field rather than a standalone file).
 
 ## 7. Staging
 
-- **P1 — spaces exist + switch.** `internal/space` store (dir-of-dirs, `space.json` metadata) +
-  `list_spaces`/`create_space`/`switch_space` + `Session.SpaceID` sticky (+ `POST`/`PATCH`) +
-  `/space` command + `agent chat --space`. No scoping yet — proves creation, listing, and switching.
-- **P2 — memory scoping.** The `ScopedStore` (active ∪ global); `remember` → active, `recall` →
-  merged; per-space `spaces/<id>/memory.json`. This is the core payoff.
-- **P3 — artifacts + notes.** Per-space `artifacts.json` manifest; the notes blob + injection +
-  `update_space_notes`; the always-loaded per-space profile.
-- **P4 (deferred) — SQLite backend** behind `memory.Store` when scale/search bites (§3); and any
+- [x] **P1 — spaces exist + switch.** *(DONE 2026-07-11)* `internal/space` store (dir-of-dirs,
+  `space.json` metadata) + `list_spaces`/`create_space`/`switch_space` + `Session.Space` sticky
+  (+ `POST`/`PATCH`) + `/space` command (local, remote, Telegram) + `agent chat --space`.
+- [x] **P2 — memory scoping.** *(DONE 2026-07-11)* The `ScopedStore` (active ∪ global);
+  `remember` → active, `recall` → merged; per-space `spaces/<id>/memory.json`. In `serve`, one
+  shard instance per space is shared process-wide so concurrent sessions serialize writes.
+  Mid-turn `switch_space` persists through the session store; the engine re-reads the session
+  before saving the turn history so the switch isn't clobbered.
+- [~] **P3 — artifacts + notes.** Notes **DONE 2026-07-11**: the notes blob (capped at
+  `space.MaxNotesLen`) + `space_notes`/`update_space_notes` + injection into the system prompt
+  (as a labelled append, so prompt composition is unchanged). Per-space `artifacts.json`
+  manifest **deferred** — the artifact cache is currently session-scoped (chat-planner §D5);
+  attach it per space when a real cross-session artifact need appears.
+- [ ] **P4 (deferred) — SQLite backend** behind `memory.Store` when scale/search bites (§3); and any
   per-space cwd, if ever wanted.
-
-Each stage leaves the agent working; P1 ships the switch, P2 the value.
 
 ---
 

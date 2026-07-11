@@ -11,10 +11,15 @@ from a phone.
   Telegram user-id allowlist is the only gate. So these configs expose **no**
   `[http_service]`. The machine is a worker: the Telegram bot long-polls
   `api.telegram.org` *outbound*; nothing reaches in.
-- **State on a volume.** `tools.json`, `memory.json`, `audit.jsonl`, sessions, and
-  the shell workspace live under a mounted volume (`/data`) so they survive
-  restarts and deploys. The stores are single-writer JSON/JSONL — **run exactly one
-  machine** (do not `scale count` > 1).
+- **State on a volume.** `tools.json`, `audit.jsonl`, and sessions live under the
+  config dir on the mounted volume (`/data/config`); **memory and spaces are
+  workspace-local** (`docs/adr/spaces.md`) and live under the shell workspace at
+  `/data/workspace/.agent/` — the entrypoints `cd` there before `serve`, so
+  everything survives restarts and deploys. The stores are single-writer
+  JSON/JSONL — **run exactly one machine** (do not `scale count` > 1).
+  *Migrating a pre-spaces deployment:* memory used to live at
+  `/data/config/memory.json`; keep old entries with
+  `fly ssh console -a ai-agent -C "sh -c 'mkdir -p /data/workspace/.agent && mv /data/config/memory.json /data/workspace/.agent/memory.json'"`.
 - **Secrets, not baked images.** The OpenAI key and Telegram token come from
   `fly secrets`. The OpenAI key has no in-app env override, so the entrypoint writes
   it into the config dir at boot via `agent config set-key`; the Telegram token and

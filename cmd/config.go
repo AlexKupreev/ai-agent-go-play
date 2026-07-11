@@ -391,9 +391,22 @@ func configPath() (string, error) { return underConfigDir("config.json") }
 // ~/.config/ai-agent/tools.json (created on first authored tool).
 func catalogPath() (string, error) { return underConfigDir("tools.json") }
 
-// memoryPath returns the path to the long-term memory store, e.g.
-// ~/.config/ai-agent/memory.json (created on first remembered fact).
-func memoryPath() (string, error) { return underConfigDir("memory.json") }
+// agentDataDir returns the workspace-local root for the agent's own data —
+// <workspace>/.agent/ — holding the memory store and the spaces (docs/adr/spaces.md,
+// governing decision 2026-07-08). Living in the workspace makes the data set
+// per-workspace by construction, and committing or .gitignore-ing it is the user's
+// call with no feature needed.
+func agentDataDir(workDir string) string { return filepath.Join(workDir, ".agent") }
+
+// memoryPath returns the GLOBAL-scope long-term memory store for a workspace, e.g.
+// <workspace>/.agent/memory.json (created on first remembered fact). Space-scoped
+// shards live under spacesDir. (Until spaces landed this file lived in the config
+// dir; move an old <config-dir>/memory.json here to keep its entries.)
+func memoryPath(workDir string) string { return filepath.Join(agentDataDir(workDir), "memory.json") }
+
+// spacesDir returns the workspace's spaces root, e.g. <workspace>/.agent/spaces —
+// one subdirectory per space with its metadata + memory shard (spaces.md §3).
+func spacesDir(workDir string) string { return filepath.Join(agentDataDir(workDir), "spaces") }
 
 // auditPath returns the path to the process-wide audit log used by the serve
 // management plane, e.g. ~/.config/ai-agent/audit.jsonl. (Per-run transcripts keep
@@ -423,8 +436,9 @@ func sessionScratchDir(sessionID string) (string, error) {
 
 // agentStateDirs resolves the agent's on-disk state locations for the status tool's
 // disk-usage section, best-effort (a path that can't be resolved is skipped). internal/tools
-// reports usage but resolves no paths itself; this is where the config-dir layout lives.
-func agentStateDirs() []tools.StateDir {
+// reports usage but resolves no paths itself; this is where the config-dir + workspace
+// layout lives (memory and spaces are workspace-local, spaces.md).
+func agentStateDirs(workDir string) []tools.StateDir {
 	specs := []struct {
 		label string
 		fn    func() (string, error)
@@ -433,7 +447,6 @@ func agentStateDirs() []tools.StateDir {
 		{"sessions (+ archived)", sessionStorePath},
 		{"scratch cache", sessionScratchRoot},
 		{"tool catalog", catalogPath},
-		{"memory", memoryPath},
 		{"audit log", auditPath},
 	}
 	var dirs []tools.StateDir
@@ -441,6 +454,12 @@ func agentStateDirs() []tools.StateDir {
 		if p, err := s.fn(); err == nil && p != "" {
 			dirs = append(dirs, tools.StateDir{Label: s.label, Path: p})
 		}
+	}
+	if workDir != "" {
+		dirs = append(dirs,
+			tools.StateDir{Label: "memory (global scope)", Path: memoryPath(workDir)},
+			tools.StateDir{Label: "spaces", Path: spacesDir(workDir)},
+		)
 	}
 	return dirs
 }

@@ -655,14 +655,18 @@ planning from reference docs). Kinds: `reference` (authoritative about current b
     `agent chat` (read-only over `<config-dir>/sessions/`, so it sees serve/Telegram conversations).
     Not sandbox-exposed. Tests: `TestSessionTools`, `TestSessionTools_EmptyStore`; roster
     live-verified via `prompts show`.
-- [ ] **Implicit recall / switchable contexts → Spaces (designed).** Resolved into a design:
-    **spaces** — switchable *data* scopes (per-space memory + artifact refs + an always-loaded notes
-    blob = the per-space "profile"), active per session and switched explicitly with `/space`. It is
-    the data-only successor to the reverted cwd-based Projects (no workspace switching), reusing the
-    session-sticky and memory/artifact machinery. Storage is sharded per space (bounding the
-    rewrite-everything cost of one `memory.json`), SQLite when it bites. See
-    [`../adr/spaces.md`](../adr/spaces.md); buildable slice is **P1** (store + list/create/switch +
-    session sticky + `/space`).
+- [x] **Implicit recall / switchable contexts → Spaces — BUILT (P1+P2+P3-notes, 2026-07-11).**
+    Switchable *data* scopes (per-space memory + an always-loaded notes blob = the per-space
+    "profile"), active per session (sticky `Session.Space`, POST/PATCH) and switched explicitly
+    (`/space` in local/remote chat + Telegram, `agent chat --space`, or the `switch_space` tool in
+    natural language). `internal/space` (dir-of-dirs under `<workspace>/.agent/spaces/`),
+    `memory.ScopedStore` (write → active space, read → active ∪ global with shadowing), five
+    trusted tools (`list_spaces`/`create_space`/`switch_space`/`space_notes`/`update_space_notes`),
+    notes injected as a labelled prompt append. **Includes the governing-decision move of memory to
+    `<workspace>/.agent/memory.json`** (workspace-local; old config-dir `memory.json` is moved by
+    hand). Per-space artifact manifests + SQLite remain deferred. See
+    [`../adr/spaces.md`](../adr/spaces.md) §7 for staging detail; reference docs updated
+    (`usage.md` §Spaces, `environment.md`, `memory.md`, `api-transport.md`).
 
 **Risks/notes:** keep the model-facing self-tools read-only and un-sandboxed (introspection,
 not effect). Token totals are cheap and always-on; cost/budget are opt-in extras. Don't let a

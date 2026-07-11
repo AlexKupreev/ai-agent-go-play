@@ -320,7 +320,6 @@ func TestConfigDirPrecedence(t *testing.T) {
 		}{
 			{configPath, "/agents/work/config.json"},
 			{catalogPath, "/agents/work/tools.json"},
-			{memoryPath, "/agents/work/memory.json"},
 			{auditPath, "/agents/work/audit.jsonl"},
 			{sessionStorePath, "/agents/work/sessions"},
 			{runsDir, "/agents/work/runs"},
@@ -332,6 +331,17 @@ func TestConfigDirPrecedence(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("path = %q, want %q", got, tc.want)
 			}
+		}
+	})
+
+	t.Run("memory and spaces live under the workspace", func(t *testing.T) {
+		// The agent's own data is workspace-local (spaces.md governing decision):
+		// per-workspace by construction, committable/ignorable as plain files.
+		if got := memoryPath("/repo"); got != "/repo/.agent/memory.json" {
+			t.Fatalf("memoryPath = %q, want /repo/.agent/memory.json", got)
+		}
+		if got := spacesDir("/repo"); got != "/repo/.agent/spaces" {
+			t.Fatalf("spacesDir = %q, want /repo/.agent/spaces", got)
 		}
 	})
 }

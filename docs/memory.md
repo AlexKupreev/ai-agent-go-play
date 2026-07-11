@@ -43,10 +43,19 @@ with an `op` field.
   the clarity is worth it.
 
 `recall` resolves in priority order: exact `key` → relevance `query` (token-overlap `Search`) →
-recent listing (capped by `limit`, default 5).
+recent listing (capped by `limit`, default 5). **A `query` that matches nothing falls back to the
+recent listing** rather than reporting "nothing" — see the drawback below.
 
 - **Benefit:** one tool covers "fetch this exact fact", "find facts about X", and "what do you
   know?" without three tools. The default cap keeps a large store from flooding the context.
+- **Drawback:** `Search` is **token-overlap**, so a `query` sharing no literal words with the
+  stored note misses — a different language/script (a Russian query over an English note), a
+  synonym, or an unexpectedly-phrased fact. That produced a real false negative (an active-space
+  `user.level` = "…A1" went unfound under a Russian query), so `recall` now **falls back to
+  listing recent entries on a query miss** (`no direct match for …; the N most recent entries…`):
+  for a small personal store the agent reads the few results and finds the one it wants. The real
+  fix (embeddings / semantic search) waits for the SQLite migration; the fallback is the cheap
+  mitigation until then.
 - **Drawback:** the precedence is implicit — giving both `key` and `query` silently prefers `key`.
   Documented in the tool description so the model isn't surprised.
 
@@ -77,7 +86,9 @@ mirroring the tool `Registry` deliberately.
 (temp + rename, `0600`, parent `0700`) — identical to the tool catalog.
 
 - **Benefit:** single-binary-friendly, human-readable, diffable; crash-safe via atomic rename;
-  consistent with `tools.json` and `config.json`. `~/.config/ai-agent/memory.json`.
+  consistent with `tools.json` and `config.json`. `<workspace>/.agent/memory.json` — memory is
+  **workspace-local** (spaces ADR governing decision): each workspace has its own store, and
+  per-space shards live beside it under `.agent/spaces/<id>/memory.json`.
 - **Drawback:** rewrites the whole file on each write — fine at the expected size (tens–hundreds of
   notes), not thousands. That scale is exactly the SQLite trigger (design §9). Single-process
   assumption: the in-process mutex covers goroutines, not multiple processes sharing the file.
@@ -93,6 +104,17 @@ fact remembered in one run is recallable by later runs and any future frontend.
   namespacing). Correct for the single-user deployment (§1) — the trusted users share one memory.
   Per-user scoping was considered (an earlier Phase 4e draft) and **dropped**; revisit only if the
   trust model ever widens to untrusted users.
+
+### Space scoping (`ScopedStore`)
+
+With a **space** active on a session (usage.md §Spaces), the cmd layer hands `remember`/`recall` a
+`memory.ScopedStore`: writes go to the active space's own shard
+(`.agent/spaces/<id>/memory.json`), reads merge the space over the global store (the space
+shadows global on key collisions). The tools' signatures are untouched — they still take a
+plain `memory.Store` — and with no active space the global store is used directly, exactly the
+pre-spaces behavior. Sharding also bounds the rewrite-whole-file cost of `Put` to one space's
+file. In `serve`, one shard instance per space is shared process-wide (a cache in cmd), so
+concurrent sessions in the same space serialize writes through one store.
 
 ---
 

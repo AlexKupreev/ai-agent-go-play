@@ -18,6 +18,8 @@ import (
 	"sync"
 
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/space"
 )
 
 // Button is one inline-keyboard button: a label plus the callback data delivered
@@ -70,6 +72,7 @@ type Client interface {
 	PostTurn(ctx context.Context, sessionID, text string, opts api.RunOptions) (runID string, err error)
 	CloseSession(ctx context.Context, sessionID string) error
 	PurgeSession(ctx context.Context, sessionID string) error
+	UpdateSession(ctx context.Context, sessionID string, model, tier, space *string) (session.Info, error)
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
 	Answer(ctx context.Context, id, text string) error
@@ -217,8 +220,36 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 			return
 		}
 		_ = b.transport.Send(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message", nil)
+	case "/space":
+		// Switch this chat's session to a space (a scoped memory context, spaces.md §5),
+		// mirroring the CLI REPL's /space: `/space <name>` switches, `/space -` returns to
+		// the global scope, bare `/space` explains. The engine resolves the id at turn
+		// time, so an unknown space fails that turn with a clear error.
+		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/space"))
+		if arg == "" {
+			_ = b.transport.Send(ctx, m.ChatID, "usage: /space <name-or-id> (switch), /space - (back to the global scope)", nil)
+			return
+		}
+		sessionID, err := b.sessionFor(ctx, m.ChatID)
+		if err != nil {
+			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+			return
+		}
+		val := space.Slug(arg)
+		if arg == "-" {
+			val = ""
+		}
+		if _, err := b.client.UpdateSession(ctx, sessionID, nil, nil, &val); err != nil {
+			_ = b.transport.Send(ctx, m.ChatID, "set space failed: "+err.Error(), nil)
+			return
+		}
+		if val == "" {
+			_ = b.transport.Send(ctx, m.ChatID, "space cleared — back to the global scope from your next message", nil)
+		} else {
+			_ = b.transport.Send(ctx, m.ChatID, "space set to "+val+" — effective from your next message", nil)
+		}
 	default:
-		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /reload (re-read prompts + agent types)", nil)
+		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /space <name> (switch data context), /reload (re-read prompts + agent types)", nil)
 	}
 }
 
@@ -290,10 +321,11 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 			// Terminal marker only: its Text duplicates the final EvResponse
 			// (already forwarded by the default branch), so don't send it again.
 		case api.KindBrief:
-			// The deliberate turn's plan/critique surface (serve --plan): show it distinctly
-			// from the answer so the deliberation is legible without being mistaken for prose.
+			// The deliberate turn's plan/critique surface (serve --plan): one summary line,
+			// distinct from the answer, so the deliberation is legible without drowning the
+			// chat (the full brief stays in the run transcript on the engine).
 			if e.Text != "" {
-				_ = b.transport.Send(ctx, chatID, "🧭 "+e.Text, nil)
+				_ = b.transport.Send(ctx, chatID, "🧭 "+api.SummarizeBrief(e.Text), nil)
 			}
 		case api.KindError:
 			_ = b.transport.Send(ctx, chatID, "run error: "+e.Text, nil)

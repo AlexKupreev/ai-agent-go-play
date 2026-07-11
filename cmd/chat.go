@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
@@ -18,6 +19,7 @@ import (
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/space"
 	"ai-agent-go-play/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -30,6 +32,7 @@ var (
 	chatAddrFlag         string
 	chatSessionFlag      string
 	chatListFlag         bool
+	chatSpaceFlag        string
 )
 
 var chatCmd = &cobra.Command{
@@ -47,9 +50,12 @@ var chatCmd = &cobra.Command{
 		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
 		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
 		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
-		"[safe|balanced|permissive] show or switch the model/tier for the session, /compact " +
+		"[safe|balanced|permissive] show or switch the model/tier for the session, /space " +
+		"[name|list|-] shows or switches the active space (a named memory context with its own " +
+		"always-loaded notes), /compact " +
 		"summarizes the conversation so far to free context, /verbose [on|off] toggles the " +
-		"trace, /exit (or Ctrl-D) quits.\n" +
+		"trace and the full planner brief (off shows a one-line brief summary), /exit (or " +
+		"Ctrl-D) quits.\n" +
 		"Commands (--addr): /new (alias /reset) starts a fresh session, /end closes the session, " +
 		"/exit (or Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
@@ -103,14 +109,25 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("failed to load tool catalog: %w", err)
 		}
 
-		memPath, err := memoryPath()
-		if err != nil {
-			return err
-		}
-		mem, err := memory.NewPersistentStore(memPath)
+		// Memory is workspace-local (<workspace>/.agent/, spaces.md): a global store plus
+		// per-space shards. activeSpace is this REPL's active space id ("" ⇒ global scope),
+		// seeded by --space and switched live by /space or the switch_space tool. A mid-turn
+		// tool switch sets spaceDirty; the loop applies it after the turn (bare chat rebuilds
+		// the executor; deliberate mode rebuilds per turn anyway).
+		globalMem, err := memory.NewPersistentStore(memoryPath(workDir))
 		if err != nil {
 			return fmt.Errorf("failed to load memory store: %w", err)
 		}
+		spaces := space.NewStore(spacesDir(workDir))
+		activeSpace := ""
+		if chatSpaceFlag != "" {
+			sp, err := spaces.Resolve(chatSpaceFlag)
+			if err != nil {
+				return fmt.Errorf("--space: %w", err)
+			}
+			activeSpace = sp.ID
+		}
+		spaceDirty := false
 
 		// Read-only access to past conversations (sessions written by serve / Telegram / a
 		// remote chat), so the agent can revisit "what did we discuss last time". Local chat's
@@ -163,14 +180,24 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return nil, err
 			}
+			// Scope memory to the active space and load its notes into the prompt; the
+			// switch_space tool records a change that takes effect at the next (re)build.
+			mem, spaceNote, err := spaceScope(spaces, activeSpace, globalMem, nil)
+			if err != nil {
+				return nil, err
+			}
 			return agent.NewExecutor(agent.ExecutorConfig{
 				Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 				Usage: tools.UsageContext{}, AuditReader: rec,
-				SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+				SystemPromptOverride: prompts.Override, PromptAppends: withSpaceNote(prompts.Appends, spaceNote),
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
-				StatusDirs: agentStateDirs(), Limits: resolveAgentLimits(cfg),
+				Space: tools.SpaceContext{Store: spaces, ActiveID: activeSpace, Switch: func(id string) error {
+					activeSpace, spaceDirty = id, true
+					return nil
+				}},
+				StatusDirs: agentStateDirs(workDir), Limits: resolveAgentLimits(cfg),
 				ContextLimit: resolveContextLimit(model, cfg),
 				Sessions:     sessReader,
 				Secrets:      secretsResolver(cfg),
@@ -236,7 +263,10 @@ var chatCmd = &cobra.Command{
 			critiqueStatus = fmt.Sprintf("on (max %d revisions)", chatMaxRevisionsFlag)
 		}
 		fmt.Fprintf(os.Stderr, "agent chat — model %s, tier %s, planner %s, critique %s, verbose %s\n", executor.Model(), tier, onOff(plan), critiqueStatus, onOff(trace.Enabled()))
-		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /model or /tier to switch, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
+		if activeSpace != "" {
+			fmt.Fprintf(os.Stderr, "active space: %s\n", activeSpace)
+		}
+		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /model /tier /space to switch, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -300,6 +330,50 @@ var chatCmd = &cobra.Command{
 				}
 				tier = t
 				applyConfigChange("tier set to " + string(t))
+				continue
+			}
+			// /space manages the active space (spaces.md §5): no arg shows the current one,
+			// `list` lists them all, `-` returns to the global scope, anything else switches
+			// to that space (by id or name). Switching rebuilds the executor in bare chat
+			// (scoped memory + notes apply immediately); deliberate mode picks it up next turn.
+			if arg, ok := strings.CutPrefix(line, "/space"); ok {
+				arg = strings.TrimSpace(arg)
+				switch arg {
+				case "":
+					if activeSpace == "" {
+						fmt.Fprintln(os.Stderr, "(no space active — global scope; usage: /space <name>, /space list, /space -)")
+					} else {
+						fmt.Fprintf(os.Stderr, "(space: %s; usage: /space <name>, /space list, /space - for global)\n", activeSpace)
+					}
+				case "list":
+					all, err := spaces.List()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "/space list: %v\n", err)
+						continue
+					}
+					if len(all) == 0 {
+						fmt.Fprintln(os.Stderr, "(no spaces yet — ask the agent to create one, e.g. \"create a space for my Polish lessons\")")
+						continue
+					}
+					for _, sp := range all {
+						marker := "  "
+						if sp.ID == activeSpace {
+							marker = "* "
+						}
+						fmt.Fprintf(os.Stderr, "%s%s (%q)\n", marker, sp.ID, sp.Name)
+					}
+				case "-":
+					activeSpace = ""
+					applyConfigChange("space cleared (global scope)")
+				default:
+					sp, err := spaces.Resolve(arg)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "/space: %v\n", err)
+						continue
+					}
+					activeSpace = sp.ID
+					applyConfigChange("space set to " + sp.ID)
+				}
 				continue
 			}
 			// /attach <path> registers a user-provided file in the artifact manifest with
@@ -417,7 +491,7 @@ var chatCmd = &cobra.Command{
 					manifest:      manifest,
 					critique:      critique,
 					maxRevisions:  chatMaxRevisionsFlag,
-				}, turnLog, line)
+				}, turnLog, line, trace.Enabled)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				} else {
@@ -425,6 +499,17 @@ var chatCmd = &cobra.Command{
 				}
 			} else if err := runTurn(sigCh, executor, line); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			}
+			// A switch_space tool call mid-turn re-pointed the active space; apply it now so
+			// the next turn runs with the new scope (bare chat rebuilds the executor here,
+			// deliberate mode rebuilds per turn anyway).
+			if spaceDirty {
+				spaceDirty = false
+				label := "space set to " + activeSpace
+				if activeSpace == "" {
+					label = "space cleared (global scope)"
+				}
+				applyConfigChange(label)
 			}
 			// Per-turn usage is the accumulator's delta; also show the session total.
 			turn := subUsage(before, usage.Total())
@@ -524,13 +609,23 @@ func underTurnContext(sigCh <-chan os.Signal, fn func(ctx context.Context) error
 
 // runPlannedTurn runs one deliberate CLI turn: it wraps the shared runDeliberateTurn
 // (cmd/deliberate.go) in the Ctrl-C context and surfaces the brief + critique notes to
-// stderr. It prints the answer and returns it for the loop to append to the turn log.
-func runPlannedTurn(sigCh <-chan os.Signal, deps deliberateDeps, turnLog []chatTurn, line string) (string, error) {
+// stderr. The brief is a one-line summary by default (the full block — context, success
+// criteria, assumptions — is planner work product, noise in a chat); fullBrief (the
+// /verbose gate) switches to the whole thing. The transcript keeps the full brief either
+// way. It prints the answer and returns it for the loop to append to the turn log.
+func runPlannedTurn(sigCh <-chan os.Signal, deps deliberateDeps, turnLog []chatTurn, line string, fullBrief func() bool) (string, error) {
 	deps.onBrief = func(label, brief string) {
-		if label == "" {
-			fmt.Fprintf(os.Stderr, "[brief]\n%s\n\n", brief)
-		} else {
-			fmt.Fprintf(os.Stderr, "[brief · %s]\n%s\n\n", label, brief)
+		switch {
+		case fullBrief != nil && fullBrief():
+			if label == "" {
+				fmt.Fprintf(os.Stderr, "[brief]\n%s\n\n", brief)
+			} else {
+				fmt.Fprintf(os.Stderr, "[brief · %s]\n%s\n\n", label, brief)
+			}
+		case label == "":
+			fmt.Fprintf(os.Stderr, "[brief] %s\n", api.SummarizeBrief(brief))
+		default:
+			fmt.Fprintf(os.Stderr, "[brief · %s] %s\n", label, api.SummarizeBrief(brief))
 		}
 	}
 	deps.onNote = func(msg string) { fmt.Fprintf(os.Stderr, "[critic] %s\n", msg) }
@@ -574,4 +669,5 @@ func init() {
 	chatCmd.Flags().StringVar(&chatAddrFlag, "addr", "", "drive a running engine's persistent session instead of an in-process executor (host:port or an alias from `agent config set-engine`)")
 	chatCmd.Flags().StringVar(&chatSessionFlag, "session", "", "with --addr: resume this session id instead of starting a new one")
 	chatCmd.Flags().BoolVar(&chatListFlag, "list", false, "with --addr: list resumable sessions on the engine and exit")
+	chatCmd.Flags().StringVar(&chatSpaceFlag, "space", "", "start with this space active (id or name; see /space). Local mode: scopes memory + loads the space's notes")
 }

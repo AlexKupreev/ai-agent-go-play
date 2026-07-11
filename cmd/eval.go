@@ -101,8 +101,10 @@ var evalCmd = &cobra.Command{
 
 		prov := newProvider(cfg)
 
-		// One shared tool catalog + memory across variants (same as `run`): the comparison
-		// is about prompt/model, not tool/memory state, and sharing keeps the run realistic.
+		// One shared tool catalog across variants (same as `run`): the comparison is about
+		// prompt/model, not tool state, and sharing keeps the run realistic. Memory is
+		// workspace-local now, so it is opened per variant (a variant can override the
+		// workspace) — still the real store, same rationale.
 		catPath, err := catalogPath()
 		if err != nil {
 			return err
@@ -110,14 +112,6 @@ var evalCmd = &cobra.Command{
 		registry, err := tools.NewPersistentRegistry(catPath)
 		if err != nil {
 			return fmt.Errorf("failed to load tool catalog: %w", err)
-		}
-		memPath, err := memoryPath()
-		if err != nil {
-			return err
-		}
-		mem, err := memory.NewPersistentStore(memPath)
-		if err != nil {
-			return fmt.Errorf("failed to load memory store: %w", err)
 		}
 
 		fmt.Fprintf(os.Stderr, "eval: %d variant(s) on task: %s\n", len(variants), task)
@@ -128,7 +122,7 @@ var evalCmd = &cobra.Command{
 				break
 			}
 			fmt.Fprintf(os.Stderr, "\n=== variant %q ===\n", v.Name)
-			res := runEvalVariant(ctx, v, task, cfg, prov, registry, mem)
+			res := runEvalVariant(ctx, v, task, cfg, prov, registry)
 			results = append(results, res)
 			if res.Err != nil {
 				fmt.Fprintf(os.Stderr, "  error: %v\n", res.Err)
@@ -188,7 +182,7 @@ func loadEvalVariants(path string) ([]evalVariant, error) {
 
 // runEvalVariant runs the task once under one variant, returning its result (never
 // panicking — a build/run error is captured in Err so the other variants still report).
-func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config, prov *openaiprovider.Client, registry tools.Registry, mem memory.Store) evalResult {
+func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config, prov *openaiprovider.Client, registry tools.Registry) evalResult {
 	res := evalResult{Variant: v}
 
 	model := resolveModel(v.Model, cfg)
@@ -201,6 +195,13 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 	workDir, prompts, catalog, err := resolveVariantContext(v, tier)
 	if err != nil {
 		res.Err = err
+		return res
+	}
+	// The variant's workspace-local memory store (global scope; eval runs carry no session,
+	// so no space is active) — the real store, matching `run`.
+	mem, err := memory.NewPersistentStore(memoryPath(workDir))
+	if err != nil {
+		res.Err = fmt.Errorf("memory store: %w", err)
 		return res
 	}
 	// Inline prompt overrides layer over the file-based ones: system_prompt replaces the base
@@ -247,7 +248,7 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: spawnDepth,
-		StatusDirs: agentStateDirs(), Limits: limits,
+		StatusDirs: agentStateDirs(workDir), Limits: limits,
 		ContextLimit: resolveContextLimit(model, cfg),
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied

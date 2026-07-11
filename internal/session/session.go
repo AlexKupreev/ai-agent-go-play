@@ -39,6 +39,12 @@ type Session struct {
 	// /sessions/{id}); the stored tier is a REQUEST, clamped to the serve ceiling per turn.
 	Model string `json:"model,omitempty"`
 	Tier  string `json:"tier,omitempty"`
+
+	// Space is the session's active space id (docs/adr/spaces.md §5): memory written on a
+	// turn scopes to it and its notes load into the turn's prompt. Empty ⇒ the global
+	// scope. Sticky like Model/Tier (POST/PATCH /sessions), and switched mid-conversation
+	// by the switch_space tool or the /space command.
+	Space string `json:"space,omitempty"`
 }
 
 // Info is the lightweight listing form (no message bodies).
@@ -50,11 +56,12 @@ type Info struct {
 	Title     string    `json:"title"` // first user message, truncated
 	Model     string    `json:"model,omitempty"`
 	Tier      string    `json:"tier,omitempty"`
+	Space     string    `json:"space,omitempty"`
 }
 
 // ToInfo projects a session onto its listing form.
 func (s Session) ToInfo() Info {
-	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Model: s.Model, Tier: s.Tier}
+	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Model: s.Model, Tier: s.Tier, Space: s.Space}
 	for _, m := range s.Messages {
 		if m.Role == provider.RoleUser {
 			info.Turns++

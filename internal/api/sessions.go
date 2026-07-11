@@ -25,7 +25,7 @@ func validSessionID(id string) bool { return sessionIDPattern.MatchString(id) }
 // usual GET /runs/{id}/events and its escalations park in the usual approval queue.
 
 type startSessionRequest struct {
-	RunOptions // optional initial sticky "model"/"tier" (flattened into the body)
+	RunOptions // optional initial sticky "model"/"tier"/"space" (flattened into the body)
 }
 
 type startSessionResponse struct {
@@ -59,6 +59,7 @@ func handleStartSession(e *Engine) http.HandlerFunc {
 type updateSessionRequest struct {
 	Model *string `json:"model,omitempty"`
 	Tier  *string `json:"tier,omitempty"`
+	Space *string `json:"space,omitempty"`
 }
 
 func handleUpdateSession(e *Engine) http.HandlerFunc {
@@ -74,7 +75,7 @@ func handleUpdateSession(e *Engine) http.HandlerFunc {
 				return
 			}
 		}
-		info, err := e.UpdateSession(r.PathValue("id"), req.Model, req.Tier)
+		info, err := e.UpdateSession(r.PathValue("id"), req.Model, req.Tier, req.Space)
 		if err != nil {
 			sessionErrStatus(w, err)
 			return

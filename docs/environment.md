@@ -191,7 +191,6 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | --- | --- |
 | `<config-dir>/config.json` | API key, default model/tier, engine aliases, Telegram settings. |
 | `<config-dir>/tools.json` | Persisted agent-authored tool catalog. |
-| `<config-dir>/memory.json` | Long-term memory store. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
 | `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
 | `<config-dir>/sessions/archive/<id>.json` | Closed conversations, **archived not deleted** (`/end` / `DELETE /sessions/{id}`). Excluded from the resumable listing; `agent session restore <id>` un-archives it, `agent session purge <id>` removes it for good. |
@@ -206,6 +205,14 @@ Under the **workspace** (the directory the agent acts on; default the cwd), opti
 | --- | --- |
 | `<workspace>/SYSTEM.md`, `AGENTS.md` (alias `CLAUDE.md`), `PLANNER.md`, `CRITIC.md` | Workspace prompt customization (`PLANNER.md`/`CRITIC.md` override the planner/critic). |
 | `<workspace>/agents/<name>.md` | Workspace sub-agent type definitions. |
+
+The agent's own **data** is also workspace-local (not tier-gated — it is the agent's
+own state, written by it):
+
+| Path | What |
+| --- | --- |
+| `<workspace>/.agent/memory.json` | Long-term memory store, **global scope** (`remember`/`recall`). Moved here from `<config-dir>/memory.json` when spaces landed — move an old file here to keep its entries. For `serve`, point `--workspace` at a persistent dir so memory survives restarts. |
+| `<workspace>/.agent/spaces/<id>/` | One directory per **space** (switchable data context, usage.md §Spaces): `space.json` (name + always-loaded notes) and that space's `memory.json` shard. |
 
 Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /
 `AI_AGENT_SESSIONS_DIR`):

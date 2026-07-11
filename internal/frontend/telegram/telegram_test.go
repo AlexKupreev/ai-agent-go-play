@@ -10,6 +10,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/session"
 )
 
 // --- fakes ---
@@ -79,6 +80,7 @@ type fakeClient struct {
 	resolveOK     bool
 	reloadCalls   int
 	reloadErr     error
+	lastSpace     string
 	resolved      chan bool
 	// question mode: when set, StreamEvents parks an ask_user question instead of an
 	// approval and waits for an answer delivered via Answer.
@@ -120,6 +122,16 @@ func (c *fakeClient) PurgeSession(_ context.Context, sessionID string) error {
 	defer c.mu.Unlock()
 	c.purgedID = sessionID
 	return nil
+}
+
+func (c *fakeClient) UpdateSession(_ context.Context, sessionID string, _, _, space *string) (session.Info, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastSessionID = sessionID
+	if space != nil {
+		c.lastSpace = *space
+	}
+	return session.Info{ID: sessionID, Space: c.lastSpace}, nil
 }
 
 func (c *fakeClient) Reload(context.Context) error {
