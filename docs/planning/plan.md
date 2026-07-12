@@ -760,6 +760,17 @@ is superseded.)*
   **S1** (schedule store + `schedule_task` tool, no trigger). Non-interactive by design — distinct from
   the human-in-the-loop gate.
 
+- **Vision** (letting the agent *see* an image it has already been sent): design in
+  [`vision.md`](vision.md). User file upload is **built** ([`file-upload.md`](file-upload.md)) — a
+  Telegram photo is stored in the session scratch dir and tracked in the manifest — but
+  `provider.ContentBlock` is text-only, so the agent is told it cannot see the pixels. Proposal:
+  **vision as a tool** (`view_image(path, question)` → a one-shot side call returning text), *not*
+  images in the conversation. Needs `BlockImage` + the OpenAI adapter's user message (which today
+  flattens to a string) + one new tool file; **no change to the turn shape, the session format, or any
+  frontend**, and no per-turn token tax. ~a day. In-context vision (the structured `attachments []Ref`
+  turn field + a persistence + context policy) stays deferred until sustained visual reasoning
+  actually demands it — the tool's provider work is reused unchanged if so.
+
 ### Sequenced backlog
 
 The three docs above each carry a scoped task list; this is the **build order across them**, with

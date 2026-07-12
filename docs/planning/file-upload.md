@@ -188,15 +188,14 @@ A photo uploads and stores exactly like any other file. But the model surface is
 front of the model. Rather than let the agent hallucinate an image it cannot see, `uploadTurnText`
 tells it plainly that it cannot read image content.
 
-What vision needs, in order:
+**Scoped in [`vision.md`](vision.md)** — which argues for closing the gap with a `view_image` **tool**
+(a one-shot side call that returns text) rather than putting images *in the conversation*. The tool
+path needs no change to the turn shape, the session format, or any frontend, and costs no per-turn
+tokens; it is ~a day's work, and its `BlockImage` + adapter mapping are reused unchanged if
+in-context vision is ever built on top. Putting an image in the conversation is the bigger
+commitment: it forces D3's structured `attachments []Ref` turn field, taxes every subsequent turn
+with the image's tokens, and raises a real session-persistence question (raw bytes would base64
+themselves straight into `sessions/*.json`).
 
-1. **`BlockImage`** (bytes/URI + media type) in `provider.ContentBlock`, and its encoding in each
-   provider's request mapping — this is the real work, since that type is threaded through the whole
-   engine and persisted in session history.
-2. **A turn that carries it.** Today the upload's reference travels as *text* (D3). An image must
-   travel as *content*, so this is the point where the structured `attachments []Ref` turn field
-   (D3's v2) stops being optional.
-3. **One line in `uploadTurnText`** — the "you cannot see image content" caveat comes out.
-
-Everything below that — download, size cap, sanitization, storage, provenance, retention — is
-already in place and image-agnostic.
+Everything beneath either option — download, size cap, sanitization, storage, provenance, retention —
+is already in place and image-agnostic.
