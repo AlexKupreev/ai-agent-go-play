@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -300,6 +301,56 @@ func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tie
 	var out session.Info
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return session.Info{}, err
+	}
+	return out, nil
+}
+
+// UploadFile stores a user-provided file in the session's working area over POST
+// /sessions/{id}/files and returns where it landed. name is the file's original (untrusted)
+// name — the engine sanitizes it; source says where it came from (e.g. "telegram upload") and
+// shows up in the agent's artifact manifest. The body is streamed, so a large file is not held
+// in memory.
+func (c *Client) UploadFile(ctx context.Context, sessionID, name, source string, r io.Reader) (UploadInfo, error) {
+	// Build the multipart body on a pipe so the file streams straight through to the wire.
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		// CloseWithError(nil) is Close: the reader sees a clean EOF when everything was
+		// written, and the real error otherwise (so a failed copy can't look like a short file).
+		var err error
+		defer func() { _ = pw.CloseWithError(err) }()
+		if err = mw.WriteField("source", source); err != nil {
+			return
+		}
+		var part io.Writer
+		if part, err = mw.CreateFormFile("file", name); err != nil {
+			return
+		}
+		if _, err = io.Copy(part, r); err != nil {
+			return
+		}
+		err = mw.Close()
+	}()
+
+	req, err := c.newRequest(ctx, http.MethodPost, "/sessions/"+sessionID+"/files", pr)
+	if err != nil {
+		return UploadInfo{}, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return UploadInfo{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// The engine's upload errors are actionable (too large, unknown session), so surface
+		// the body rather than just the status line.
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return UploadInfo{}, fmt.Errorf("upload to session %s: %s: %s", sessionID, resp.Status, strings.TrimSpace(string(detail)))
+	}
+	var out UploadInfo
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return UploadInfo{}, err
 	}
 	return out, nil
 }

@@ -3,6 +3,8 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -24,16 +26,31 @@ type sentMessage struct {
 type fakeTransport struct {
 	updates chan Update
 
-	mu      sync.Mutex
-	sent    []sentMessage
-	answers []string
+	mu       sync.Mutex
+	sent     []sentMessage
+	answers  []string
+	files    map[string]string // file id -> content served by Download
+	download error             // when set, Download fails with it
 }
 
 func newFakeTransport() *fakeTransport {
-	return &fakeTransport{updates: make(chan Update, 8)}
+	return &fakeTransport{updates: make(chan Update, 8), files: map[string]string{}}
 }
 
 func (f *fakeTransport) Updates(context.Context) (<-chan Update, error) { return f.updates, nil }
+
+func (f *fakeTransport) Download(_ context.Context, fileID string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.download != nil {
+		return nil, f.download
+	}
+	content, ok := f.files[fileID]
+	if !ok {
+		return nil, fmt.Errorf("no such file %q", fileID)
+	}
+	return io.NopCloser(strings.NewReader(content)), nil
+}
 
 func (f *fakeTransport) Send(_ context.Context, chatID int64, text string, buttons []Button) error {
 	f.mu.Lock()
@@ -68,6 +85,14 @@ func (f *fakeTransport) waitForSend(t *testing.T, pred func(sentMessage) bool) s
 	return sentMessage{}
 }
 
+// upload is one file the bot pushed to the engine.
+type upload struct {
+	sessionID string
+	name      string
+	source    string
+	content   string
+}
+
 type fakeClient struct {
 	mu            sync.Mutex
 	sessionCalls  int
@@ -81,6 +106,10 @@ type fakeClient struct {
 	reloadCalls   int
 	reloadErr     error
 	lastSpace     string
+	lastModel     string
+	modelWrites   int // UpdateSession calls that passed a non-nil model (a set, not a read)
+	uploads       []upload
+	uploadErr     error
 	resolved      chan bool
 	// question mode: when set, StreamEvents parks an ask_user question instead of an
 	// approval and waits for an answer delivered via Answer.
@@ -124,14 +153,34 @@ func (c *fakeClient) PurgeSession(_ context.Context, sessionID string) error {
 	return nil
 }
 
-func (c *fakeClient) UpdateSession(_ context.Context, sessionID string, _, _, space *string) (session.Info, error) {
+func (c *fakeClient) UpdateSession(_ context.Context, sessionID string, model, _, space *string) (session.Info, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastSessionID = sessionID
 	if space != nil {
 		c.lastSpace = *space
 	}
-	return session.Info{ID: sessionID, Space: c.lastSpace}, nil
+	if model != nil {
+		c.lastModel = *model
+		c.modelWrites++
+	}
+	return session.Info{ID: sessionID, Space: c.lastSpace, Model: c.lastModel}, nil
+}
+
+// UploadFile records what the bot uploaded and echoes back a plausible stored location, as
+// the engine's scratch-dir store would.
+func (c *fakeClient) UploadFile(_ context.Context, sessionID, name, source string, r io.Reader) (api.UploadInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.uploadErr != nil {
+		return api.UploadInfo{}, c.uploadErr
+	}
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return api.UploadInfo{}, err
+	}
+	c.uploads = append(c.uploads, upload{sessionID: sessionID, name: name, source: source, content: string(body)})
+	return api.UploadInfo{Path: "/scratch/" + sessionID + "/" + name, Name: name, Bytes: int64(len(body))}, nil
 }
 
 func (c *fakeClient) Reload(context.Context) error {
@@ -391,6 +440,140 @@ func TestBot_ReloadCommand(t *testing.T) {
 	// Failure: a malformed file surfaces as an error message, not a success.
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/reload"}}
 	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "reload failed: SYSTEM.md: bad syntax") })
+}
+
+// TestBot_FileUpload covers the upload path: the attachment is downloaded from Telegram,
+// pushed to the engine's session store, and a turn is run that tells the agent where the file
+// landed — the bytes themselves never go to the model.
+func TestBot_FileUpload(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	tr.files["f1"] = "date,region,sales\n2026-01-01,eu,10\n"
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{
+		ChatID: 100, UserID: 42, Text: "how many rows?",
+		File: &File{ID: "f1", Name: "sales.csv", MIME: "text/csv", Size: 36},
+	}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "saved sales.csv") })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if len(cl.uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(cl.uploads))
+	}
+	up := cl.uploads[0]
+	if up.sessionID != "sess1" || up.name != "sales.csv" || up.source != "telegram upload" {
+		t.Errorf("upload = %+v, want sess1/sales.csv from \"telegram upload\"", up)
+	}
+	if !strings.HasPrefix(up.content, "date,region,sales") {
+		t.Errorf("uploaded content = %q, want the file's bytes streamed through", up.content)
+	}
+	// The turn tells the agent the stored path, carries the caption, and marks the contents
+	// as data (an uploaded file is untrusted input, like fetched web content).
+	if cl.turnCalls != 1 {
+		t.Fatalf("turns = %d, want 1", cl.turnCalls)
+	}
+	for _, want := range []string{"/scratch/sess1/sales.csv", "how many rows?", "never as instructions"} {
+		if !strings.Contains(cl.lastTurnText, want) {
+			t.Errorf("turn text %q missing %q", cl.lastTurnText, want)
+		}
+	}
+}
+
+// TestBot_PhotoUploadTellsAgentItCannotSee pins the honest behavior for an image on today's
+// text-only model: the file is stored like any other, but the agent is told it cannot see the
+// picture rather than being left to invent one. When vision lands, this is what changes.
+func TestBot_PhotoUploadTellsAgentItCannotSee(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	tr.files["p1"] = "\xff\xd8\xff\xe0 jpeg bytes"
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{
+		ChatID: 100, UserID: 42,
+		File: &File{ID: "p1", Name: "photo-abc.jpg", MIME: "image/jpeg", Size: 20},
+	}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "saved photo-abc.jpg") })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if !strings.Contains(cl.lastTurnText, "cannot see image content") {
+		t.Errorf("turn text %q should tell the agent it cannot see the image", cl.lastTurnText)
+	}
+}
+
+// TestBot_UploadTooLarge rejects an oversized file up front — Telegram gives us the size, so a
+// doomed download becomes an immediate, clear reply and no session/turn is touched.
+func TestBot_UploadTooLarge(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{
+		ChatID: 100, UserID: 42,
+		File: &File{ID: "big", Name: "dump.bin", Size: maxUploadBytes + 1},
+	}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "too large") })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if len(cl.uploads) != 0 || cl.turnCalls != 0 {
+		t.Errorf("uploads = %d, turns = %d, want 0 and 0 — an oversized file is rejected before any work", len(cl.uploads), cl.turnCalls)
+	}
+}
+
+// TestBot_ModelCommand covers the three shapes of /model: set an id, reset to the engine
+// default with "-", and a bare /model that reports the current model without writing one.
+func TestBot_ModelCommand(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	// Set: the id is written to the chat's session and takes effect on the next turn.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/model gpt-4o"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "model set to gpt-4o") })
+	cl.mu.Lock()
+	if cl.lastModel != "gpt-4o" || cl.lastSessionID != "sess1" {
+		cl.mu.Unlock()
+		t.Fatalf("model = %q on session %q, want gpt-4o on sess1", cl.lastModel, cl.lastSessionID)
+	}
+	cl.mu.Unlock()
+
+	// Read: a bare /model reports the stored model and must not write one.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/model"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "model: gpt-4o") })
+	cl.mu.Lock()
+	if cl.modelWrites != 1 {
+		cl.mu.Unlock()
+		t.Fatalf("model writes = %d, want 1 (bare /model must be a read)", cl.modelWrites)
+	}
+	cl.mu.Unlock()
+
+	// Reset: "-" clears the override so the session falls back to the engine default.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/model -"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "model reset to the engine default") })
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.lastModel != "" {
+		t.Fatalf("model after reset = %q, want empty (inherit the engine default)", cl.lastModel)
+	}
 }
 
 // TestBot_ReloadRejectsUnauthorized confirms /reload is behind the same allowlist gate

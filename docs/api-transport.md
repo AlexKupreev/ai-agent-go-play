@@ -41,7 +41,13 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   malformed tier, 404 on an unknown session); `DELETE /sessions/{id}` → close (archives the
   conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
   `POST /sessions/{id}/turns` `{text, model?, tier?, space?}` → `{run_id}` (optional per-turn override,
-  same clamp; stream the reply via `GET /runs/{run_id}/events`)
+  same clamp; stream the reply via `GET /runs/{run_id}/events`);
+  `POST /sessions/{id}/files` (multipart: `file`, optional `source`) → `{path, name, bytes}` — store a
+  user-provided file in the session's scratch dir, recorded in the artifact manifest as user-origin so
+  the close-reap keeps it. The name is sanitized to a safe basename and made unique; 413 over 20 MB,
+  404 on an unknown session. Served only when the host wires a `FileStore` (`agent serve` does). The
+  frontend then names the returned `path` in the turn text — the bytes never go to the model, the agent
+  reads the file with its own tools
 - `POST /reload` → re-read from disk the prompt files (`SYSTEM`/`AGENTS`/`PLANNER`/`CRITIC`) +
   `agents/*.md` **and** the `config.json` defaults (default model + tier ceiling), so an operator
   can retune the engine without a restart (400 on a malformed file/config or bad tier, keeping the

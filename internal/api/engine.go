@@ -151,6 +151,11 @@ type Engine struct {
 	// metadata survive eviction and restart without the core knowing where on disk it goes.
 	// Optional.
 	runStore RunStore
+
+	// files, when set, stores user-uploaded files into a session's working area — the write
+	// counterpart to onSessionClose's reap, and the core's other seam to disk. Optional; with
+	// no store, POST /sessions/{id}/files is not served (see uploads.go).
+	files FileStore
 }
 
 // RunStore persists finished-run metadata so it survives eviction (maxFinishedRuns) and a

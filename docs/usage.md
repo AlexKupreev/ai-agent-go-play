@@ -341,15 +341,23 @@ So a turn doesn't have to stuff a downloaded dataset or a computed result into t
 - **`/attach <path>`** (CLI chat) — registers a file *you* provide into the manifest
   (`origin: user`), so the agent reads it by path like any other artifact. Explicit attach
   only — the agent never sniffs your prose for filenames.
+- **Sending a file in Telegram** ([above](#sending-files)) — the network equivalent: the file is
+  copied into the session's scratch dir and recorded the same way (`origin: user`), over
+  `POST /sessions/{id}/files`.
 - The planner sees the manifest each turn and references existing artifacts by path (with the
   source as a re-fetch fallback) instead of re-deriving them.
 
 **Where it lives.** In `agent serve`, the scratch dir + manifest are **per session** and
 persist across turns and restarts, keyed by session id, at
 `<config-dir>/session-scratch/<session-id>/` (see [Files on disk](environment.md#files-on-disk)).
-In local `agent chat`, they live under the run's transcript dir and last for the process. There
-is no automatic reaper yet — a cache-with-fallback keeps a stale or absent file correct (the
-manifest records the source to re-fetch from), so pruning `session-scratch/` by hand is safe.
+In local `agent chat`, they live under the run's transcript dir and last for the process.
+
+**When it is cleaned.** Closing a session (`/end`, `DELETE /sessions/{id}`) reaps its scratch dir
+but **keeps the files you provided** (`origin: user` — an attach or a Telegram upload); agent-derived
+artifacts and untracked scratch are re-derivable, so they go. A purge deletes everything. Pruning
+`session-scratch/` by hand is also safe for agent artifacts — a cache-with-fallback keeps a stale or
+absent file correct (the manifest records the source to re-fetch from) — but it will take your
+uploaded files with it.
 
 ---
 
@@ -801,10 +809,39 @@ A Telegram bot can act as a peer client of the engine. Each chat maps to a **ses
 stream back, and a parked approval becomes an Approve/Deny inline keyboard. Chat commands:
 **`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates (archives) the
 current one, **`/purge`** deletes it for good (a session is also created automatically on your
-first message), and **`/reload`** re-reads the engine's prompt files + agent-type catalog
-(effective from your next message — the same management action as `agent reload`, gated by the
-bot's allowlist). The `/new` + `/reset` + `/end` + `/purge` verbs match the CLI chat REPL. It is **entirely optional**: with no token set, the
-engine runs exactly as normal.
+first message), **`/model <id>`** switches the session's model (bare `/model` shows the current
+one, `/model -` returns to the engine default) and **`/space <name>`** its data context (both
+effective from your next message, over `PATCH /sessions/{id}`), and **`/reload`** re-reads the
+engine's prompt files + agent-type catalog (effective from your next message — the same
+management action as `agent reload`, gated by the bot's allowlist). The `/new` + `/reset` +
+`/end` + `/purge` + `/model` + `/space` verbs match the CLI chat REPL. It is **entirely
+optional**: with no token set, the engine runs exactly as normal.
+
+A model id is **not** validated when you set it — an unknown one fails the next turn with the
+provider's error, and `/model -` gets you back.
+
+### Sending files
+
+Send a file (or a photo) to the chat and it is stored in that session's **scratch directory**,
+recorded in the [artifact cache](#the-artifact-cache) as user-provided, and a
+turn runs with the caption as your message. The agent is told *where the file is*, not what is in
+it — it reads what it needs with the tools it already has (`shell`, `run_code`), which is how a
+CSV, log, or source file works on a text-only model. Drop a CSV in with "how many rows per
+region?" and it will read it. Because the file is recorded as user-provided, closing the session
+(`/end`) **keeps** it while reaping the agent's re-derivable scratch; only `/purge` deletes it.
+
+Limits and caveats:
+
+- **20 MB** per file (the Telegram Bot API's own download ceiling); a larger one is refused up front.
+- **Images are stored, but not seen.** The model is text-only today, so the agent is told it cannot
+  read image content rather than being left to invent it. The upload plumbing is already in place
+  for when a vision path lands.
+- The filename is sanitized to a safe basename (no traversal, no separators) and made unique, so an
+  upload can neither escape the scratch dir nor overwrite an existing artifact.
+- A file's contents are **untrusted input**, like fetched web content: the turn text tells the agent
+  to treat them as data, never as instructions.
+- If the agent has asked you a question, answer it before sending a file (the parked turn holds the
+  session lock).
 
 Enable it by supplying a token (config *or* env; env wins) plus an allowlist of Telegram
 user ids that may drive the engine:

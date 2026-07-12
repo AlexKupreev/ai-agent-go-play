@@ -138,10 +138,10 @@ func (m *Manifest) KeepOnly(keep func(Entry) bool) error {
 // artifacts and any unrecorded scratch are re-derivable, so they are removed; the manifest is
 // pruned to the surviving user files.
 //
-// Today no upload path exists, so every manifest entry is agent-origin and this reaps the whole
-// directory — identical to the os.RemoveAll it replaces — but it becomes correct-by-construction
-// the moment user uploads land. (A *purge*, being an explicit whole-session deletion, removes
-// everything and does not call this — see the engine's purge path.)
+// User files reach a session through SaveUserFile (a Telegram attachment, POST
+// /sessions/{id}/files) or the CLI's /attach; a session with none of them has an all-agent
+// manifest, and this reaps the whole directory. (A *purge*, being an explicit whole-session
+// deletion, removes everything and does not call this — see the engine's purge path.)
 func ReapScratch(dir string) error {
 	m, err := New(filepath.Join(dir, ManifestName))
 	if err != nil {

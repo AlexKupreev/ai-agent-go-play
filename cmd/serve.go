@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,6 +182,11 @@ var serveCmd = &cobra.Command{
 				_ = artifact.ReapScratch(dir)
 			}
 		})
+		// The write counterpart to that reaper: a user-uploaded file lands in the same
+		// session-scratch dir, recorded as user-provided so the reap above keeps it. This is
+		// what enables POST /sessions/{id}/files (and so the Telegram/CLI attach paths), and
+		// must be installed before NewServer, which registers the route only when it is.
+		engine.SetFileStore(sessionFileStore{})
 		// Push parked escalations (and their resolutions) onto the owning run's event
 		// stream, so a streaming frontend learns of them without polling /approvals.
 		approvals.SetEmitter(engine.PublishToRun)
@@ -531,6 +537,26 @@ func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish
 		}
 		return answer, appendTurnMessages(prior, text, answer), nil
 	})
+}
+
+// sessionFileStore is the engine's api.FileStore: it puts a user-uploaded file in the same
+// session-scratch dir the executor works in, so the agent reads it with the tools it already
+// has (shell, run_code) and the planner sees it in the manifest. Provenance is what makes it
+// durable — artifact.SaveUserFile records it as user-provided, which the close reaper preserves.
+type sessionFileStore struct{}
+
+func (sessionFileStore) SaveUpload(sessionID, name, source string, r io.Reader) (api.UploadInfo, error) {
+	dir, err := sessionScratchDir(sessionID)
+	if err != nil {
+		return api.UploadInfo{}, err
+	}
+	e, n, err := artifact.SaveUserFile(dir, name, source, r)
+	if err != nil {
+		return api.UploadInfo{}, err
+	}
+	// The manifest keeps the path relative to the scratch dir; the agent is told the absolute
+	// one, since that is what it must hand to shell/run_code.
+	return api.UploadInfo{Path: filepath.Join(dir, e.Path), Name: e.Path, Bytes: n}, nil
 }
 
 // startTelegramIfConfigured launches the optional Telegram bot when a token is

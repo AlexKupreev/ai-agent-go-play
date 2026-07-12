@@ -51,6 +51,11 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 		mux.HandleFunc("DELETE /sessions/{id}/purge", handlePurgeSession(e))
 		mux.HandleFunc("POST /sessions/{id}/restore", handleRestoreSession(e))
 		mux.HandleFunc("POST /sessions/{id}/turns", handlePostTurn(e))
+		// User file uploads into the session's working area, served only when a FileStore is
+		// wired (uploads.go).
+		if e.UploadsEnabled() {
+			mux.HandleFunc("POST /sessions/{id}/files", handleUploadFile(e))
+		}
 	}
 	return mux
 }

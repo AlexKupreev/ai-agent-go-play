@@ -3,6 +3,8 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -63,9 +65,18 @@ func (t *httpTransport) Updates(ctx context.Context) (<-chan Update, error) {
 }
 
 // mapUpdate projects a Telegram update onto our Update; keep is false for updates we
-// don't handle (non-text messages, etc.).
+// don't handle (a message that is neither text nor a supported attachment: stickers,
+// locations, service messages, …).
 func mapUpdate(u tgbotapi.Update) (Update, bool) {
 	switch {
+	case u.Message != nil && u.Message.From != nil && attachment(u.Message) != nil:
+		// A file/photo message: its caption (possibly empty) is the user's accompanying text.
+		return Update{Message: &Message{
+			ChatID: u.Message.Chat.ID,
+			UserID: u.Message.From.ID,
+			Text:   u.Message.Caption,
+			File:   attachment(u.Message),
+		}}, true
 	case u.Message != nil && u.Message.Text != "" && u.Message.From != nil:
 		return Update{Message: &Message{
 			ChatID: u.Message.Chat.ID,
@@ -86,6 +97,44 @@ func mapUpdate(u tgbotapi.Update) (Update, bool) {
 		}}, true
 	}
 	return Update{}, false
+}
+
+// attachment projects the file a message carries onto our neutral File, or nil when it
+// carries none. Documents keep their sender-supplied name (untrusted — the engine sanitizes
+// it before it becomes a path); a photo has no name, so one is derived from its unique id.
+// Telegram delivers a photo in several sizes, largest last, and we take the largest.
+func attachment(m *tgbotapi.Message) *File {
+	switch {
+	case m.Document != nil:
+		d := m.Document
+		return &File{ID: d.FileID, Name: d.FileName, MIME: d.MimeType, Size: int64(d.FileSize)}
+	case len(m.Photo) > 0:
+		p := m.Photo[len(m.Photo)-1]
+		return &File{ID: p.FileID, Name: "photo-" + p.FileUniqueID + ".jpg", MIME: "image/jpeg", Size: int64(p.FileSize)}
+	}
+	return nil
+}
+
+// Download streams a file's content from Telegram's file endpoint. The direct URL embeds the
+// bot token, so it is never put in an error or a log line.
+func (t *httpTransport) Download(ctx context.Context, fileID string) (io.ReadCloser, error) {
+	url, err := t.bot.GetFileDirectURL(fileID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve file %s: %w", fileID, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("download file %s: %w", fileID, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download file %s: %w", fileID, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download file %s: %s", fileID, resp.Status)
+	}
+	return resp.Body, nil
 }
 
 // Send posts a message, attaching a single inline-keyboard row when buttons are given.
