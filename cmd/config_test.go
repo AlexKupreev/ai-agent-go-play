@@ -376,3 +376,43 @@ func TestSecretsResolver(t *testing.T) {
 		t.Fatalf("env-only secret = (%q,%v), want (o,true)", v, ok)
 	}
 }
+
+// TestSecretNames covers what `config secrets` and author_tool's description report: an
+// env-supplied secret must be listed even though it is nowhere in config.json — the
+// deployment case (`fly secrets set AI_AGENT_SECRET_…`) where the listing previously said
+// "no secrets" while the broker was resolving one fine.
+func TestSecretNames(t *testing.T) {
+	if got := secretNames(Config{}); len(got) != 0 {
+		t.Fatalf("no config + no env: names = %v, want none", got)
+	}
+
+	t.Setenv("AI_AGENT_SECRET_SCRAPINGANT", "envval")
+	cfg := Config{Secrets: map[string]string{"other": "o"}}
+
+	got := secretNames(cfg)
+	want := []string{"other", "scrapingant"} // sorted, both sources
+	if len(got) != len(want) {
+		t.Fatalf("names = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("names = %v, want %v", got, want)
+		}
+	}
+
+	// The source tag is what tells the operator where a secret came from.
+	_, sources := mergedSecrets(cfg)
+	if sources["scrapingant"] != "env" {
+		t.Errorf("scrapingant source = %q, want env", sources["scrapingant"])
+	}
+	if sources["other"] != "config" {
+		t.Errorf("other source = %q, want config", sources["other"])
+	}
+
+	// An env secret shadowing a config one is reported as coming from env, since that is
+	// the value the broker will inject.
+	_, sources = mergedSecrets(Config{Secrets: map[string]string{"scrapingant": "cfgval"}})
+	if sources["scrapingant"] != "env" {
+		t.Errorf("shadowed secret source = %q, want env", sources["scrapingant"])
+	}
+}

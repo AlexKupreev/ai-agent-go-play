@@ -62,6 +62,35 @@ func TestAuthorTool_DescriptionDocumentsHostGlobals(t *testing.T) {
 	}
 }
 
+// The secret mechanism is only usable if the model knows which names exist — it cannot read
+// a value, and a guessed name fails closed at the broker. So the names belong in the
+// required_caps description, and their absence must be stated too.
+func TestAuthorTool_DescriptionListsStoredSecretNames(t *testing.T) {
+	caps := func(d AuthorToolDeps) string {
+		p, ok := NewAuthorTool(d).Parameters["required_caps"].(map[string]any)
+		if !ok {
+			t.Fatal("required_caps parameter is not an object")
+		}
+		s, _ := p["description"].(string)
+		return s
+	}
+
+	none := caps(AuthorToolDeps{})
+	if !strings.Contains(none, "No secrets are stored") {
+		t.Errorf("with no secrets, required_caps should say so; got %q", none)
+	}
+
+	listed := caps(AuthorToolDeps{SecretNames: []string{"scrapingant", "weather"}})
+	for _, want := range []string{"scrapingant", "weather"} {
+		if !strings.Contains(listed, want) {
+			t.Errorf("required_caps description missing secret name %q; got %q", want, listed)
+		}
+	}
+	if strings.Contains(listed, "No secrets are stored") {
+		t.Error("required_caps should not claim no secrets when names are configured")
+	}
+}
+
 func authorArgs(name, code, test string) map[string]any {
 	return map[string]any{
 		"name":         name,

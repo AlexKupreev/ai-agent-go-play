@@ -134,6 +134,7 @@ var runCmd = &cobra.Command{
 			StatusDirs: agentStateDirs(workDir), Limits: resolveAgentLimits(cfg),
 			ContextLimit: resolveContextLimit(model, cfg),
 			Secrets:      secretsResolver(cfg),
+			SecretNames:  secretNames(cfg),
 		})
 
 		// run has no artifact manifest (no scratch cache today, chat-planner.md Q9c) ⇒ "".

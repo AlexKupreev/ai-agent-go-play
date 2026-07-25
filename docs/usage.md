@@ -15,6 +15,7 @@ is the *how*.
 - [Customizing the agent — prompts & agent types](#customizing-the-agent--prompts--agent-types)
 - [Comparing configurations — `agent eval`](#comparing-configurations--agent-eval)
 - [Self-authored tools](#self-authored-tools)
+- [Scraping JS-rendered and bot-walled pages (`scrape`)](#scraping-js-rendered-and-bot-walled-pages-scrape)
 - [Using an external API (secrets)](#using-an-external-api-secrets)
 - [Long-term memory](#long-term-memory)
 - [Self-documentation](#self-documentation)
@@ -483,10 +484,40 @@ Over the API you can also inspect a tool's full source: `GET /tools`, `GET
 
 ---
 
+## Scraping JS-rendered and bot-walled pages (`scrape`)
+
+`web_fetch` issues a plain HTTP GET, so it comes back empty on a page that renders client-side,
+and blocked on one behind a bot wall. Store a [ScrapingAnt](https://scrapingant.com) token under
+the name `scrapingant` and the agent gains a `scrape` tool that fetches through a headless browser
+and rotating proxies:
+
+```bash
+./agent config set-secret scrapingant sk_your_token
+# or, on a deployment:  fly secrets set AI_AGENT_SECRET_SCRAPINGANT=sk_your_token -a your-app
+```
+
+The tool appears only when that secret resolves, and the token is read host-side and sent as a
+header — it never reaches the model, the tool arguments, or the audit log. Options: `render_js`
+(default true), `return_html`, `proxy_country`, `wait_for_selector`.
+
+**It costs money per call**, which is why it is a separate tool rather than a flag on `web_fetch`:
+the agent is told to try `web_fetch` first and not to retry scrapes in a loop, and every call
+lands in the audit log as its own line, so spend is reconstructable:
+
+```
+capability_exercised  capability=scrape  arg=example.com [secret:scrapingant] [browser]
+```
+
+`[browser]` marks the calls that used JS rendering — roughly 10x the credits of a plain proxied
+fetch, so it is worth seeing. Reasoning in [`adr/external-apis.md`](adr/external-apis.md) §5.
+
+---
+
 ## Using an external API (secrets)
 
-To let the agent call a **keyed third-party API** (a scraper, a data provider, …), you store the
-credential once and the agent authors an `http_get` tool that references it **by name**. The
+To let the agent call **any other keyed third-party API** (a data provider, an internal service,
+…), you store the credential once and the agent authors an `http_get` tool that references it **by
+name** — no per-API code, and no waiting on someone to build a `scrape`-style built-in. The
 value is injected into the request host-side — it never reaches the model, the sandbox, the tool
 catalog, or the audit log. This is the general path for any keyed API; no per-API code (design in
 [`adr/external-apis.md`](adr/external-apis.md)).
@@ -499,9 +530,19 @@ catalog, or the audit log. This is the general path for any keyed API; no per-AP
 ./agent config rm-secret scrapingant                   # remove one
 ```
 
+`config secrets` lists every secret the broker can resolve — from `config.json` *and* from the
+environment (see **Deployment** below) — tagging each with its source:
+
+```
+scrapingant	(env)
+weather	(config)
+```
+
 **2. Ask the agent to author a tool** that uses it (in `agent chat` / Telegram / `agent run`),
 e.g. *"author a tool that scrapes a URL via ScrapingAnt using the `scrapingant` secret."* The
-agent requests an `http_get` capability that names the secret and its placement:
+stored names are listed in `author_tool`'s schema, so the agent knows which keyed APIs it can
+reach without being told the name (it still can never read a value). It requests an `http_get`
+capability that names the secret and its placement:
 
 ```json
 { "kind": "http_get", "hosts": ["api.scrapingant.com"],
@@ -535,7 +576,8 @@ the 12-factor path for an automated deploy — e.g. on Fly.io:
 fly secrets set AI_AGENT_SECRET_SCRAPINGANT=sk_your_token -a your-app
 ```
 
-Env wins over `config.json`, and nothing is written to the state volume. See
+Env wins over `config.json`, nothing is written to the state volume, and `config secrets` on
+the deployed machine lists the name tagged `(env)`. See
 [`../deploy/fly/README.md`](../deploy/fly/README.md).
 
 ---

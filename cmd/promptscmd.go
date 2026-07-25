@@ -76,6 +76,9 @@ var promptsShowCmd = &cobra.Command{
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			Space:      tools.SpaceContext{Store: space.NewStore(spacesDir(workDir))},
 			StatusDirs: agentStateDirs(workDir), Sessions: sessReader,
+			// The secret store shapes the roster this command exists to report: it decides
+			// whether scrape is registered and which secret names author_tool advertises.
+			Secrets: secretsResolver(cfg), SecretNames: secretNames(cfg),
 		})
 
 		showExecutor := promptsAllFlag || (!promptsPlannerFlag && !promptsCriticFlag)

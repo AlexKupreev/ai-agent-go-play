@@ -250,6 +250,9 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		AgentCatalog: catalog, SpawnDepth: spawnDepth,
 		StatusDirs: agentStateDirs(workDir), Limits: limits,
 		ContextLimit: resolveContextLimit(model, cfg),
+		// Variants must run with the same tools a real run gets, or the comparison measures
+		// a roster the agent never actually has.
+		Secrets: secretsResolver(cfg), SecretNames: secretNames(cfg),
 	})
 	res.Model = executor.Model() // the effective id after the built-in default is applied
 

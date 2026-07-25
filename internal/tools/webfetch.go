@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -54,7 +55,17 @@ func fetchPage(ctx context.Context, rawURL string) (string, error) {
 		return fmt.Sprintf("non-HTML content (%s) — cannot extract text", contentType), nil
 	}
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	text, err := extractText(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return wrapUntrusted(rawURL, truncateForContext(text)), nil
+}
+
+// extractText strips an HTML document down to its readable prose. Shared by web_fetch and
+// scrape so a page reads the same however it was retrieved.
+func extractText(r io.Reader) (string, error) {
+	doc, err := goquery.NewDocumentFromReader(r)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse HTML: %w", err)
 	}
@@ -62,13 +73,17 @@ func fetchPage(ctx context.Context, rawURL string) (string, error) {
 	// Remove elements that produce noise or are not content
 	doc.Find("script, style, nav, footer, header, aside, noscript").Remove()
 
-	text := cleanText(doc.Find("body").Text())
+	return cleanText(doc.Find("body").Text()), nil
+}
 
-	if len(text) > maxFetchChars {
-		text = text[:maxFetchChars] + fmt.Sprintf("\n\n[truncated — %d chars total]", len(text))
+// truncateForContext caps fetched content so one page cannot flood the model's context,
+// telling the model what it lost so it can narrow the request instead of assuming it saw
+// the whole page.
+func truncateForContext(text string) string {
+	if len(text) <= maxFetchChars {
+		return text
 	}
-
-	return wrapUntrusted(rawURL, text), nil
+	return text[:maxFetchChars] + fmt.Sprintf("\n\n[truncated — %d chars total]", len(text))
 }
 
 // cleanText collapses repeated whitespace and removes blank lines

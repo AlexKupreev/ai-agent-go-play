@@ -24,6 +24,12 @@ type AuthorToolDeps struct {
 	Tier     capability.Tier
 	RunID    string
 	Gate     HumanGate // approval gate for caps beyond the tier; nil = cannot escalate
+
+	// SecretNames are the names of the secrets the broker can currently resolve, listed in
+	// the tool description so the model knows which keyed APIs are reachable. Names only —
+	// the values stay host-side (docs/adr/external-apis.md §2). Without this the mechanism
+	// is undiscoverable: the model would have to guess a name, and a wrong guess fails closed.
+	SecretNames []string
 }
 
 // NewAuthorTool returns the author_tool meta-tool: the agent's path to promote an
@@ -65,7 +71,8 @@ func NewAuthorTool(d AuthorToolDeps) Tool {
 					"{\"kind\":\"http_get\",\"hosts\":[\"api.svc.com\"],\"secret\":\"svc\",\"secret_in\":\"header:x-api-key\"} " +
 					"(secret_in is \"header:<Name>\", \"query:<param>\", or \"bearer\" for Authorization: Bearer <token>); " +
 					"the operator stores it with `agent config set-secret <name>`, and the broker " +
-					"injects the value host-side — you never see it. A secret cap always needs operator approval.",
+					"injects the value host-side — you never see it. A secret cap always needs operator approval. " +
+					storedSecretsNote(d.SecretNames),
 				"items": map[string]any{"type": "object"},
 			},
 			"scope": map[string]any{"type": "string", "description": "ephemeral (this run only) | shared (persists). Default ephemeral.", "enum": []any{"ephemeral", "user", "shared"}},
@@ -73,6 +80,18 @@ func NewAuthorTool(d AuthorToolDeps) Tool {
 		Required: []string{"name", "description", "input_schema", "code", "test"},
 		Run:      d.run,
 	}
+}
+
+// storedSecretsNote renders the currently-resolvable secret names for the required_caps
+// description. A name is a reference, not a credential — the model can ask for it to be
+// injected but never read it — so listing them is what makes keyed APIs usable at all.
+func storedSecretsNote(names []string) string {
+	if len(names) == 0 {
+		return "No secrets are stored right now, so a cap naming one would be denied; " +
+			"ask the operator to add it with `agent config set-secret <name> <value>`."
+	}
+	return "Secrets currently stored, by name: " + strings.Join(names, ", ") +
+		". Use one of these names verbatim — any other name is denied."
 }
 
 func (d AuthorToolDeps) run(ctx context.Context, args map[string]any) (string, error) {

@@ -263,20 +263,22 @@ var rmSecretCmd = &cobra.Command{
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
 	Short: "List stored secret names (values are never printed)",
-	Args:  cobra.NoArgs,
+	Long: "List the names of every secret the capability broker can resolve — both those in " +
+		"config.json and those supplied by the environment as " + envSecretPrefix + "<NAME>, " +
+		"which is how a deployment injects them (e.g. `fly secrets set " + envSecretPrefix + "SCRAPINGANT=…`). " +
+		"Each name is tagged with its source. Values are never printed.",
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadConfigOrEmpty()
-		if len(cfg.Secrets) == 0 {
-			fmt.Println("no secrets (add one with: agent config set-secret <name> <value>)")
+		names := secretNames(cfg)
+		if len(names) == 0 {
+			fmt.Printf("no secrets (add one with: agent config set-secret <name> <value>, "+
+				"or set %s<NAME> in the environment)\n", envSecretPrefix)
 			return nil
 		}
-		names := make([]string, 0, len(cfg.Secrets))
-		for n := range cfg.Secrets {
-			names = append(names, n)
-		}
-		sort.Strings(names)
+		_, sources := mergedSecrets(cfg)
 		for _, n := range names {
-			fmt.Println(n)
+			fmt.Printf("%s\t(%s)\n", n, sources[n])
 		}
 		return nil
 	},
@@ -302,23 +304,47 @@ func init() {
 // them to the config volume — the 12-factor path, matching how the Telegram token is provided.
 const envSecretPrefix = "AI_AGENT_SECRET_"
 
-// secretsResolver returns a lookup over the configured secrets for the capability broker
-// (ExecutorConfig.Secrets), merging config.json `secrets` with AI_AGENT_SECRET_* env vars
-// (env wins, matching the flag > env > config precedence). It returns nil when none are set,
-// so a capability that names a secret is denied (fail closed). The map is snapshotted so a
-// later config reload can't mutate what a running executor closed over.
-func secretsResolver(cfg Config) func(name string) (string, bool) {
-	m := make(map[string]string, len(cfg.Secrets))
+// mergedSecrets merges config.json `secrets` with AI_AGENT_SECRET_* env vars (env wins,
+// matching the flag > env > config precedence), returning the values and, per name, where
+// it came from ("config" or "env"). Every reader of the secret store goes through this, so
+// `config secrets` lists exactly what the broker can resolve — including a deployment
+// secret supplied by the platform that was never written to the config volume.
+func mergedSecrets(cfg Config) (values, sources map[string]string) {
+	values = make(map[string]string, len(cfg.Secrets))
+	sources = make(map[string]string, len(cfg.Secrets))
 	for k, v := range cfg.Secrets {
-		m[k] = v
+		values[k], sources[k] = v, "config"
 	}
 	for _, kv := range os.Environ() {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || v == "" || !strings.HasPrefix(k, envSecretPrefix) {
 			continue
 		}
-		m[strings.ToLower(strings.TrimPrefix(k, envSecretPrefix))] = v
+		name := strings.ToLower(strings.TrimPrefix(k, envSecretPrefix))
+		values[name], sources[name] = v, "env"
 	}
+	return values, sources
+}
+
+// secretNames returns the sorted names of every resolvable secret — names only, never
+// values. It is what the model is told exists (author_tool), so it can reference a secret
+// by name in a capability without ever being able to read one.
+func secretNames(cfg Config) []string {
+	values, _ := mergedSecrets(cfg)
+	names := make([]string, 0, len(values))
+	for n := range values {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// secretsResolver returns a lookup over the merged secrets for the capability broker
+// (ExecutorConfig.Secrets). It returns nil when none are set, so a capability that names a
+// secret is denied (fail closed). The map is snapshotted so a later config reload can't
+// mutate what a running executor closed over.
+func secretsResolver(cfg Config) func(name string) (string, bool) {
+	m, _ := mergedSecrets(cfg)
 	if len(m) == 0 {
 		return nil
 	}

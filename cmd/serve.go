@@ -122,21 +122,22 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		deps := serveDeps{
-			prov:       newProvider(cfg),
-			workDir:    workDir,
-			defaults:   newServeDefaults(resolveModel(modelFlag, cfg), tier),
-			gate:       approvals,
-			registry:   registry,
-			mem:        mem,
-			central:    rec,
-			ledger:     usage.NewLedger(rec), // rec is the process-wide log (a Reader)
-			reader:     rec,                  // same log, read side, for recent_activity
-			prompts:    promptSrc,
+			prov:          newProvider(cfg),
+			workDir:       workDir,
+			defaults:      newServeDefaults(resolveModel(modelFlag, cfg), tier),
+			gate:          approvals,
+			registry:      registry,
+			mem:           mem,
+			central:       rec,
+			ledger:        usage.NewLedger(rec), // rec is the process-wide log (a Reader)
+			reader:        rec,                  // same log, read side, for recent_activity
+			prompts:       promptSrc,
 			limits:        resolveAgentLimits(cfg),
 			spawnDepth:    resolveSpawnDepth(cfg),
 			contextLimits: cfg.ContextLimits,
 			sessions:      sessions,
 			secrets:       secretsResolver(cfg),
+			secretNames:   secretNames(cfg),
 			spaces:        spaces,
 			spaceMems:     newSpaceMemCache(spaces),
 		}
@@ -268,6 +269,9 @@ type serveDeps struct {
 	// secrets resolves a named secret for the broker to inject into an authored tool's
 	// brokered HTTP request, host-side (config `secrets`). Nil ⇒ no secret store.
 	secrets func(name string) (string, bool)
+	// secretNames are the names secrets can resolve, listed in author_tool's description
+	// so the model knows which keyed APIs are reachable. Names only, never values.
+	secretNames []string
 	// spaces + spaceMems wire switchable data contexts (spaces.md): the store manages
 	// <workspace>/.agent/spaces/, the cache shares one memory shard per space across
 	// concurrent sessions so writes serialize instead of racing whole-file rewrites.
@@ -399,7 +403,8 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		ContextLimit: contextLimitFor(model, d.contextLimits),
 		Sessions:     d.sessions,
 		Manifest:     manifest, ScratchDir: scratchDir,
-		Secrets: d.secrets,
+		Secrets:     d.secrets,
+		SecretNames: d.secretNames,
 	}), nil
 }
 

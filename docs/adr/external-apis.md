@@ -15,9 +15,11 @@ plugins out).
 `http_get` host-side (header or query param), bounded to the cap's host allowlist — never entering
 the sandbox, the tool source, or the audit log (only the name is recorded). Secret-bearing caps
 always require operator approval (even on permissive). Managed with `agent config
-set-secret`/`rm-secret`/`secrets`. Authored-tool integrations (§1B) work through it now. **Not
-built:** the ScrapingAnt-specific `web_fetch` enhancement (§1A) — with §2 in place it is a thin
-optional add whenever wanted; and any plugin/MCP path (§1C, deliberately deferred).
+set-secret`/`rm-secret`/`secrets`. Authored-tool integrations (§1B) work through it now.
+
+**ScrapingAnt is BUILT, but as a separate `scrape` tool — not the `web_fetch` enhancement §1A
+proposed. See §5 for why that decision was reversed.** Still not built: any plugin/MCP path
+(§1C, deliberately deferred).
 
 ---
 
@@ -105,3 +107,43 @@ generalizes: the next keyed API is `set-secret` + an authored tool, no code chan
 - **Built-in vs authored for ScrapingAnt specifically** — A is chosen for ergonomics, but once §2
   exists, ScrapingAnt *could* instead be a shipped authored tool. Keep it a built-in: `web_fetch`
   augmentation is lower friction than a catalog entry the operator must not revoke.
+  *(Resolved: built-in, but its own tool — §5.)*
+
+---
+
+## 5. Amendment — ScrapingAnt ships as `scrape`, not as a `web_fetch` flag
+
+§1A chose to fold ScrapingAnt into `web_fetch` behind a `render_js` argument. **That is reversed:
+it ships as a separate built-in `scrape` tool** (`internal/tools/scrape.go`). Still a built-in, as
+§1A decided and §4 confirmed — only the *surface* changed. Four reasons, of which the first is
+decisive:
+
+1. **Cost visibility.** `web_fetch` is free and the model reaches for it constantly; ScrapingAnt
+   bills per call. An argument on a free tool lets the model spend credits by flipping a boolean
+   it half-understands, indistinguishable in the transcript from an ordinary fetch. A separate
+   tool name makes each paid call a deliberate choice and one auditable line
+   (`capability=scrape`, host + `[browser]`, never the key).
+2. **The contracts differ.** ScrapingAnt has real options worth exposing — browser rendering,
+   `proxy_country`, `wait_for_selector`, HTML vs text. Hanging them off `web_fetch` inflates a
+   description paid for in context tokens on *every* run, including the overwhelming majority of
+   fetches that are a plain GET.
+3. **The failure modes are unrelated.** 403 bad key, 409 concurrency, 423 target-blocked, 429 out
+   of credits — each with different retry advice — versus `web_fetch`'s "the page didn't load".
+   Merged, both get harder for the model to recover from and for the operator to debug.
+4. **It dissolves §4's open question.** "Route everything through it, or only on JS-render
+   failure, or an explicit arg?" is a policy question that only exists because of the merge. Two
+   tools, and the model simply picks; the tool description carries the policy ("try `web_fetch`
+   first; don't retry in a loop").
+
+**Two properties the implementation holds to.** The key is read from the §2 secret store under the
+name `scrapingant` rather than a bespoke `scrapingant_key` config field, so `set-secret`, the
+`AI_AGENT_SECRET_*` deployment path, and `config secrets` all work unchanged, and there is one
+place credentials live. And the tool is **registered only when that secret resolves** — a paid tool
+the model can only ever fail with wastes turns discovering that.
+
+Note the asymmetry with §1B this creates, and it is intentional: `scrape` is a *trusted built-in*
+that reads the secret directly host-side, so it needs no capability grant and no approval prompt —
+the operator authorized it by storing the token. An *authored* tool reaching the same API goes
+through the broker, names the secret in a capability, and always prompts. Both are correct: the
+built-in's host and behavior are fixed at compile time and reviewable; an authored tool's are
+chosen by the model at runtime, which is exactly what the approval catches.

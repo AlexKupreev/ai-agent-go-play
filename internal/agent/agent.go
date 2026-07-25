@@ -473,6 +473,11 @@ type ExecutorConfig struct {
 	// layer builds it from config; see docs/adr/external-apis.md §2.
 	Secrets func(name string) (string, bool)
 
+	// SecretNames are the names Secrets can resolve, listed in author_tool's description so
+	// the model knows which keyed APIs it can reach. Names only — Secrets deliberately has no
+	// enumeration, so a value can never leak through this path.
+	SecretNames []string
+
 	// Gate is the human-in-the-loop seam: it gates risky actions (destructive shell,
 	// capability escalation) and answers the executor's ask_user questions. Pass a
 	// queue-backed gate to route both over the API to a frontend. Nil defaults to
@@ -567,6 +572,8 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 		Tier:     tier,
 		RunID:    runID,
 		Gate:     gate,
+
+		SecretNames: cfg.SecretNames,
 	})
 
 	// self is the agent, assigned once it is built below. The status tool's Context reader
@@ -602,6 +609,13 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 				return self.lastInputTokens, self.contextLimit
 			},
 		}),
+	}
+	// ScrapingAnt-backed fetching for pages web_fetch cannot read (JS-rendered, bot-walled).
+	// Registered only when the token is stored: it costs the operator per call, so a version
+	// the model can only fail with would waste both turns and the user's patience. The key is
+	// read host-side from the same secret store authored tools reference by name.
+	if scrape, ok := tools.NewScrape(cfg.Secrets, rec, runID); ok {
+		builtins = append(builtins, scrape)
 	}
 	// Long-term memory is a trusted built-in (not exposed to the sandbox). Omit it
 	// when no store is wired so memory-free runs/tests offer no dangling tools.

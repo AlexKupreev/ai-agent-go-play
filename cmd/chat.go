@@ -201,6 +201,7 @@ var chatCmd = &cobra.Command{
 				ContextLimit: resolveContextLimit(model, cfg),
 				Sessions:     sessReader,
 				Secrets:      secretsResolver(cfg),
+				SecretNames:  secretNames(cfg),
 				// nil/"" in bare chat ⇒ no record_artifact and no scratch note (unchanged).
 				Manifest: manifest, ScratchDir: scratchDir,
 			}), nil
