@@ -36,7 +36,8 @@ shape: *check the grant + the argument allowlist → execute → audit*. Denials
   - `read_file` / `write_file` → a path prefix; the target must resolve *within* it.
   - `call_tool` → tool names (`*` = any).
   - `clock` / `random` → presence-only.
-- **HTTP responses capped at 1 MiB** (`maxHTTPBytes`) to bound memory.
+- **HTTP response bodies capped** (default 1 MiB, tunable with the `limits.max_http_bytes`
+  config key — [`environment.md`](environment.md#tunable-limits-limits)) to bound memory.
 
 **Defends against:** an authored tool reaching network/filesystem/other tools it wasn't granted;
 runaway response sizes.
@@ -126,7 +127,8 @@ Every capability a tool exercises **or is denied** is recorded, making self-exte
   per line, append-only, mode `0600`). `Recorders` fans one event to several sinks. A richer store
   (SQLite) can implement `Recorder`/`Reader` later without touching callers.
 - Event types: `capability_exercised`, `capability_denied`, `tool_authored`, `tool_revoked`,
-  `memory_write`.
+  `memory_write`, `run_usage` (per-run token spend — [`usage.md`](usage.md#token-usage)), and
+  `session_purged` (irreversible session deletion — [`usage.md`](usage.md#conversations-over-the-api-sessions)).
 - **Audit-write failures are surfaced** to stderr, never dropped silently — an unserializable or
   unwritable audit record is treated as a bug, because the log *is* the security record.
 - **Reviewable over the API (Phase 4e-4):** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
@@ -167,6 +169,39 @@ destructive without a human nod.
 real boundary for authored code is the broker; `shell` itself is trusted. The `Approver` seam
 (Phase 4a) makes this routable: a queue-backed approver (Phase 4c) can satisfy the prompt from a
 remote frontend so the gate works unattended.
+
+---
+
+## 4a. `scrape` — a trusted built-in that spends money
+
+**File:** `internal/tools/scrape.go`
+
+`scrape` (ScrapingAnt, [`usage.md`](usage.md#scraping-js-rendered-and-bot-walled-pages-scrape)) is
+registered as a **trusted built-in**, so — like `shell` and `web_fetch` — it does **not** go
+through the capability broker, the trust tier, or the approval gate. It is `Trusted` and not
+`Exposed`, so sandboxed authored code cannot reach it via `call_tool`.
+
+What *does* constrain it:
+
+- The **secret never leaves the host**: read at call time, sent as an `x-api-key` header (never in
+  the query string, so an error echoing the URL cannot leak it), and absent from the model, the
+  tool arguments, and the audit log.
+- The tool is **omitted entirely** when no `scrapingant` secret resolves, so it cannot be called
+  into existence by the model.
+- Every call is **one audit line** carrying the host and a `[browser]` marker, so spend is
+  reconstructable after the fact.
+
+What does **not** constrain it, and is worth knowing before running unattended:
+
+- **There is no spend limit.** Nothing caps calls per run, per session, or per day; the brakes are
+  two sentences of prompt guidance ("try `web_fetch` first", "do not retry a scrape in a loop")
+  and a 120-second per-call timeout. On `permissive`, with `limits.max_iterations` at its default
+  of 20, a page that argues the agent into retrying is a 20-call bill — and `render_js` calls cost
+  roughly 10× a plain proxied fetch. This is the one built-in whose blast radius is financial
+  rather than local, and it is the strongest current argument for the deferred budget dial
+  ([`planning/plan.md`](planning/plan.md) §6d).
+- Failed calls are currently recorded as `capability_denied`, which conflates "the site 404'd"
+  with "policy refused" in the one stream an operator would grep for denials.
 
 ---
 
@@ -230,7 +265,9 @@ valid tool that passes a trivial test. And `author_tool` is **not** exposed to s
 `Safe | Balanced | Permissive` on `GrantContext` is the user-tunable autonomy dial that step 2
 consults: **Permissive** auto-approves all; **Balanced** auto-approves side-effect-free reads
 (`clock`/`random`/`read_file`) and prompts for the rest; **Safe** prompts for everything. The run's
-tier is set in `cmd/run.go` (currently `Balanced`).
+tier is resolved by `cmd`'s `resolveTier` (flag > env > config > the `balanced` default), and a
+per-run/per-session request is **clamped** to the `serve --tier` ceiling, so a client can go safer
+but never looser than the engine allows.
 
 **Defends against:** unattended over-reach — alone, the agent can self-serve routine caps but an
 over-tier cap with no approval channel simply rejects. **Limit:** the policy is a coarse per-kind
@@ -258,5 +295,6 @@ approval (so a human can approve remotely rather than reject) is the Phase 4 ref
 | Agent silently gaining new capability | `author_tool` gate (validate→approve→test→audit) | `tools/authortool.go` |
 | Unattended capability over-reach | Tier dial (`Tier.AutoApproves`) | `capability/capability.go` |
 | Destructive shell command | Heuristic confirm gate | `tools/destructive.go` |
+| Runaway spend on a paid tool | *(unmitigated — prompt guidance + audit only, §4a)* | `tools/scrape.go` |
 | Undetectable misbehavior | Append-only audit log | `audit/audit.go` |
 | Runaway authored code | Context-timeout abort | `sandbox/luaglue.go` |

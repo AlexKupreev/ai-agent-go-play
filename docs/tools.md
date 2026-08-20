@@ -19,16 +19,28 @@ dedup. Remaining: SQLite store and async approval are post-Phase-3 (see deferral
 
 There are two kinds of tool, deliberately kept as **separate types**:
 
-1. **Built-ins** — `tools.Tool` (`internal/tools/tools.go`): `shell`, `web_search`, `web_fetch`,
-   `scrape`, `run_code`, `ask_user`, `author_tool`, and the introspection/memory/status tools.
-   Hand-written Go, trusted, ambient authority. Several are conditional — registered only when
-   their dependency is wired, so the model is never offered a tool that must fail (`scrape` needs
-   a stored `scrapingant` secret; the memory tools need a store; `record_artifact` a manifest).
+1. **Built-ins** — `tools.Tool` (`internal/tools/tools.go`): hand-written Go, trusted, ambient
+   authority. Roughly two dozen, in six groups:
+
+   | Group | Tools |
+   | --- | --- |
+   | World | `shell`, `web_search`, `web_fetch`, `scrape` |
+   | Compute & self-extension | `run_code`, `author_tool` |
+   | Human-in-the-loop | `ask_user` |
+   | Memory & context | `remember`, `recall`, `list_spaces`, `create_space`, `switch_space`, `space_notes`, `update_space_notes`, `record_artifact` |
+   | Recall of past work | `list_sessions`, `search_sessions`, `read_session` |
+   | Introspection | `status`, `usage`, `recent_activity`, `tool_catalog`, `read_self_docs` |
+
+   Plus `spawn_agent`, which lives in the agent package (so `tools` need not import `agent`) but
+   registers as a built-in like the rest. Several are **conditional** — registered only when their
+   dependency is wired, so the model is never offered a tool that must fail (`scrape` needs a
+   stored `scrapingant` secret; the memory tools a store; `record_artifact` a manifest; the
+   session tools a session store; `spawn_agent` an agent catalog).
 2. **Registered tools** — `tools.ToolSpec` (`internal/tools/spec.go`): agent-authored (or
    natively-registered) tools held in a `Registry`. Authored ones run sandboxed + brokered.
 
-**Solution:** the executor will (in 3b) compute each iteration's tool defs as *built-ins ++
-registry tools, in registration order*.
+**Solution:** the executor computes each iteration's tool defs as *built-ins ++ registry tools,
+in registration order* (`Agent.buildToolDefs`).
 
 - **Benefit:** built-ins stay simple and don't pay the sandbox/spec tax; the append-only ordering
   keeps the serialized tool-def prefix byte-stable, which is friendly to provider prompt caching.
@@ -127,9 +139,11 @@ keeps its `seq` (preserves position) and bumps `Version`.
 
 The catalog is **config-dir-scoped**, not workspace-scoped: it is part of the agent's identity
 (`<config-dir>/tools.json`), shared across every workspace the agent works in, and unaffected by
-`--workspace`. This is the same identity-vs-target split memory and the audit log follow — see
+`--workspace`. The audit log follows the same split. **Memory does not** — it and the spaces live
+at `<workspace>/.agent/`, the one deliberate exception, so a workspace change swaps the agent's
+notes but not its tools; see
 [`environment.md`](environment.md#two-scopes-config-dir-and-workspace). (Declarative **sub-agent
-types**, by contrast, *are* read from both the config-dir and the workspace — `agents/*.md`,
+types** are read from both the config-dir and the workspace — `agents/*.md`,
 workspace-over-global — because a type is prompt/config, not persisted authored state.)
 
 ### Search and catalog-size gating

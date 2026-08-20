@@ -41,19 +41,28 @@ Files here:
 | `Dockerfile` | Multi-stage build; Alpine runtime (bash for the `shell` tool + CA certs). |
 | `entrypoint-one.sh` | Single-agent launcher. |
 | `entrypoint-two.sh` | Two-agent supervisor (two `serve` processes, one machine). |
-| `fly.one-agent.toml` | One agent. |
-| `fly.two-agent.toml` | Two independent agents on one machine. |
+| `fly.one-agent.toml` | One agent. **Template** — see the note below. |
+| `fly.two-agent.toml` | Two independent agents on one machine. **Template.** |
 
 All commands below are run **from the repo root** (the build context must see the
 Go source).
+
+> **The `fly.*-agent.toml` files are tracked templates, not your deployment.** They carry
+> `CHANGE ME` markers for `app` and `primary_region`, and an empty
+> `AI_AGENT_TELEGRAM_ALLOWED_USERS`. Filling them in *in place* means your app name, region, and
+> Telegram user ids ride along in every commit and diff. Copy to an untracked
+> `deploy/fly/fly.local-one.toml` (gitignored) and deploy with `-c` pointing at the copy, so the
+> template stays a template. Real credentials never belong in either file — they go through
+> `fly secrets set` (step 3).
 
 ---
 
 ## One agent
 
 ```bash
-# 1. Edit fly.one-agent.toml: set a unique `app` name and your `primary_region`,
-#    and fill AI_AGENT_TELEGRAM_ALLOWED_USERS with your Telegram id(s).
+# 1. Copy the template, then edit the copy: set a unique `app` name and your
+#    `primary_region`, and fill AI_AGENT_TELEGRAM_ALLOWED_USERS with your Telegram id(s).
+cp deploy/fly/fly.one-agent.toml deploy/fly/fly.local-one.toml   # gitignored
 
 # 2. Create the app + a volume for state (same region as primary_region).
 fly apps create ai-agent            # or: fly launch --no-deploy (skip if named in toml)
@@ -66,7 +75,7 @@ fly secrets set AI_AGENT_TELEGRAM_TOKEN=123456:abcdef -a ai-agent
 fly secrets set AI_AGENT_SECRET_SCRAPINGANT=sk_... -a ai-agent
 
 # 4. Deploy.
-fly deploy -c deploy/fly/fly.one-agent.toml
+fly deploy -c deploy/fly/fly.local-one.toml
 
 # 5. Message your bot on Telegram. /new (or /reset) starts a session; send a task.
 #    /end closes it; /reload re-reads prompt/agent-type files without a restart.
@@ -84,8 +93,9 @@ Two fully independent agents (separate tools, memory, audit, Telegram bots) on o
 machine — the Fly rendering of the docs' "two `serve` processes on one box".
 
 ```bash
-# 1. Edit fly.two-agent.toml: unique `app`, your region, and the two allowlists
-#    (WORK_ALLOWED_USERS / HOME_ALLOWED_USERS).
+# 1. Copy the template, then edit the copy: unique `app`, your region, and the two
+#    allowlists (WORK_ALLOWED_USERS / HOME_ALLOWED_USERS).
+cp deploy/fly/fly.two-agent.toml deploy/fly/fly.local-two.toml   # gitignored
 
 fly apps create ai-agent-duo
 fly volumes create agent_data --region waw --size 1 -a ai-agent-duo
@@ -96,7 +106,7 @@ fly secrets set WORK_TELEGRAM_TOKEN=111:aaa -a ai-agent-duo
 fly secrets set HOME_TELEGRAM_TOKEN=222:bbb -a ai-agent-duo
 # Optional separate keys: WORK_OPENAI_API_KEY / HOME_OPENAI_API_KEY
 
-fly deploy -c deploy/fly/fly.two-agent.toml
+fly deploy -c deploy/fly/fly.local-two.toml
 ```
 
 The `work` agent defaults to tier `safe` on `:8080`; `home` to `balanced` on
@@ -114,13 +124,13 @@ the *one-agent* config twice as two apps:
 fly apps create agent-work
 fly volumes create agent_data --region waw --size 1 -a agent-work
 fly secrets set OPENAI_API_KEY=sk-... AI_AGENT_TELEGRAM_TOKEN=111:aaa -a agent-work
-fly deploy -c deploy/fly/fly.one-agent.toml -a agent-work
+fly deploy -c deploy/fly/fly.local-one.toml -a agent-work
 
 # home (repeat with its own app, volume, token, and AGENT_TIER)
 fly apps create agent-home
 fly volumes create agent_data --region waw --size 1 -a agent-home
 fly secrets set OPENAI_API_KEY=sk-... AI_AGENT_TELEGRAM_TOKEN=222:bbb -a agent-home
-fly deploy -c deploy/fly/fly.one-agent.toml -a agent-home
+fly deploy -c deploy/fly/fly.local-one.toml -a agent-home
 ```
 
 Two machines, two volumes, two bills — but a crash or redeploy of one never touches

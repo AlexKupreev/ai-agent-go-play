@@ -6,12 +6,32 @@ It starts as a small ReAct CLI agent and is growing toward a **self-extending, p
 assistant** that can author its own tools at runtime, for a small trusted user base on a
 low-resource box.
 
-- **[`docs/usage.md`](docs/usage.md) — how to run and operate the agent (start here to use it).**
-- [`docs/environment.md`](docs/environment.md) — the runtime environment: config-dir vs workspace, trust tiers, prompt/agent-type customization, config/env/files reference.
-- [`docs/design.md`](docs/design.md) — the concrete, Go-grounded design (decisions, current state, target architecture).
-- [`docs/planning/plan.md`](docs/planning/plan.md) — the phased implementation plan and next steps.
-- [`docs/security.md`](docs/security.md) — the threat→control map (capabilities, sandbox, audit, approvals).
-- [`self-extending-agent-design.md`](self-extending-agent-design.md) — the implementation-agnostic vision and trade-off analysis.
+## Docs map
+
+The docs come in three tiers, and the tier tells you how much to trust a statement about
+current behaviour.
+
+**Reference — how it works *now*.** These are compiled into the binary (`go:embed`), so they are
+also the agent's own self-knowledge via its `read_self_docs` tool. Keep them true.
+
+| Doc | Answers |
+| --- | --- |
+| **[`docs/usage.md`](docs/usage.md)** | How do I run and operate it? **Start here.** Commands, tiers, approvals, memory, spaces, secrets, sessions, Telegram, audit, tokens. |
+| [`docs/environment.md`](docs/environment.md) | Where does state live, and how do I customize the prompt? config-dir vs workspace, tiers, `SYSTEM.md`/`AGENTS.md`, `agents/*.md`, the config/env/files tables. |
+| [`docs/design.md`](docs/design.md) | Why is it shaped this way? Trust model, language choice, current inventory, target architecture. |
+| [`docs/security.md`](docs/security.md) | What stops what? The threat→control map: broker, sandbox, audit, approvals, injection framing. |
+| [`docs/tools.md`](docs/tools.md) | How are tools modelled and stored? The two-tier model, `ToolSpec`, registry, `author_tool`. |
+| [`docs/memory.md`](docs/memory.md) | How does cross-run memory work, and what are its limits? |
+| [`docs/api-transport.md`](docs/api-transport.md) | What is the HTTP+SSE surface, and why not JSON-RPC? |
+| [`self-extending-agent-design.md`](self-extending-agent-design.md) | The implementation-agnostic vision and trade-off analysis. Embedded, but tagged `[vision]` — design intent, not a capability list. |
+
+**Decision records — why a shipped thing is the way it is.** [`docs/adr/`](docs/adr) — prompts,
+chat planner, workspace, spaces, sub-agents, external APIs. Not embedded.
+
+**Planning — not built yet, or deliberately shelved.** [`docs/planning/`](docs/planning)
+(incl. [`plan.md`](docs/planning/plan.md), the phase status of record, and the periodic
+`review-*.md` passes) and [`docs/deferred/`](docs/deferred). Not embedded, **on purpose**: the
+agent must never read a roadmap and report it as something it can do.
 
 ## Requirements
 
@@ -56,12 +76,15 @@ To install system-wide, `go install .` and make sure `~/go/bin` is on your `PATH
 ./agent client "run the tests"     # terminal 2: drive a run against it
 ```
 
-Run two independent agents (different tools + memory) on one box by starting two `serve` processes
-with separate config dirs and ports:
+Run two independent agents on one box by starting two `serve` processes with separate config dirs,
+workspaces, and ports — the config dir separates tools/audit/sessions, the **workspace** separates
+memory and spaces:
 
 ```bash
-./agent --config-dir ~/.config/ai-agent/work serve --addr 127.0.0.1:8080
-AI_AGENT_CONFIG_DIR=~/.config/ai-agent/home ./agent serve --addr 127.0.0.1:8081
+./agent --config-dir ~/.config/ai-agent/work --workspace ~/ws/work \
+        serve --addr 127.0.0.1:8080
+AI_AGENT_CONFIG_DIR=~/.config/ai-agent/home ./agent --workspace ~/ws/home \
+        serve --addr 127.0.0.1:8081
 ```
 
 Name each engine so you can address it by alias instead of `host:port` (`agent config
@@ -94,19 +117,25 @@ audit log; destructive actions and escalations route through a human-approval ga
 
 ```text
 main.go                    entry point
-cmd/                       CLI commands (cobra): run, chat, serve, client, eval, reload, stop, config, tool, audit, usage, session
+cmd/                       CLI commands (cobra): run, chat, serve, client, eval, prompts, reload,
+                           stop, config, tool, audit, usage, session
 internal/
-  agent/                   planner + executor ReAct loop, event observers
+  agent/                   planner + executor ReAct loop, critic, sub-agent types, event observers
   tools/                   built-in tools, tool registry, author_tool, sandbox contract, approvals
-  capability/              capability broker + trust tiers
+  capability/              capability broker + trust tiers + secret injection
   sandbox/                 gopher-lua sandbox for authored tools
-  memory/                  long-term memory store
+  memory/                  long-term memory store (workspace-local; space-scoped view)
+  space/                   switchable data contexts (per-space memory shard + notes)
+  session/                 persistent conversations (live + archived), for serve/Telegram
+  artifact/                the deliberate turn's scratch-dir manifest + uploads
+  usage/                   token-usage ledger over the audit log (session + day totals)
   selfdocs/                the agent's own docs, embedded for read_self_docs
   hoststat/                best-effort host resource snapshot (for the status tool)
   buildinfo/               build version (ldflags-stampable), for self-reporting
   provider/                LLM provider port (OpenAI adapter under provider/openai)
   audit/                   append-only audit log (+ reader)
-  api/                     headless engine: HTTP+SSE transport, run lifecycle, approval queue, client
+  api/                     headless engine: HTTP+SSE transport, run lifecycle, sessions,
+                           approval queue, uploads, client
   frontend/telegram/       optional Telegram bot (peer client; go-telegram-bot-api)
   logger/                  per-run session transcripts
 ```

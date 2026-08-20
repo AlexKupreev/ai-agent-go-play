@@ -7,7 +7,7 @@ conversations. This is the **data-only** successor to the reverted, cwd-based Pr
 data*, **not** a working directory. That single simplification removes the trust/containment
 questions that sank Projects.
 
-Companion to [`../design.md`](../design.md) (§1 single trusted box), [`memory.md`](memory.md), and
+Companion to [`../design.md`](../design.md) (§1 single trusted box), [`memory.md`](../memory.md), and
 the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Status (2026-07-11):
 P1 + P2 + P3-notes are BUILT** (`internal/space`, `memory.ScopedStore`, the five space tools,
 `Session.Space` sticky + POST/PATCH, `/space` in local/remote chat + Telegram, `--space`, notes

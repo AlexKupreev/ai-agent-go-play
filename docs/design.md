@@ -38,13 +38,18 @@ without a hostile-isolation boundary.
 
 **Two scopes — identity and target.** A run is layered from two nested directories, the inner
 inheriting the outer and able to override it: the **config-dir** is *who the agent is* (config,
-tool catalog, memory, audit log, global prompt files and agent types — always trusted, the shared
-data domain above); the **workspace** is the sandbox it *acts in* (shell cwd, workspace-common prompt
-files and agent types). The workspace anchors context and targets, **never identity** —
-memory/tools/audit stay config-dir-scoped, so per-workspace separation means a second config-dir,
-not a second workspace. Unlike the config-dir, a workspace can be an untrusted checkout, so its
-prompt/agent files (they land *in* a system prompt) auto-load only above the `safe` tier unless
-named explicitly. Full model in
+tool catalog, audit log, session store, global prompt files and agent types — always trusted, the
+shared data domain above); the **workspace** is the sandbox it *acts in* (shell cwd,
+workspace-common prompt files and agent types) **and where the agent's memory + spaces live**, at
+`<workspace>/.agent/`. Memory is the one deliberate exception to "identity stays in the
+config-dir": the spaces ADR (2026-07-08) put memory and spaces in the workspace so a context's
+notes travel with the directory they belong to and no separate global memory layer has to exist
+([`adr/spaces.md`](adr/spaces.md) §Governing decision). The practical consequence is the reverse
+of the old rule: **separating memory means a second workspace, not a second config-dir** — two
+config-dirs in one workspace share memory and spaces while keeping tools and audit apart. Unlike
+the config-dir, a workspace can be an untrusted checkout, so its prompt/agent files (they land
+*in* a system prompt) auto-load only above the `safe` tier unless named explicitly; `.agent/` is
+the agent's own data and is not tier-gated. Full model in
 [`environment.md`](environment.md#two-scopes-config-dir-and-workspace). *(An earlier design added a
 third scope — a named **project** sub-scope within a workspace — since set aside; its design is
 preserved in [`deferred/projects.md`](deferred/projects.md).)*
@@ -86,7 +91,7 @@ providers, self-extension via TypeScript extensions, minimal core). We adopt its
 | pi principle | Adopt? | How it lands here |
 |---|---|---|
 | Headless engine + JSON-RPC/SDK; frontends are peer clients | **Yes** | Web/Telegram/CLI all talk to one headless engine; CLI is not special. |
-| Provider-agnostic, swappable models | **Yes** | Introduce a `Provider` port; today the loop is hard-wired to OpenAI. |
+| Provider-agnostic, swappable models | **Yes** | A `provider.Provider` port with an OpenAI adapter behind it (base URL configurable, so any OpenAI-compatible endpoint works); a second adapter is additive. |
 | Minimal core + extensibility-as-architecture | **Yes** | Self-authored tools (`author_tool`) instead of a fat built-in surface. |
 | Primitives over prescriptive workflows | **Yes** | Agent composes capability-gated primitives; few opinionated flows. |
 | Shell/files as first-class tools | **Yes — keep** | Shell stays a real built-in capability; we *add* general-purpose tools and frontends, not remove shell. |
@@ -103,32 +108,37 @@ boundary around machine-authored code.
 
 ## 4. Current state (what exists today)
 
-A working ReAct CLI agent. Honest inventory:
+**Phases 0–4f and 6a–6c of the plan are complete.** Per-phase detail, acceptance criteria, and
+what remains live in [`planning/plan.md`](planning/plan.md) — that file is the status of record;
+this section is the one-screen shape of the system so §5–§8 have something concrete to point at.
 
-| Area | Today | File |
+| Area | Today | Where |
 |---|---|---|
-| Agent loop | ReAct loop, max 20 iterations, sequential tool calls | `internal/agent/agent.go` |
-| Provider | **Hard-wired OpenAI** (`openai-go`), value-type client | `internal/agent/agent.go` |
-| Tool interface | Provider-neutral `Tool{Name, Description, Parameters, Run}` | `internal/tools/tools.go` |
-| Built-in tools | `shell` (workDir), `web_search` (DuckDuckGo), `web_fetch`, `ask_user` | `internal/tools/*.go` |
-| Sub-agent | Planner that refines a task before execution; structured output via JSON-schema | `internal/agent/plan.go`, `agent.go` |
-| Frontend | CLI only (cobra): `agent run`, `agent config set-key` | `cmd/*.go` |
-| Persistence | None (no session/run log); config key in `~/.config/ai-agent/config.json` | `cmd/config.go` |
-| Observability | Stderr logging of requests/tool calls/results | `internal/logger/logger.go` |
+| Agent loop | ReAct loop (iteration cap from `limits.max_iterations`, default 20), sequential tool calls, per-iteration tool defs | `internal/agent/agent.go` |
+| Deliberation | Planner → executor → critic with a bounded re-plan loop; conversation summarization (`/compact`) | `internal/agent/plan.go`, `critic.go`, `summarize.go` |
+| Provider | `provider.Provider` port; OpenAI adapter behind it, with a configurable base URL (any OpenAI-compatible endpoint) | `internal/provider/`, `provider/openai/` |
+| Tools | ~23 built-ins (shell, web search/fetch, `scrape`, `run_code`, `ask_user`, `author_tool`, memory, spaces, sessions, artifacts, introspection, `spawn_agent`) + the `ToolSpec` registry for authored tools | `internal/tools/`, [`tools.md`](tools.md) |
+| Sub-agents | Declarative `agents/*.md` types + a foreground `spawn_agent(type, task)` with a depth budget | `internal/agent/agenttype.go` |
+| Boundary | Capability broker (deny-by-default, allowlists, secret injection) + gopher-lua sandbox + trust tiers | `internal/capability/`, `internal/sandbox/`, [`security.md`](security.md) |
+| Frontends | CLI (13 cobra commands incl. `run`/`chat`/`serve`/`client`/`eval`/`prompts`), headless HTTP+SSE engine, optional Telegram bot | `cmd/`, `internal/api/`, `internal/frontend/telegram/` |
+| Persistence | JSON/JSONL stores: tool catalog, memory, spaces, sessions (+archive), artifact manifests, per-run transcripts, append-only audit log | `internal/{memory,space,session,artifact,audit}/` |
+| Observability | Event observers → CLI trace / SSE stream / on-disk transcript; token accounting per run, session, and day | `internal/agent/observer.go`, `internal/usage/` |
 
 Already right (keep): the **kernel/tool split**, the **provider-neutral `Tool` shape**, the
-**sub-agent pattern**, and **structured output**. These map cleanly onto the target.
+**sub-agent pattern**, **structured output**, and the **`Observer`/`HumanGate` seams** that let
+one engine serve a CLI, an HTTP client, and a chat bot without special-casing any of them.
 
-Gaps vs the target:
+Still open (the honest remainder):
 
-- **OpenAI coupling.** `agent.go` imports `openai-go` directly; messages, tool defs, and the
-  loop all speak OpenAI types. Needs a `Provider` port. *(Highest-leverage first refactor.)*
-- **No persistence / headless API.** Needed for web/Telegram frontends and for an audit trail.
-- **No capability/sandbox tier yet** — fine *until* `author_tool` exists; required before it.
-- **Shell runs the agent's chosen commands directly.** Acceptable for trusted use, but note:
-  an injected instruction in fetched content could drive a destructive command. Mitigate with
-  the audit log + an approval gate on destructive/irreversible actions (§5) — not by removing
-  shell.
+- **One provider adapter.** The port exists and `newProvider(cfg)` is the single construction
+  point, so a second adapter is additive — but nothing has needed one yet (§8 phase 5).
+- **JSON files, not SQLite.** Every store rewrites its whole file on each mutation. Correct at
+  tens-to-hundreds of entries; SQLite is the stated end-state once catalog + audit + memory want
+  one transactional store (§9).
+- **No wazero tier.** Reserved, deliberately unbuilt (§5).
+- **Shell runs the agent's chosen commands directly.** Acceptable for trusted use, but an
+  injected instruction in fetched content could drive a destructive command. Mitigated by the
+  audit log + the destructive-action approval gate (§5) — not by removing shell.
 
 ---
 
@@ -205,6 +215,13 @@ internal/
   store/             append-only run log, tool catalog, memory, grants
   api/               headless transport (HTTP/SSE or JSON-RPC) for frontends
 ```
+
+*This is the target sketch, not the current layout.* Two names landed differently: the kernel
+stayed in **`internal/agent`** (there is no `engine/` package — `internal/api.Engine` is the
+run-lifecycle type, not the loop), and `store/` was never built as one package — the stores are
+separate and file-backed (`internal/{memory,space,session,artifact,audit}`, plus the tool
+registry in `internal/tools`), which is what §9's SQLite question is about. Everything else
+matches. See §4 for the real inventory.
 
 Key types (Go renderings of vision-doc Appendix B):
 

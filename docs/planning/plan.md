@@ -692,17 +692,18 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 
 ## Immediate next step
 
-**The experimentation track A–F is DONE.** Prompts + workspace (A–C), sub-agent types + the live
-foreground `spawn_agent` tool (D + E), and the experimentation loop (F: `/reload` hot-reload +
-`agent eval` compare harness) all shipped — model-driven delegation works, new organizations can be
-tried by editing agent-type files, and prompt/model/organization variants can be measured side by side.
+**Stages A–G and the UX & plumbing cluster are DONE**, as are Phases 0–4f and 6a–6c. Since then
+the project shipped **spaces** (with the workspace-local move of memory), **file upload**, and the
+**`scrape`** tool.
 
-**Next candidates** (pick per priority): **Stage G — docs consolidation** (surface workspace vs
-config-dir + the new `reload`/`eval` commands in `usage.md`/`README.md`, and the deferred
-`docs/environment.md`); the **UX & plumbing** cluster below (verbosity default, transcript location,
-unified human-in-the-loop); the **Projects** track (*built then reverted — deferred*,
-[`../deferred/projects.md`](../deferred/projects.md)); or pulling in **Phase 6d** (token
-budget dial + context-window awareness).
+**Next candidates** — the ranked list now lives in
+[`review-2026-08.md`](review-2026-08.md) §Suggested order, which supersedes this paragraph. In
+short: the reference-doc currency fixes (done), then capping/sectioning `read_self_docs`, the
+user-facing guidance channel (`/notes`), prompt sectioning so a `SYSTEM.md` stops dropping the
+injection rule, and **Phase 6d**'s budget dial — which now has a concrete driver in `scrape`,
+the first built-in whose blast radius is financial. Also still open: the **Projects** track
+(*built then reverted — deferred*, [`../deferred/projects.md`](../deferred/projects.md)) and
+**scheduling** ([`scheduling.md`](scheduling.md)).
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in
