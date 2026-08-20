@@ -122,7 +122,9 @@ const selfDocsPromptNote = `
 You have your own documentation available through the read_self_docs tool (your README
 and docs). When the user asks how you work, what you can do, how you are configured or
 operated, your trust tiers, approvals, memory, tools, or APIs, consult read_self_docs
-and answer from it rather than guessing. Docs tagged [reference] describe how you work
+and answer from it rather than guessing. Start with query= to find the right sections,
+then read one with topic= + section=, and say which section you answered from — reading
+a whole document is rarely necessary. Docs tagged [reference] describe how you work
 now (authoritative); [vision] is design intent that may include not-yet-built ideas —
 do not present it as a current capability.`
 
