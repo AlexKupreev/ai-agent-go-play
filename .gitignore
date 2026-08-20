@@ -32,6 +32,18 @@ go.work.sum
 # env file
 .env
 
+# Personal operator notes / scratch runbooks. These accumulate live tokens, chat ids, and
+# deploy details; keep them out of the repo (see docs/planning/review-2026-08.md §1.8).
+howtorun.txt
+notes.txt
+*.local.md
+*.local.txt
+
+# Per-deployment Fly config. The tracked deploy/fly/fly.*-agent.toml files are TEMPLATES
+# (they carry "CHANGE ME"); a real app's name, region, and Telegram allowlist belong in
+# an untracked copy.
+deploy/fly/fly.local*.toml
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -87,8 +87,11 @@ mirroring the tool `Registry` deliberately.
 
 - **Benefit:** single-binary-friendly, human-readable, diffable; crash-safe via atomic rename;
   consistent with `tools.json` and `config.json`. `<workspace>/.agent/memory.json` — memory is
-  **workspace-local** (spaces ADR governing decision): each workspace has its own store, and
-  per-space shards live beside it under `.agent/spaces/<id>/memory.json`.
+  **workspace-local** ([`adr/spaces.md`](adr/spaces.md) §Governing decision): each workspace has
+  its own store, and per-space shards live beside it under `.agent/spaces/<id>/memory.json`. Note
+  the asymmetry with the tool catalog and audit log, which stay **config-dir**-scoped: `--workspace`
+  swaps the agent's notes but not its tools, and `--config-dir` alone does *not* separate memory
+  ([`environment.md`](environment.md#two-scopes-config-dir-and-workspace)).
 - **Drawback:** rewrites the whole file on each write — fine at the expected size (tens–hundreds of
   notes), not thousands. That scale is exactly the SQLite trigger (design §9). Single-process
   assumption: the in-process mutex covers goroutines, not multiple processes sharing the file.

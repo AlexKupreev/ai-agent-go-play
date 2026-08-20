@@ -18,6 +18,7 @@ is the *how*.
 - [Scraping JS-rendered and bot-walled pages (`scrape`)](#scraping-js-rendered-and-bot-walled-pages-scrape)
 - [Using an external API (secrets)](#using-an-external-api-secrets)
 - [Long-term memory](#long-term-memory)
+- [Spaces — switchable data contexts](#spaces--switchable-data-contexts)
 - [Self-documentation](#self-documentation)
 - [Self-status](#self-status)
 - [Audit log](#audit-log)
@@ -592,10 +593,17 @@ differently-tuned agents in different workspaces don't share notes, and committi
 recallable by later runs in that workspace. Every write is audited (`memory_write`).
 There is no CLI surface for it yet — it is driven by the agent during a run.
 
-Two consequences of the workspace-local move (memory previously lived at
-`<config-dir>/memory.json`): for `serve`/Telegram point `--workspace` at a **persistent**
-directory so memory survives restarts, and if you had an old config-dir `memory.json`,
-move it to `<workspace>/.agent/memory.json` to keep its entries.
+Three consequences of the workspace-local move (memory previously lived at
+`<config-dir>/memory.json`):
+
+- For `serve`/Telegram, point `--workspace` at a **persistent** directory so memory survives
+  restarts — on a deployment that means the mounted volume. Under `serve` the workspace is fixed
+  at launch, so this is a start-up decision, not something a session can change later.
+- If you had an old config-dir `memory.json`, move it to `<workspace>/.agent/memory.json` to keep
+  its entries.
+- **`--config-dir` no longer separates memory.** Two agents with different config dirs but the
+  same workspace share one memory store and one set of spaces; separating them means separate
+  workspaces (see [Running multiple independent agents](#running-multiple-independent-agents)).
 
 ---
 
@@ -652,6 +660,13 @@ There's no separate CLI for it — it's a tool the agent uses during a run (e.g.
 your trust tiers work?" and it reads `usage.md` rather than guessing). `read_self_docs` is
 read-only, trusted, and not exposed to sandboxed authored tools.
 
+**It returns whole documents, and they are large.** `topic=usage` is ~54 KB (~14k tokens) and
+the vision doc ~45 KB, with no truncation — unlike `web_fetch`, which caps a page at 10,000
+characters. A single self-docs read can therefore take a double-digit percentage of a smaller
+model's context window. It is worth knowing when you see a self-referential question spend more
+tokens than expected; steering the agent to a narrower doc (`topic=environment`, `topic=memory`)
+is cheaper than letting it reach for `usage`.
+
 ---
 
 ## Self-status
@@ -690,6 +705,12 @@ tools authored/revoked, memory saved, token usage — "what have I done recently
 `tool_catalog` lists the tools it has authored with their capabilities, so it reuses an existing
 one instead of writing a duplicate.
 
+**`recent_activity`'s reach depends on the front door.** Under `agent serve` it reads the
+process-wide `audit.jsonl`, so it genuinely spans past runs and sessions. Under `agent run` and
+local `agent chat` it reads only *that run's* transcript audit file
+(`<runs-dir>/<run-id>/audit.jsonl`), so it sees the current run and nothing else — usually
+empty. Ask a `serve` engine, or read the central log with `agent audit --addr`, for history.
+
 ---
 
 ## Audit log
@@ -703,13 +724,23 @@ Under `agent serve` there is **one process-wide log** at
 `~/.config/ai-agent/audit.jsonl`, browsable over the API:
 
 ```bash
-./agent audit --addr 127.0.0.1:8080                     # all events, oldest first
-./agent audit --type tool_revoked                       # filter by event type
-./agent audit --run <run-id> --limit 50                 # last 50 events for one run
+./agent audit --addr 127.0.0.1:8080                       # all events, oldest first
+./agent audit --addr home --type tool_revoked             # filter by event type
+./agent audit --addr home --run <run-id> --limit 50       # last 50 events for one run
 ```
 
 Flags: `--addr`, `--run`, `--type`, `--limit` (0 = all). Each `agent run` / `serve` run
 also keeps its own transcript under `<config-dir>/runs/<run-id>/`.
+
+**`agent audit` always reads over the API** — it has no local-file mode, so it needs a running
+engine (`--addr` defaults to `127.0.0.1:8080`; without one you get a connection error). To read
+the log after a `serve` has stopped, read the file directly:
+
+```bash
+jq -c 'select(.type == "tool_revoked")' ~/.config/ai-agent/audit.jsonl
+```
+
+(`agent usage`, by contrast, reads that same file locally and needs no engine.)
 
 ---
 
@@ -825,9 +856,9 @@ moves the conversation to `<config-dir>/sessions/archive/<id>.json` rather than 
 a mistaken close is recoverable. Archived sessions drop out of the resumable listing (`--list`,
 `GET /sessions`). The session's scratch cache (`session-scratch/<id>/`) is reaped on close —
 it holds large, re-derivable artifacts, and the manifest records each one's source so a later
-turn re-fetches it if needed. (The reaper keeps any user-provided files, for when file upload
-lands; agent-materialized and unrecorded scratch go. A purge, being a whole-session deletion,
-removes the cache in full.)
+turn re-fetches it if needed. (The reaper keeps any user-provided files — an `/attach`
+or a [Telegram upload](#sending-files); agent-materialized and unrecorded scratch go. A purge,
+being a whole-session deletion, removes the cache in full.)
 
 **Restore and purge are the recovery/destructive counterparts, on every client.** A closed
 session is brought back with `agent session restore <id>` (or `POST /sessions/{id}/restore`),
@@ -837,7 +868,7 @@ use `agent session purge <id>` (confirms unless `-y`), the `/purge` command in `
 --addr` and Telegram, or `DELETE /sessions/{id}/purge`. A purge is recorded to the audit log as
 a `session_purged` event (`agent audit --type session_purged`). `agent session list` shows the
 resumable sessions. *(There is no archived-session listing yet — restore by the id shown when
-you closed it; see [`../planning/deletion.md`](../planning/deletion.md) §5.)*
+you closed it; see [`planning/deletion.md`](planning/deletion.md) §5.)*
 
 Each completed run/turn also writes a compact `info.json` (task, state, result, token usage,
 timings) into its transcript dir, so a run's status survives both the engine's in-memory
@@ -914,21 +945,30 @@ delays startup.
 
 ## Running multiple independent agents
 
-Each agent's state — config, tool catalog, memory, and audit log — lives under one
-**config directory** (default `~/.config/ai-agent`). Point separate `agent` invocations
-at separate config directories and they share nothing: different tools, different
-memory, different audit trail.
+Fully separating two agents takes **two config dirs *and* two workspaces** — they hold
+different halves of the state:
 
-The directory is set (in precedence order) by the global `--config-dir` flag, the
-`AI_AGENT_CONFIG_DIR` env var, or the default. To run two independent agents on one
-box, start two `serve` processes on two ports, each with its own config dir:
+| Store | Scope | Separated by |
+| --- | --- | --- |
+| config, tool catalog, audit log, sessions, transcripts | config-dir (default `~/.config/ai-agent`) | `--config-dir` / `AI_AGENT_CONFIG_DIR` |
+| **memory + spaces** (`<workspace>/.agent/`) | workspace (default: the cwd) | `--workspace` |
+
+> **Two config-dirs pointed at the same workspace share memory and spaces.** Since memory moved
+> to the workspace (see [Long-term memory](#long-term-memory)), `--config-dir` alone no longer
+> separates it. Give each agent its own `--workspace` too, or they will read and write each
+> other's notes. Full model: [`environment.md`](environment.md#two-scopes-config-dir-and-workspace).
+
+To run two independent agents on one box, start two `serve` processes on two ports, each with
+its own config dir **and** its own workspace:
 
 ```bash
 # agent "work"
-./agent --config-dir ~/.config/ai-agent/work serve --addr 127.0.0.1:8080 --tier safe
+./agent --config-dir ~/.config/ai-agent/work --workspace ~/ws/work \
+        serve --addr 127.0.0.1:8080 --tier safe
 
-# agent "home" (env form)
-AI_AGENT_CONFIG_DIR=~/.config/ai-agent/home ./agent serve --addr 127.0.0.1:8081 --tier balanced
+# agent "home" (env form for the config dir)
+AI_AGENT_CONFIG_DIR=~/.config/ai-agent/home \
+  ./agent --workspace ~/ws/home serve --addr 127.0.0.1:8081 --tier balanced
 ```
 
 Then address each by port: `./agent client --addr 127.0.0.1:8080 "..."`. Configure each
@@ -946,6 +986,7 @@ separate — no extra flag needed. Override the location with `--sessions-dir` (
 
 ```bash
 ./agent --config-dir ~/.config/ai-agent/work \
+        --sessions-dir /var/log/agent-work/runs \
         serve --addr 127.0.0.1:8080
 ```
 
