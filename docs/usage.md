@@ -660,12 +660,18 @@ There's no separate CLI for it — it's a tool the agent uses during a run (e.g.
 your trust tiers work?" and it reads `usage.md` rather than guessing). `read_self_docs` is
 read-only, trusted, and not exposed to sandboxed authored tools.
 
-**It returns whole documents, and they are large.** `topic=usage` is ~54 KB (~14k tokens) and
-the vision doc ~45 KB, with no truncation — unlike `web_fetch`, which caps a page at 10,000
-characters. A single self-docs read can therefore take a double-digit percentage of a smaller
-model's context window. It is worth knowing when you see a self-referential question spend more
-tokens than expected; steering the agent to a narrower doc (`topic=environment`, `topic=memory`)
-is cheaper than letting it reach for `usage`.
+**Retrieval is section-scoped, so a self-docs read costs a screen, not a context window.**
+Docs are indexed at every `##` heading (fenced code blocks excluded), and the tool has three
+modes:
+
+- `query=...` ranks **sections** across all docs and returns refs like `memory#where-memory-sits-in-the-trust-model` — not whole documents.
+- `topic=usage` returns the doc's **outline** (section slugs, headings, byte counts) when the doc is over the 10,000-character cap; smaller docs come back whole.
+- `topic=usage section=spaces` returns that one section. The selector matches a slug exactly, then by prefix, then by substring, then as a 1-based index, and a miss lists the doc's sections.
+
+Every body is capped at 10,000 characters with a `[truncated — N chars total]` marker, the same
+limit `web_fetch` applies. `usage.md` is ~57 KB (~14k tokens); its outline is ~1.8 KB (~450
+tokens), and a typical section is 1–3 KB. The agent can also tell you *which section* it
+answered from.
 
 ---
 

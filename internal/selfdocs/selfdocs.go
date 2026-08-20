@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -39,11 +40,33 @@ type Info struct {
 	Bytes int
 }
 
+// Hit is a ranked section. Ref() is what the model passes back as topic+section.
+type Hit struct {
+	Topic   string
+	Kind    Kind
+	Slug    string
+	Heading string
+	Bytes   int
+}
+
+// Ref renders a hit as "topic#slug".
+func (h Hit) Ref() string { return h.Topic + "#" + h.Slug }
+
 type doc struct {
-	topic string
-	title string
-	kind  Kind
-	body  string
+	topic    string
+	title    string
+	kind     Kind
+	body     string
+	sections []Section
+}
+
+// Section is one "## " chunk of a doc — the unit the agent retrieves and cites. The
+// text before the first "## " is the "intro" section.
+type Section struct {
+	Slug    string // stable handle, e.g. "trust-tiers"
+	Heading string // the "## " text; "" for the intro
+	Bytes   int
+	body    string
 }
 
 // Docs is the embedded documentation set, queried by the read_self_docs tool.
@@ -73,7 +96,13 @@ func New(fsys fs.FS) (*Docs, error) {
 		}
 		topic := strings.ToLower(strings.TrimSuffix(de.Name(), path.Ext(de.Name())))
 		body := string(b)
-		d.byTopic[topic] = doc{topic: topic, title: firstHeading(body), kind: classify(topic), body: body}
+		d.byTopic[topic] = doc{
+			topic:    topic,
+			title:    firstHeading(body),
+			kind:     classify(topic),
+			body:     body,
+			sections: splitSections(body),
+		}
 		d.order = append(d.order, topic)
 		return nil
 	})
@@ -106,29 +135,65 @@ func (d *Docs) List() []Info {
 // Get returns a doc's full body by topic (case-insensitive; accepts a "docs/" prefix,
 // a ".md" suffix, or a friendly alias). Errors list the available topics.
 func (d *Docs) Get(topic string) (string, error) {
-	doc, ok := d.byTopic[d.resolve(topic)]
+	dc, ok := d.byTopic[d.resolve(topic)]
 	if !ok {
-		return "", fmt.Errorf("no doc %q; available: %s", topic, strings.Join(d.order, ", "))
+		return "", d.unknown(topic)
 	}
-	return doc.body, nil
+	return dc.body, nil
 }
 
-// Search ranks docs by token overlap of the query against title+body, most relevant
-// first. k <= 0 returns all matches; no overlap yields no results.
-func (d *Docs) Search(query string, k int) []Info {
+// Outline returns a doc's section list (headings + sizes), so the model can pick one
+// instead of pulling the whole document.
+func (d *Docs) Outline(topic string) (Info, []Section, error) {
+	dc, ok := d.byTopic[d.resolve(topic)]
+	if !ok {
+		return Info{}, nil, d.unknown(topic)
+	}
+	return dc.info(), dc.sections, nil
+}
+
+// Section returns one section's body. sel matches a slug exactly, then by prefix, then
+// by substring, then as a 1-based index. Errors list the doc's sections.
+func (d *Docs) Section(topic, sel string) (string, error) {
+	dc, ok := d.byTopic[d.resolve(topic)]
+	if !ok {
+		return "", d.unknown(topic)
+	}
+	if sec, ok := dc.find(sel); ok {
+		return sec.body, nil
+	}
+	slugs := make([]string, len(dc.sections))
+	for i, sec := range dc.sections {
+		slugs[i] = sec.Slug
+	}
+	return "", fmt.Errorf("no section %q in %q; sections: %s", sel, dc.topic, strings.Join(slugs, ", "))
+}
+
+// Search ranks sections by token overlap of the query against heading+body, most
+// relevant first (heading matches count double). k <= 0 returns all matches.
+func (d *Docs) Search(query string, k int) []Hit {
 	q := tokenize(query)
 	if len(q) == 0 {
 		return nil
 	}
 	type scored struct {
-		info  Info
+		hit   Hit
 		score int
 	}
 	var hits []scored
 	for _, t := range d.order {
-		doc := d.byTopic[t]
-		if s := overlap(q, tokenize(doc.title+" "+doc.body)); s > 0 {
-			hits = append(hits, scored{doc.info(), s})
+		dc := d.byTopic[t]
+		for _, sec := range dc.sections {
+			s := overlap(q, tokenize(sec.body)) + 2*overlap(q, tokenize(dc.title+" "+sec.Heading))
+			if s > 0 {
+				hits = append(hits, scored{Hit{
+					Topic:   dc.topic,
+					Kind:    dc.kind,
+					Slug:    sec.Slug,
+					Heading: sec.Heading,
+					Bytes:   sec.Bytes,
+				}, s})
+			}
 		}
 	}
 	if len(hits) == 0 {
@@ -138,11 +203,92 @@ func (d *Docs) Search(query string, k int) []Info {
 	if k > 0 && len(hits) > k {
 		hits = hits[:k]
 	}
-	out := make([]Info, len(hits))
+	out := make([]Hit, len(hits))
 	for i, h := range hits {
-		out[i] = h.info
+		out[i] = h.hit
 	}
 	return out
+}
+
+// find locates a section by slug (exact, then prefix, then substring) or 1-based index.
+func (dc doc) find(sel string) (Section, bool) {
+	s := slugify(strings.TrimPrefix(strings.TrimSpace(sel), "#"))
+	if s == "" {
+		return Section{}, false
+	}
+	for _, match := range []func(string) bool{
+		func(slug string) bool { return slug == s },
+		func(slug string) bool { return strings.HasPrefix(slug, s) },
+		func(slug string) bool { return strings.Contains(slug, s) },
+	} {
+		for _, sec := range dc.sections {
+			if match(sec.Slug) {
+				return sec, true
+			}
+		}
+	}
+	if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(dc.sections) {
+		return dc.sections[n-1], true
+	}
+	return Section{}, false
+}
+
+func (d *Docs) unknown(topic string) error {
+	return fmt.Errorf("no doc %q; available: %s", topic, strings.Join(d.order, ", "))
+}
+
+// splitSections cuts a markdown body at every top-level "## " heading, ignoring those
+// inside fenced code blocks. The text before the first heading is the "intro".
+func splitSections(body string) []Section {
+	var (
+		out     []Section
+		heading string
+		cur     []string
+		fenced  bool
+	)
+	flush := func() {
+		text := strings.TrimSpace(strings.Join(cur, "\n"))
+		if text == "" && heading == "" {
+			return
+		}
+		full := text
+		if heading != "" {
+			full = "## " + heading + "\n\n" + text
+		}
+		out = append(out, Section{Slug: sectionSlug(heading, len(out)), Heading: heading, Bytes: len(full), body: full})
+		cur = nil
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			fenced = !fenced
+		}
+		if h, ok := strings.CutPrefix(line, "## "); ok && !fenced {
+			flush()
+			heading = strings.TrimSpace(h)
+			continue
+		}
+		cur = append(cur, line)
+	}
+	flush()
+	return out
+}
+
+func sectionSlug(heading string, i int) string {
+	if heading == "" {
+		return "intro"
+	}
+	if s := slugify(heading); s != "" {
+		return s
+	}
+	return fmt.Sprintf("section-%d", i+1)
+}
+
+// slugify lowercases and joins the alphanumeric runs of s with hyphens.
+func slugify(s string) string {
+	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !('a' <= r && r <= 'z') && !('0' <= r && r <= '9')
+	})
+	return strings.Join(fields, "-")
 }
 
 func (dc doc) info() Info {
