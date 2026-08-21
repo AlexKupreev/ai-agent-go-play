@@ -178,7 +178,7 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   carrying the conversation, in deliberate mode the change takes effect on the next turn;
   `/space [name]` shows or switches the active [space](#spaces--switchable-data-contexts)
   (`/space list` lists them, `/space -` returns to the global scope; also `--space <name>` at
-  launch) — switching re-scopes memory and loads the space's notes, same rebuild semantics as
+  launch) — switching re-scopes memory and loads the space's guidance, same rebuild semantics as
   `/model`; `/attach <path>` registers a local file as an artifact the agent can read by path (deliberate
   mode only); `/compact` summarizes the conversation so far into a compact briefing and replaces
   the working history with it, freeing context (the on-disk transcript is untouched — it only
@@ -593,7 +593,7 @@ the deployed machine lists the name tagged `(env)`. See
 The agent has `remember` / `recall` built-ins backed by a persistent store at
 `<workspace>/.agent/memory.json` — memory is **workspace-local**: each workspace (the
 directory the agent acts on, `--workspace` or the cwd) has its own memory, so two
-differently-tuned agents in different workspaces don't share notes, and committing or
+differently-tuned agents in different workspaces don't share memory, and committing or
 `.gitignore`-ing `.agent/` is an ordinary file decision. A fact remembered in one run is
 recallable by later runs in that workspace. Every write is audited (`memory_write`).
 There is no CLI surface for it yet — it is driven by the agent during a run.
@@ -615,27 +615,27 @@ Three consequences of the workspace-local move (memory previously lived at
 ## Spaces — switchable data contexts
 
 A **space** is a named scope for the agent's own data — "my English lessons", "the tax
-stuff" — with its **own memory** and a short, **always-loaded notes blob** (the per-space
+stuff" — with its **own memory** and short, **always-loaded guidance** (the per-space
 profile). Exactly one space is active per session; with none active, memory works in the
 **global scope** exactly as before. Spaces let the agent resume the right context ("start
 my next Polish lesson") without dragging in unrelated facts. A space is *data only* — it
 does **not** change the working directory or trust tier. Design: `docs/adr/spaces.md`
 (not embedded; this section is the reference).
 
-- **Storage:** `<workspace>/.agent/spaces/<id>/` — `space.json` (name + notes) and that
+- **Storage:** `<workspace>/.agent/spaces/<id>/` — `space.json` (name + guidance) and that
   space's `memory.json`. The directory is the registry; ids are slugs of the name.
 - **Scoping:** while a space is active, `remember` writes to it and `recall` reads it
   *plus* the global scope (the space shadows global on key collisions). Unscoped facts
   stay visible everywhere.
-- **Notes = deliberate context.** The active space's notes are injected into the system
+- **Guidance = deliberate context.** The active space's guidance is injected into the system
   prompt every turn (like an `AGENTS.md` section, but agent-writable and per-space) —
-  use them for standing guidelines, goals, and state for that context. Capped at 4000
-  characters so the always-on prompt stays lean; the agent maintains them with
-  `update_space_notes`. You can also edit `space.json` by hand and `/reload` is not
-  needed — notes are re-read every turn.
+  use it for standing guidelines, goals, and state for that context. Capped at 4000
+  characters so the always-on prompt stays lean; the agent maintains it with
+  `update_space_guidance`. You can also edit `space.json` by hand and `/reload` is not
+  needed — guidance is re-read every turn.
 - **Tools** (trusted, not sandbox-exposed): `list_spaces`, `create_space(name)`,
   `switch_space(space)` — so *"switch to the Polish project"* in natural language works —
-  plus `space_notes` / `update_space_notes`. A switch takes effect from the next turn.
+  plus `space_guidance` / `update_space_guidance`. A switch takes effect from the next turn.
 - **Commands:** local chat `/space` (show), `/space list`, `/space <name>`, `/space -`
   (back to global), and `agent chat --space <name>`; remote chat and Telegram `/space
   <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`.
@@ -997,12 +997,12 @@ different halves of the state:
 | Store | Scope | Separated by |
 | --- | --- | --- |
 | config, tool catalog, audit log, sessions, transcripts | config-dir (default `~/.config/ai-agent`) | `--config-dir` / `AI_AGENT_CONFIG_DIR` |
-| **memory + spaces** (`<workspace>/.agent/`) | workspace (default: the cwd) | `--workspace` |
+| **memory + guidance + spaces** (`<workspace>/.agent/`) | workspace (default: the cwd) | `--workspace` |
 
-> **Two config-dirs pointed at the same workspace share memory and spaces.** Since memory moved
+> **Two config-dirs pointed at the same workspace share memory, guidance, and spaces.** Since memory moved
 > to the workspace (see [Long-term memory](#long-term-memory)), `--config-dir` alone no longer
 > separates it. Give each agent its own `--workspace` too, or they will read and write each
-> other's notes. Full model: [`environment.md`](environment.md#two-scopes-config-dir-and-workspace).
+> other's memory or guidance. Full model: [`environment.md`](environment.md#two-scopes-config-dir-and-workspace).
 
 To run two independent agents on one box, start two `serve` processes on two ports, each with
 its own config dir **and** its own workspace:

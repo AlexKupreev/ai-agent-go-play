@@ -10,11 +10,11 @@ import (
 
 func TestWithGuidancePrecedenceAndIsolation(t *testing.T) {
 	operator := []string{"operator global", "operator workspace"}
-	got := withGuidance(operator, "user global", "space notes", "session rule")
+	got := withGuidance(operator, "user global", "space guidance", "session rule")
 	if len(got) != 5 {
 		t.Fatalf("withGuidance returned %d layers, want 5: %#v", len(got), got)
 	}
-	want := []string{"operator global", "operator workspace", "Workspace guidance", "space notes", "Session guidance"}
+	want := []string{"operator global", "operator workspace", "Workspace guidance", "space guidance", "Session guidance"}
 	for i, marker := range want {
 		if !strings.Contains(got[i], marker) {
 			t.Fatalf("layer %d = %q, want marker %q", i, got[i], marker)
@@ -34,7 +34,7 @@ func TestWithGuidancePrecedenceAndIsolation(t *testing.T) {
 		"operator global",
 		"operator workspace",
 		"Workspace guidance",
-		"space notes",
+		"space guidance",
 		"Session guidance",
 	}
 	last := -1

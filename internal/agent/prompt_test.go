@@ -284,7 +284,7 @@ func TestNewExecutor_NoPromptFilesUsesBase(t *testing.T) {
 }
 
 // TestEnvironmentSummary_MemoryAndSpace proves the planner's environment view names
-// long-term memory when a store is wired — and the active space with its notes — so a
+// long-term memory when a store is wired — and the active space with its guidance — so a
 // deliberate turn plans a recall instead of briefing "the chat is the only source"
 // (the failure observed live: a remembered fact in the active space went unconsulted
 // because the planner didn't know memory existed).
@@ -312,13 +312,13 @@ func TestEnvironmentSummary_MemoryAndSpace(t *testing.T) {
 		t.Errorf("EnvironmentSummary names a space with none active:\n%s", env)
 	}
 
-	// Memory + active space ⇒ space id and its standing notes appear.
+	// Memory + active space ⇒ space id and its standing guidance appear.
 	store := space.NewStore(t.TempDir() + "/spaces")
 	sp, err := store.Create("polish")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp.Notes = "learner level saved under user.level"
+	sp.Guidance = "learner level saved under user.level"
 	if err := store.Save(sp); err != nil {
 		t.Fatal(err)
 	}

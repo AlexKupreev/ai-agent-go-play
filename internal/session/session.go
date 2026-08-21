@@ -42,13 +42,13 @@ type Session struct {
 	Tier  string `json:"tier,omitempty"`
 
 	// Space is the session's active space id (docs/adr/spaces.md §5): memory written on a
-	// turn scopes to it and its notes load into the turn's prompt. Empty ⇒ the global
+	// turn scopes to it and its guidance loads into the turn's prompt. Empty ⇒ the global
 	// scope. Sticky like Model/Tier (POST/PATCH /sessions), and switched mid-conversation
 	// by the switch_space tool or the /space command.
 	Space string `json:"space,omitempty"`
 
 	// Guidance is temporary, conversation-scoped user guidance. It is persisted with
-	// the session and loaded after workspace guidance and active-space notes. Empty means
+	// the session and loaded after workspace and active-space guidance. Empty means
 	// no session guidance and is omitted from the JSON file.
 	Guidance string `json:"guidance,omitempty"`
 }

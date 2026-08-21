@@ -439,7 +439,7 @@ func (d serveDeps) resolveOpts(opts api.RunOptions) (model string, tier capabili
 // newExecutor builds a fresh executor over already-open per-turn IO (rec + obs), using the
 // resolved model + tier for this run. spaceID is the active space (from the session sticky /
 // per-request override): it scopes memory to that space's shard over the global store and
-// loads the space's notes into the prompt; "" runs in the global scope. manifest + scratchDir
+// loads the space's guidance into the prompt; "" runs in the global scope. manifest + scratchDir
 // wire the artifact cache (nil/"" for the plain, non-deliberate path). It opens at most the
 // space's memory shard (cached process-wide), so it is safe to call repeatedly within one
 // turn (the deliberate pipeline does). An unknown spaceID is an error — failing the turn
@@ -449,7 +449,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 	// Snapshot the current prompts + catalog once, so a concurrent /reload can't change the
 	// executor's prompt mid-run (prompts.md §0).
 	prompts, catalog := d.prompts.snapshot()
-	mem, spaceNote, err := spaceScope(d.spaces, spaceID, d.mem, d.spaceMems)
+	mem, spaceGuidance, err := spaceScope(d.spaces, spaceID, d.mem, d.spaceMems)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +479,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		Observer: obs, Registry: d.registry, Memory: mem, Docs: selfDocs,
 		Audit: rec, Tier: tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
-		SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceNote, sessionGuidance),
+		SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceGuidance, sessionGuidance),
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
 		Space:      spaceCtx,
 		StatusDirs: agentStateDirs(d.workDir), Limits: d.limits,

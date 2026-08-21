@@ -27,7 +27,7 @@ There are two kinds of tool, deliberately kept as **separate types**:
    | World | `shell`, `web_search`, `web_fetch`, `scrape` |
    | Compute & self-extension | `run_code`, `author_tool` |
    | Human-in-the-loop | `ask_user` |
-   | Memory & context | `remember`, `recall`, `list_spaces`, `create_space`, `switch_space`, `space_notes`, `update_space_notes`, `record_artifact` |
+   | Memory & context | `remember`, `recall`, `list_spaces`, `create_space`, `switch_space`, `space_guidance`, `update_space_guidance`, `record_artifact` |
    | Recall of past work | `list_sessions`, `search_sessions`, `read_session` |
    | Introspection | `status`, `usage`, `recent_activity`, `tool_catalog`, `read_self_docs` |
 
@@ -141,7 +141,7 @@ The catalog is **config-dir-scoped**, not workspace-scoped: it is part of the ag
 (`<config-dir>/tools.json`), shared across every workspace the agent works in, and unaffected by
 `--workspace`. The audit log follows the same split. **Memory does not** — it and the spaces live
 at `<workspace>/.agent/`, the one deliberate exception, so a workspace change swaps the agent's
-notes but not its tools; see
+memory and guidance but not its tools; see
 [`environment.md`](environment.md#two-scopes-config-dir-and-workspace). (Declarative **sub-agent
 types** are read from both the config-dir and the workspace — `agents/*.md`,
 workspace-over-global — because a type is prompt/config, not persisted authored state.)

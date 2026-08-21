@@ -16,14 +16,14 @@ func workspaceGuidanceStore(workDir string, rec audit.Recorder) *guidance.FileSt
 
 // withGuidance appends user guidance after operator prompt files, in specificity order:
 // workspace, active space, then session. The current turn remains the final user message.
-func withGuidance(appends []string, workspace, spaceNote, session string) []string {
+func withGuidance(appends []string, workspace, spaceGuidance, session string) []string {
 	out := make([]string, 0, len(appends)+3)
 	out = append(out, appends...)
 	if section := guidanceSection("Workspace guidance", workspace); section != "" {
 		out = append(out, section)
 	}
-	if spaceNote != "" {
-		out = append(out, spaceNote)
+	if spaceGuidance != "" {
+		out = append(out, spaceGuidance)
 	}
 	if section := guidanceSection("Session guidance", session); section != "" {
 		out = append(out, section)

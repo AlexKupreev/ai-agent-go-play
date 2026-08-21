@@ -9,8 +9,8 @@ questions that sank Projects.
 
 Companion to [`../design.md`](../design.md) (§1 single trusted box), [`memory.md`](../memory.md), and
 the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Status (2026-07-11):
-P1 + P2 + P3-notes are BUILT** (`internal/space`, `memory.ScopedStore`, the five space tools,
-`Session.Space` sticky + POST/PATCH, `/space` in local/remote chat + Telegram, `--space`, notes
+P1 + P2 + P3-guidance are BUILT** (`internal/space`, `memory.ScopedStore`, the five space tools,
+`Session.Space` sticky + POST/PATCH, `/space` in local/remote chat + Telegram, `--space`, guidance
 injected into the system prompt, and the workspace-local move of memory to
 `<workspace>/.agent/`). Per-space **artifact manifests** (the rest of P3) and P4 remain
 roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table, `memory.md`.
@@ -23,8 +23,8 @@ roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table, `mem
 "Config-dir, not workspace", §3's config-dir paths, §4's global layer). Those were explored and
 rejected *for now* as too complex. The v1 decision:
 
-- **Memory and spaces both live in the workspace**, under `<workspace>/.agent/` — `memory.json` and
-  `spaces/<id>/`. There is **no config-dir memory, no global/identity layer, and no separate
+- **Memory, guidance, and spaces live in the workspace**, under `<workspace>/.agent/` — `memory.json`,
+  `guidance.md`, and `spaces/<id>/`. There is **no config-dir memory, no global/identity layer, and no separate
   "committable" mechanism.**
 - **Per-workspace by construction.** A workspace has its own memory + its own spaces; switching
   workspace switches the whole data set. This is what "per-workspace-tuned agents shouldn't share all
@@ -46,7 +46,7 @@ the box above as the actual v1 choice.
 
 ## 0. The model in one paragraph
 
-A **space** is a named data scope: a short **notes** blob (always-loaded when the space is
+A **space** is a named data scope: short **guidance** (always loaded when the space is
 active), its own **memory** entries, and its own **artifact references**. Exactly one space is
 **active per session** (sticky, reusing the per-session model/tier machinery from
 [`../api-transport.md`](../api-transport.md)); a session inherits its space and can switch **explicitly**
@@ -66,7 +66,7 @@ in unrelated facts, and to keep each thread's artifacts together. Two needs:
 
 - **Explicit reference** ("look at the results from the tax space") — served once memory/artifacts
   are scoped and listable.
-- **Implicit resume** ("start my next Polish lesson") — served by the space's always-loaded notes
+- **Implicit resume** ("start my next Polish lesson") — served by the space's always-loaded guidance
   (the per-space "profile"): push context, not a pull the model must remember to do.
 
 A single global profile (one context) would be simpler, but the user has **multiple** parallel
@@ -87,14 +87,14 @@ that:
 - **No filesystem-containment trust model.** A space is the agent's own data under the config dir;
   it introduces no new trust surface. The tier gate is unchanged.
 
-So a space is purely: *which memory namespace + which artifact set + which notes are active.* This is
+So a space is purely: *which memory namespace + which artifact set + which guidance is active.* This is
 the whole feature, and why it's a fraction of Projects' cost.
 
 ### Config-dir (agent-global), not workspace-scoped
 
 Spaces live under the **config dir** and are shared across **all** workspaces of that agent — because
 **space and workspace are orthogonal axes**: workspace = *which files* the agent acts on (shell cwd,
-workspace-tier prompts); space = *which memory/artifact/notes bucket* is active. The motivating cases
+workspace-tier prompts); space = *which memory/artifact/guidance bucket* is active. The motivating cases
 ("English lessons", "the tax stuff") have **no filesystem workspace at all** — the family-box
 deployment (design §1) runs one `serve` / one config-dir where cwd is barely relevant — so tying a
 space to a workspace would be wrong for exactly the case spaces exist for.
@@ -117,7 +117,7 @@ concrete need. Auto-switching a space when you `cd` into a repo is the deferred 
 **The concern is real.** Today `internal/memory.MemoryStore` holds every entry in RAM and, on each
 `Put` (`remember`), **rewrites the whole `memory.json`** (marshal-all + atomic temp-rename). So write
 cost is O(n) in total entries and the total work to accumulate n facts is quadratic; the whole store
-is also resident in RAM. Fine for a family box with hundreds of notes; a long-lived agent that
+is also resident in RAM. Fine for a family box with hundreds of memory entries; a long-lived agent that
 accumulates thousands would feel it.
 
 Spaces give a natural fix — **shard by space** — so we adopt it rather than piling every space's
@@ -128,7 +128,7 @@ entries into the one growing file:
   memory.json                     # GLOBAL scope (unscoped/default; the existing file — no migration)
   spaces/
     <space-id>/
-      space.json                  # metadata: name, notes (the per-space profile), timestamps
+      space.json                  # metadata: name, guidance (the per-space profile), timestamps
       memory.json                 # THIS space's memory entries
       artifacts.json              # THIS space's artifact manifest (reuses internal/artifact)
 ```
@@ -171,7 +171,7 @@ single space's size bites. Not one growing file, and not SQLite pre-emptively.)*
 
 - **`remember`** writes to the **active space** (its `spaces/<id>/memory.json`); with no active space,
   to **global** (`memory.json`) — today's behavior, unchanged.
-- **`recall` / `search`** return **active-space ∪ global**, so a space sees its own notes plus shared
+- **`recall` / `search`** return **active-space ∪ global**, so a space sees its own entries plus shared
   facts, but not another space's. Global-only when no space is active.
 - **Existing entries need no migration** — they live in the global `memory.json` and stay globally
   visible (decision #2). A user/agent can promote a global fact into a space by re-saving it there.
@@ -217,13 +217,13 @@ All trusted, not sandbox-exposed (like `remember`/`status`). Wired when a space 
 
 | Tool | Does |
 |---|---|
-| `list_spaces` | names, ids, notes preview, last-active; marks the current one |
+| `list_spaces` | names, ids, guidance preview, last-active; marks the current one |
 | `create_space(name)` | make a new space, return its id |
 | `switch_space(id)` | set the session's active space (effective from the next write/turn) |
-| `space_notes` / `update_space_notes(text)` | read / replace the active space's notes blob (the per-space profile; size-capped so it can't bloat the always-on prompt — the `/compact` discipline) |
+| `space_guidance` / `update_space_guidance(text)` | read / replace the active space's guidance (the per-space profile; size-capped so it cannot bloat the always-on prompt) |
 
 `remember` / `recall` are unchanged in signature — they operate on the scoped view (§4). The active
-space's **notes** are injected into the system prompt at session start (like `AGENTS.md`, but
+space's **guidance** is injected into the system prompt at session start (like `AGENTS.md`, but
 agent-writable and per-space — this is the "profile" the earlier discussion converged on, resolved
 here as a space field rather than a standalone file).
 
@@ -239,8 +239,9 @@ here as a space field rather than a standalone file).
   shard instance per space is shared process-wide so concurrent sessions serialize writes.
   Mid-turn `switch_space` persists through the session store; the engine re-reads the session
   before saving the turn history so the switch isn't clobbered.
-- [~] **P3 — artifacts + notes.** Notes **DONE 2026-07-11**: the notes blob (capped at
-  `space.MaxNotesLen`) + `space_notes`/`update_space_notes` + injection into the system prompt
+- [~] **P3 — artifacts + guidance.** Guidance **DONE 2026-07-11**, renamed 2026-08-21: the
+  guidance blob (capped at `space.MaxGuidanceChars`) + `space_guidance`/`update_space_guidance` +
+  injection into the system prompt
   (as a labelled append, so prompt composition is unchanged). Per-space `artifacts.json`
   manifest **deferred** — the artifact cache is currently session-scoped (chat-planner §D5);
   attach it per space when a real cross-session artifact need appears.
@@ -258,7 +259,7 @@ here as a space field rather than a standalone file).
 - **Sharded JSON now, SQLite when it bites** — behind the `memory.Store` interface (§3); chosen over
   `modernc.org/sqlite` and `bbolt` this round to avoid a new dependency and keep the `CGO_ENABLED=0`
   static binary lean (§3 alternatives).
-- **Workspace-local (v1)** — memory and spaces both live under `<workspace>/.agent/`, per-workspace by
+- **Workspace-local (v1)** — memory, guidance, and spaces live under `<workspace>/.agent/`, per-workspace by
   construction; committing/gitignoring is free. Config-dir global layer deferred. (See the governing
   decision at the top; it supersedes the earlier "config-dir, agent-global" exploration in §2.)
 - **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
@@ -272,7 +273,7 @@ here as a space field rather than a standalone file).
   memory. Add when a real need appears.
 - **Cross-space search** — a `recall --all-spaces` escape hatch to search everything. Probably wanted
   eventually; trivial once scoping exists.
-- **Notes size discipline** — the always-loaded notes must stay short; do we hard-cap, or let the
+- **Guidance size discipline** — always-loaded guidance must stay short; do we hard-cap, or let the
   agent self-summarize (the `/compact` skill) when it grows? Lean: hard char cap + a nudge.
 - **Per-space cwd** — if a space ever *should* pin a directory, it attaches as a `space.json` field;
   explicitly out of v1.

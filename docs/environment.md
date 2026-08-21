@@ -27,7 +27,7 @@ guidelines, never the reverse.
   *tools* and no *audit trail* get two config-dirs.
 - **workspace — *what the agent is acting on.*** The directory the agent lives and works in: the
   shell's working directory, the workspace-wide prompt files (guidelines for whatever is under
-  it), **and the agent's memory + spaces** under `<workspace>/.agent/`. A workspace is trusted
+  it), **and the agent's memory + guidance + spaces** under `<workspace>/.agent/`. A workspace is trusted
   only **above** the `safe` tier for the *prompt files*; a checkout can be hostile. (`.agent/` is
   the agent's own data, written by it, so it is not tier-gated.)
 
@@ -38,27 +38,27 @@ easy to guess wrong:
 | State | Scope | Path |
 | --- | --- | --- |
 | tool catalog, audit log, sessions, config | **config-dir** | `<config-dir>/…` |
-| **memory + spaces** | **workspace** | `<workspace>/.agent/` |
+| **memory + guidance + spaces** | **workspace** | `<workspace>/.agent/` |
 
 The reasoning is in [`adr/spaces.md`](adr/spaces.md) §Governing decision (2026-07-08): a
-workspace's notes belong with the workspace, committing or `.gitignore`-ing them is then an
+workspace's agent data belongs with the workspace, committing or `.gitignore`-ing it is then an
 ordinary file decision, and no separate global/identity memory layer has to exist. Before that
 date memory lived at `<config-dir>/memory.json`; an old file must be moved by hand.
 
 **Two consequences that trip people up:**
 
-1. **Two `--config-dir` agents in the *same* workspace share memory and spaces.** Separate
+1. **Two `--config-dir` agents in the *same* workspace share memory, guidance, and spaces.** Separate
    config-dirs separate tools, audit, and sessions — *not* memory. To separate memory, give each
    agent its own **workspace**.
 2. **Under `agent serve` the workspace is fixed at launch** (`--workspace`, else the process
-   cwd), so memory and spaces are fixed at launch too. Point it at a **persistent** directory —
+   cwd), so memory, guidance, and spaces are fixed at launch too. Point it at a **persistent** directory —
    on a deployment that means the mounted volume, not a container-local path. There is no
    per-session workspace override yet.
 
 | Scope | Answers | Holds | Guideline layer | Trust |
 | --- | --- | --- | --- | --- |
 | **config-dir** | who the agent *is* | tool catalog, audit log, sessions, config, global prompt files | 1 — always applied | always trusted |
-| **workspace** | what it *acts on* | shell cwd, workspace prompt files, `.agent/` memory + spaces | 2 — inherits config-dir | prompt files trusted only above `safe` |
+| **workspace** | what it *acts on* | shell cwd, workspace prompt files, `.agent/` memory + guidance + spaces | 2 — inherits config-dir | prompt files trusted only above `safe` |
 
 > **Deferred: named projects.** An earlier design added a third scope — a *project*, a named,
 > recallable sub-scope *within* a workspace that the agent could switch into mid-conversation
@@ -190,11 +190,11 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 
 | Config key / flag | Env override | Meaning |
 | --- | --- | --- |
-| `--config-dir` (global flag) | `AI_AGENT_CONFIG_DIR` | Agent identity dir: config, tool catalog, audit log, sessions + global prompt files & agent types. **Not** memory/spaces — those are workspace-local (see §Two scopes). Default `~/.config/ai-agent`. |
-| `--workspace` (global flag) | — | Directory the agent acts on: shell cwd + workspace prompt files & agent types + `.agent/` memory and spaces. Default: process cwd. |
+| `--config-dir` (global flag) | `AI_AGENT_CONFIG_DIR` | Agent identity dir: config, tool catalog, audit log, sessions + global prompt files & agent types. **Not** memory/guidance/spaces — those are workspace-local (see §Two scopes). Default `~/.config/ai-agent`. |
+| `--workspace` (global flag) | — | Directory the agent acts on: shell cwd + workspace prompt files & agent types + `.agent/` memory, guidance, and spaces. Default: process cwd. |
 | `--context-file` (global flag, repeatable) | — | Extra prompt file(s) appended last, always loaded regardless of tier. |
 | `--no-context-files` (global flag) | — | Ignore all `SYSTEM.md`/`AGENTS.md`/`PLANNER.md`/`CRITIC.md`/`--context-file` **and** `agents/*.md`; run on the bare base prompts + built-in agent types. |
-| `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share no transcripts (they still share memory and spaces if they share a workspace). |
+| `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share no transcripts (they still share memory, guidance, and spaces if they share a workspace). |
 | `openai_key` | — | OpenAI API key. |
 | `openai_base_url` | `AI_AGENT_OPENAI_BASE_URL` | Base URL for the OpenAI-compatible API. Empty ⇒ the real OpenAI API; set it to point at a local llama.cpp/Ollama/vLLM server, OpenRouter, or a proxy (`config set-base-url`). |
 | `model` | `AI_AGENT_MODEL` (`--model` flag wins) | Default model (built-in default `gpt-5.1`). |
@@ -263,7 +263,8 @@ own state, written by it):
 | Path | What |
 | --- | --- |
 | `<workspace>/.agent/memory.json` | Long-term memory store, **global scope** (`remember`/`recall`). Moved here from `<config-dir>/memory.json` when spaces landed — move an old file here to keep its entries. For `serve`, point `--workspace` at a persistent dir so memory survives restarts. |
-| `<workspace>/.agent/spaces/<id>/` | One directory per **space** (switchable data context, usage.md §Spaces): `space.json` (name + always-loaded notes) and that space's `memory.json` shard. |
+| `<workspace>/.agent/guidance.md` | Workspace guidance, loaded into every executor prompt. |
+| `<workspace>/.agent/spaces/<id>/` | One directory per **space** (switchable data context, usage.md §Spaces): `space.json` (name + always-loaded guidance) and that space's `memory.json` shard. |
 
 Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /
 `AI_AGENT_SESSIONS_DIR`):

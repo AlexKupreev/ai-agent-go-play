@@ -35,7 +35,7 @@ After this plan lands, a user can:
 - give global, space, or session guidance from Telegram rather than editing files over SSH;
 - see *why* a planner, critic, or sub-agent was used, without exposing chain-of-thought;
 - list and resume Telegram conversations after an engine or bot restart;
-- change model, tier, space, profile, deliberation, and notes consistently across CLI and Telegram;
+- change model, tier, space, profile, deliberation, and guidance consistently across CLI and Telegram;
 - receive long Telegram answers reliably, cancel queued/running work, and recover from errors using
   instructions included in the error itself.
 
@@ -78,7 +78,7 @@ select a model, tools, prompt mode, and declare read-only parallel safety, but:
 ### 1.3 Guidance requires filesystem access
 
 Standing behavior is controlled by `SYSTEM.md`, `AGENTS.md`, `PLANNER.md`, `CRITIC.md`, agent-type
-files, and space notes. On the Telegram-first deployment this normally requires SSH. `SYSTEM.md`
+files, and space guidance. On the Telegram-first deployment this normally requires SSH. `SYSTEM.md`
 also replaces the entire built-in executor prompt, unintentionally removing runtime constraints and
 the untrusted-content rule.
 
@@ -446,7 +446,7 @@ operator base/persona: SYSTEM.md (supports {{base}})
 operator append: config-dir AGENTS.md
 workspace append: workspace AGENTS.md (tier-gated as today)
 user global guidance: <workspace>/.agent/guidance.md
-active-space notes: existing space.json notes
+active-space guidance: space.json guidance
 session guidance: persisted on Session
 turn instruction: the current message/brief
 ```
@@ -464,7 +464,7 @@ output contract or workflow ceilings.
 | Scope | Persistence | Intended content | Telegram surface |
 | --- | --- | --- | --- |
 | global/workspace | `.agent/guidance.md` | language, standing preferences, general constraints | `/guidance global ...` |
-| active space | existing `space.json` notes | profile/context-specific facts and instructions | `/notes ...` |
+| active space | `space.json` guidance | profile/context-specific facts and instructions | `/guidance space ...` |
 | session | new `Session.Guidance` | temporary conversation instructions | `/guidance session ...` |
 | turn | session history only | one-off request | ordinary message |
 
@@ -477,25 +477,21 @@ trusted user input only after frontend authorization, but still cannot override 
 Support the same operations in local/remote chat and Telegram:
 
 ```
-/notes                         show active-space notes
-/notes set <text>              replace
-/notes add <text>              append
-/notes clear                   remove all active-space notes
-/guidance [global|session]     show
+/guidance [global|space|session] show
 /guidance <scope> set <text>
 /guidance <scope> add <text>
-/guidance <scope> clear        remove all guidance in that scope
+/guidance <scope> clear          remove all guidance in that scope
 ```
 
 Natural-language guidance ("always answer this space in Polish") may be handled by the existing
-`update_space_notes` tool, but explicit commands are deterministic and discoverable.
+`update_space_guidance` tool, but explicit commands are deterministic and discoverable.
 
 `clear` is idempotent: clearing an already-empty scope succeeds. For v1, removing only part of a
 guidance blob uses `show` followed by `set` with the revised text; do not add ambiguous substring
-removal. At the storage/API boundary, setting guidance or notes to the empty string has the same
+removal. At the storage/API boundary, setting guidance to the empty string has the same
 semantics as `clear`: remove `.agent/guidance.md` for workspace guidance (a missing file reads as
 empty), set `Session.Guidance` to empty so `omitempty` drops it from JSON, or persist empty space
-notes. Successful state changes use the same atomic path as other updates.
+guidance. Successful state changes use the same atomic path as other updates.
 
 ---
 
@@ -507,8 +503,8 @@ Introduce small service interfaces wired into the HTTP server:
 
 ```go
 type ProfileService interface { List/Get(...) }
-type SpaceService interface { List/Get/SetNotes(...) }
-type WorkspaceGuidanceService interface { Get/Set(...) }
+type SpaceService interface { List/Get(...) }
+type GuidanceService interface { Get/Set(scope, target, ...) }
 type EffectiveConfigService interface { Snapshot(...) }
 type BindingStore interface { Get/Put/Delete/List(...) }
 ```
@@ -525,7 +521,8 @@ GET   /profiles
 GET   /profiles/{name}
 GET   /spaces
 GET   /spaces/{id}
-PUT   /spaces/{id}/notes
+GET   /spaces/{id}/guidance
+PUT   /spaces/{id}/guidance
 GET   /guidance/global
 PUT   /guidance/global
 GET   /sessions/{id}/guidance
@@ -661,7 +658,6 @@ Create a frontend-neutral command registry/service; Telegram and the two chat RE
 /space [list|name|-]
 /profile [list|name]
 /deliberate [on|off|auto]
-/notes ...
 /guidance ...
 /usage
 /reload
@@ -824,7 +820,7 @@ cannot be stored; custom `SYSTEM.md` retains immutable security/runtime text.
 
 - [x] Add workspace guidance store and session guidance field.
 - [ ] Expose profile/space/guidance service interfaces and API clients.
-- [ ] Implement show/set/add/clear for `/notes` and `/guidance` in local/remote chat and Telegram.
+- [ ] Implement `/guidance` show/set/add/clear in local/remote chat and Telegram.
 - [ ] Add `{{base}}` prompt composition and prompt-provenance reporting.
 - [x] Add guidance length limits, atomic writes, and audit metadata.
 
@@ -1024,7 +1020,7 @@ send messages itself.
 3. **Full-context children:** likely unnecessary and expensive. Keep disabled unless a concrete
    agent type demonstrates the need.
 4. **Profile editing over Telegram:** selecting profiles is in scope; editing arbitrary profile YAML
-   remotely is not v1. It has more validation/security surface than notes.
+   remotely is not v1. It has more validation/security surface than scoped guidance.
 5. **Workspace switching:** add a contained workspace field only after spaces/guidance/profile work
    proves insufficient. It changes the shell and data root and deserves its own containment ADR.
 6. **Vision:** the existing [`vision.md`](vision.md) tool-based proposal composes with this plan but

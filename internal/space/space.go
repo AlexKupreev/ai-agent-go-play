@@ -1,11 +1,11 @@
 // Package space implements switchable data contexts (docs/adr/spaces.md): a space is a
-// named scope for the agent's own data — its memory entries and an always-loaded notes
-// blob (the per-space "profile") — NOT a working directory. Exactly one space is active
+// named scope for the agent's own data — its memory entries and an always-loaded guidance
+// blob (the per-space profile) — NOT a working directory. Exactly one space is active
 // per session; memory written while it is active belongs to it, and recall merges the
 // active space over the global scope.
 //
 // Storage is sharded per space (the ADR's governing decision, 2026-07-08): spaces live
-// under <workspace>/.agent/spaces/<id>/ with a space.json (metadata + notes) and that
+// under <workspace>/.agent/spaces/<id>/ with a space.json (metadata + guidance) and that
 // space's own memory.json. The filesystem is the registry — List reads the directory,
 // mirroring the session store — and a `remember` rewrites only the active space's file,
 // not the whole corpus. SQLite stays the migration target behind memory.Store when a
@@ -24,17 +24,17 @@ import (
 	"unicode/utf8"
 )
 
-// MaxNotesLen caps a space's notes blob. The notes are injected into the system prompt
-// whenever the space is active, so they must stay brief — the cap forces the /compact
+// MaxGuidanceChars caps a space's guidance blob. The guidance is injected into the system prompt
+// whenever the space is active, so it must stay brief — the cap forces the /compact
 // discipline instead of letting the always-on prompt bloat (ADR §9).
-const MaxNotesLen = 4000
+const MaxGuidanceChars = 4000
 
 // Space is one data scope's metadata. Its memory entries live beside it in the space's
 // own memory.json, not in this struct.
 type Space struct {
 	ID        string    `json:"id"`   // slug of the name at creation; stable identity
 	Name      string    `json:"name"` // display name
-	Notes     string    `json:"notes,omitempty"`
+	Guidance  string    `json:"guidance,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -74,7 +74,7 @@ func (s *Store) Create(name string) (Space, error) {
 		return Space{}, fmt.Errorf("space %q already exists", id)
 	}
 	now := time.Now().UTC()
-	sp := Space{ID: id, Name: strings.TrimSpace(name), Notes: "", CreatedAt: now, UpdatedAt: now}
+	sp := Space{ID: id, Name: strings.TrimSpace(name), CreatedAt: now, UpdatedAt: now}
 	if err := s.write(sp); err != nil {
 		return Space{}, err
 	}
@@ -131,10 +131,10 @@ func available(all []Space) string {
 	return "available: " + strings.Join(ids, ", ")
 }
 
-// Save persists metadata changes (rename, notes). The notes cap is enforced here so no
+// Save persists metadata changes (rename, guidance). The guidance cap is enforced here so no
 // caller can grow the always-loaded profile past the prompt budget.
 func (s *Store) Save(sp Space) error {
-	if err := validateNotes(sp.Notes); err != nil {
+	if err := validateGuidance(sp.Guidance); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -190,15 +190,15 @@ func (s *Store) read(id string) (Space, error) {
 	if err := json.Unmarshal(data, &sp); err != nil {
 		return Space{}, fmt.Errorf("parse space %s: %w", id, err)
 	}
-	if err := validateNotes(sp.Notes); err != nil {
+	if err := validateGuidance(sp.Guidance); err != nil {
 		return Space{}, fmt.Errorf("parse space %s: %w", id, err)
 	}
 	return sp, nil
 }
 
-func validateNotes(notes string) error {
-	if n := utf8.RuneCountInString(notes); n > MaxNotesLen {
-		return fmt.Errorf("space notes exceed %d characters (%d) — keep the profile brief; move detail into memory entries", MaxNotesLen, n)
+func validateGuidance(text string) error {
+	if n := utf8.RuneCountInString(text); n > MaxGuidanceChars {
+		return fmt.Errorf("space guidance exceeds %d characters (%d) — keep it brief; move factual detail into memory entries", MaxGuidanceChars, n)
 	}
 	return nil
 }

@@ -25,14 +25,14 @@ type SpaceContext struct {
 }
 
 // NewSpaceTools returns the space management built-ins: list_spaces, create_space,
-// switch_space, space_notes, update_space_notes. All trusted, not sandbox-exposed
+// switch_space, space_guidance, update_space_guidance. All trusted, not sandbox-exposed
 // (like remember) — authored code cannot re-scope the agent's memory via call_tool.
 func NewSpaceTools(sc SpaceContext) []Tool {
 	return []Tool{
 		{
 			Name: "list_spaces",
-			Description: "List the agent's spaces (switchable data contexts, each with its own memory and notes). " +
-				"Shows each space's id, name, a notes preview, and which one is active. Use switch_space to change.",
+			Description: "List the agent's spaces (switchable data contexts, each with its own memory and guidance). " +
+				"Shows each space's id, name, a guidance preview, and which one is active. Use switch_space to change.",
 			Parameters: map[string]any{},
 			Required:   []string{},
 			Run: func(ctx context.Context, args map[string]any) (string, error) {
@@ -50,7 +50,7 @@ func NewSpaceTools(sc SpaceContext) []Tool {
 						marker = "* "
 					}
 					fmt.Fprintf(&b, "%s%s (%q)", marker, sp.ID, sp.Name)
-					if n := notesPreview(sp.Notes); n != "" {
+					if n := guidancePreview(sp.Guidance); n != "" {
 						fmt.Fprintf(&b, " — %s", n)
 					}
 					b.WriteByte('\n')
@@ -63,7 +63,7 @@ func NewSpaceTools(sc SpaceContext) []Tool {
 		},
 		{
 			Name: "create_space",
-			Description: "Create a new space (a named data context with its own memory and notes) and return its id. " +
+			Description: "Create a new space (a named data context with its own memory and guidance) and return its id. " +
 				"Does not switch to it — call switch_space when the user wants to work in it.",
 			Parameters: map[string]any{
 				"name": map[string]any{"type": "string", "description": "human name for the space, e.g. \"Polish lessons\""},
@@ -81,7 +81,7 @@ func NewSpaceTools(sc SpaceContext) []Tool {
 		{
 			Name: "switch_space",
 			Description: "Set the session's active space by id or name — future memory writes and recalls scope to it " +
-				"(plus the global scope), and its notes load into context. Effective from the next turn. " +
+				"(plus the global scope), and its guidance loads into context. Effective from the next turn. " +
 				"Pass an empty string to return to the global scope.",
 			Parameters: map[string]any{
 				"space": map[string]any{"type": "string", "description": "space id or name; \"\" switches back to the global scope"},
@@ -105,66 +105,66 @@ func NewSpaceTools(sc SpaceContext) []Tool {
 				if err := sc.Switch(sp.ID); err != nil {
 					return fmt.Sprintf("switch_space failed: %v", err), nil
 				}
-				return fmt.Sprintf("switched to space %q (id %s); its memory and notes apply from the next turn", sp.Name, sp.ID), nil
+				return fmt.Sprintf("switched to space %q (id %s); its memory and guidance apply from the next turn", sp.Name, sp.ID), nil
 			},
 		},
 		{
-			Name: "space_notes",
-			Description: "Read the active space's notes — the short, always-loaded profile for this context " +
-				"(goals, current state, preferences). Use update_space_notes to change them.",
+			Name: "space_guidance",
+			Description: "Read the active space's guidance — the short, always-loaded profile and instructions for this context " +
+				"(goals, current state, preferences). Use update_space_guidance to change it.",
 			Parameters: map[string]any{},
 			Required:   []string{},
 			Run: func(ctx context.Context, args map[string]any) (string, error) {
 				if sc.ActiveID == "" {
-					return "no space is active (global scope has no notes); switch_space first", nil
+					return "no space is active; switch_space first to read space guidance", nil
 				}
 				sp, err := sc.Store.Get(sc.ActiveID)
 				if err != nil {
-					return fmt.Sprintf("space_notes failed: %v", err), nil
+					return fmt.Sprintf("space_guidance failed: %v", err), nil
 				}
-				if strings.TrimSpace(sp.Notes) == "" {
-					return fmt.Sprintf("space %q has no notes yet; update_space_notes sets them", sp.Name), nil
+				if strings.TrimSpace(sp.Guidance) == "" {
+					return fmt.Sprintf("space %q has no guidance yet; update_space_guidance sets it", sp.Name), nil
 				}
-				return sp.Notes, nil
+				return sp.Guidance, nil
 			},
 		},
 		{
-			Name: "update_space_notes",
-			Description: "Replace the active space's notes (its always-loaded profile). Keep them brief — they are " +
+			Name: "update_space_guidance",
+			Description: "Replace the active space's guidance (its always-loaded profile and instructions). Keep it brief — it is " +
 				"injected into the system prompt whenever the space is active (capped at " +
-				fmt.Sprint(space.MaxNotesLen) + " characters); put detail into memory entries instead. " +
-				"The updated notes load from the next turn.",
+				fmt.Sprint(space.MaxGuidanceChars) + " characters); put factual detail into memory entries instead. " +
+				"The updated guidance loads from the next turn.",
 			Parameters: map[string]any{
-				"notes": map[string]any{"type": "string", "description": "the full replacement notes text"},
+				"guidance": map[string]any{"type": "string", "description": "the full replacement space guidance text"},
 			},
-			Required: []string{"notes"},
+			Required: []string{"guidance"},
 			Run: func(ctx context.Context, args map[string]any) (string, error) {
 				if sc.ActiveID == "" {
 					return "no space is active; switch_space first", nil
 				}
-				notes, _ := args["notes"].(string)
+				text, _ := args["guidance"].(string)
 				sp, err := sc.Store.Get(sc.ActiveID)
 				if err != nil {
-					return fmt.Sprintf("update_space_notes failed: %v", err), nil
+					return fmt.Sprintf("update_space_guidance failed: %v", err), nil
 				}
-				previous := sp.Notes
-				if previous == notes {
-					return fmt.Sprintf("notes for space %q unchanged (%d chars)", sp.Name, utf8.RuneCountInString(notes)), nil
+				previous := sp.Guidance
+				if previous == text {
+					return fmt.Sprintf("guidance for space %q unchanged (%d chars)", sp.Name, utf8.RuneCountInString(text)), nil
 				}
-				sp.Notes = notes
+				sp.Guidance = text
 				if err := sc.Store.Save(sp); err != nil {
-					return fmt.Sprintf("update_space_notes failed: %v", err), nil
+					return fmt.Sprintf("update_space_guidance failed: %v", err), nil
 				}
-				guidance.RecordUpdate(sc.Audit, sc.RunID, "space", previous, notes, map[string]any{"space_id": sp.ID})
-				return fmt.Sprintf("notes for space %q updated (%d chars); they load into context from the next turn", sp.Name, utf8.RuneCountInString(notes)), nil
+				guidance.RecordUpdate(sc.Audit, sc.RunID, "space", previous, text, map[string]any{"space_id": sp.ID})
+				return fmt.Sprintf("guidance for space %q updated (%d chars); it loads into context from the next turn", sp.Name, utf8.RuneCountInString(text)), nil
 			},
 		},
 	}
 }
 
-// notesPreview returns the first line of notes, truncated, for the listing.
-func notesPreview(notes string) string {
-	line := strings.TrimSpace(notes)
+// guidancePreview returns the first line of guidance, truncated, for the listing.
+func guidancePreview(text string) string {
+	line := strings.TrimSpace(text)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // Space wiring shared by chat and serve (docs/adr/spaces.md). A space scopes the
-// agent's memory (active-space shard over the global store) and injects its notes —
+// agent's memory (active-space shard over the global store) and injects its guidance —
 // the per-space profile — into the system prompt. The cmd layer owns all of this
 // composition; internal/agent only sees a memory.Store, a prompt append, and the
 // SpaceContext for the management tools.
@@ -51,24 +51,24 @@ func spaceScope(spaces *space.Store, activeID string, global memory.Store, shard
 	if err != nil {
 		return nil, "", fmt.Errorf("open space %q memory: %w", sp.ID, err)
 	}
-	return memory.NewScopedStore(shard, global), spacePromptNote(sp), nil
+	return memory.NewScopedStore(shard, global), spacePromptGuidance(sp), nil
 }
 
-// spacePromptNote renders the always-loaded profile section for an active space —
+// spacePromptGuidance renders the always-loaded guidance section for an active space —
 // the deliberate, per-space guidelines + context the operator or the agent itself
-// maintains via update_space_notes. Appended to the system prompt like an AGENTS.md
+// maintains via update_space_guidance. Appended to the system prompt like an AGENTS.md
 // body, but agent-writable and scoped to the space (spaces.md §6).
-func spacePromptNote(sp space.Space) string {
+func spacePromptGuidance(sp space.Space) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Active space: %s (id: %s)\n\n", sp.Name, sp.ID)
 	b.WriteString("This session works in the space above — a named context with its own memory. " +
 		"remember/recall are scoped to it (plus the shared global scope).\n")
-	if strings.TrimSpace(sp.Notes) != "" {
-		b.WriteString("\nSpace notes (standing profile — treat as current context):\n\n")
-		b.WriteString(strings.TrimSpace(sp.Notes))
+	if strings.TrimSpace(sp.Guidance) != "" {
+		b.WriteString("\nSpace guidance (standing profile and instructions — treat as current context):\n\n")
+		b.WriteString(strings.TrimSpace(sp.Guidance))
 	} else {
-		b.WriteString("\nThis space has no notes yet. Once you learn durable context here " +
-			"(goals, level, preferences, state), save a brief profile with update_space_notes.")
+		b.WriteString("\nThis space has no guidance yet. Once you learn durable context here " +
+			"(goals, level, preferences, state), save a brief profile with update_space_guidance.")
 	}
 	return b.String()
 }

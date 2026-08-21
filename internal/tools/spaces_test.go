@@ -68,26 +68,26 @@ func TestSpaceTools(t *testing.T) {
 		t.Fatalf("Switch callback got %q, want \"\"", switched)
 	}
 
-	// Notes tools need an active space.
-	if out := runSpaceTool(t, tt, "space_notes", nil); !strings.Contains(out, "no space is active") {
-		t.Fatalf("space_notes without active = %q", out)
+	// Space-guidance tools need an active space.
+	if out := runSpaceTool(t, tt, "space_guidance", nil); !strings.Contains(out, "no space is active") {
+		t.Fatalf("space_guidance without active = %q", out)
 	}
 	activeTools := NewSpaceTools(SpaceContext{Store: store, ActiveID: "polish-lessons"})
-	if out := runSpaceTool(t, activeTools, "space_notes", nil); !strings.Contains(out, "no notes yet") {
-		t.Fatalf("space_notes empty = %q", out)
+	if out := runSpaceTool(t, activeTools, "space_guidance", nil); !strings.Contains(out, "no guidance yet") {
+		t.Fatalf("space_guidance empty = %q", out)
 	}
-	if out := runSpaceTool(t, activeTools, "update_space_notes", map[string]any{"notes": "level B1; likes grammar drills"}); !strings.Contains(out, "updated") {
-		t.Fatalf("update_space_notes = %q", out)
+	if out := runSpaceTool(t, activeTools, "update_space_guidance", map[string]any{"guidance": "level B1; likes grammar drills"}); !strings.Contains(out, "updated") {
+		t.Fatalf("update_space_guidance = %q", out)
 	}
-	if out := runSpaceTool(t, activeTools, "space_notes", nil); out != "level B1; likes grammar drills" {
-		t.Fatalf("space_notes = %q", out)
+	if out := runSpaceTool(t, activeTools, "space_guidance", nil); out != "level B1; likes grammar drills" {
+		t.Fatalf("space_guidance = %q", out)
 	}
 	// Active space is marked in the listing.
 	if out := runSpaceTool(t, activeTools, "list_spaces", nil); !strings.Contains(out, "* polish-lessons") {
 		t.Fatalf("list_spaces active marker missing: %q", out)
 	}
-	if out := runSpaceTool(t, activeTools, "update_space_notes", map[string]any{"notes": "🐻🐻"}); !strings.Contains(out, "(2 chars)") {
-		t.Fatalf("update_space_notes Unicode count = %q", out)
+	if out := runSpaceTool(t, activeTools, "update_space_guidance", map[string]any{"guidance": "🐻🐻"}); !strings.Contains(out, "(2 chars)") {
+		t.Fatalf("update_space_guidance Unicode count = %q", out)
 	}
 
 	// No session to carry the switch (nil Switch): explained, not an error.
@@ -97,7 +97,7 @@ func TestSpaceTools(t *testing.T) {
 	}
 }
 
-func TestUpdateSpaceNotesAuditIsRedactedAndIdempotent(t *testing.T) {
+func TestUpdateSpaceGuidanceAuditIsRedactedAndIdempotent(t *testing.T) {
 	store := space.NewStore(t.TempDir() + "/spaces")
 	sp, err := store.Create("Private")
 	if err != nil {
@@ -106,10 +106,10 @@ func TestUpdateSpaceNotesAuditIsRedactedAndIdempotent(t *testing.T) {
 	rec := &audit.MemoryRecorder{}
 	tools := NewSpaceTools(SpaceContext{Store: store, ActiveID: sp.ID, Audit: rec, RunID: "run-1"})
 	secret := "sensitive standing context"
-	if out := runSpaceTool(t, tools, "update_space_notes", map[string]any{"notes": secret}); !strings.Contains(out, "updated") {
+	if out := runSpaceTool(t, tools, "update_space_guidance", map[string]any{"guidance": secret}); !strings.Contains(out, "updated") {
 		t.Fatalf("update = %q", out)
 	}
-	if out := runSpaceTool(t, tools, "update_space_notes", map[string]any{"notes": secret}); !strings.Contains(out, "unchanged") {
+	if out := runSpaceTool(t, tools, "update_space_guidance", map[string]any{"guidance": secret}); !strings.Contains(out, "unchanged") {
 		t.Fatalf("idempotent update = %q", out)
 	}
 	events := rec.Snapshot()
@@ -122,7 +122,7 @@ func TestUpdateSpaceNotesAuditIsRedactedAndIdempotent(t *testing.T) {
 	}
 	for key, value := range e.Fields {
 		if strings.Contains(fmt.Sprint(value), secret) {
-			t.Fatalf("audit field %q leaked notes body", key)
+			t.Fatalf("audit field %q leaked guidance body", key)
 		}
 	}
 }

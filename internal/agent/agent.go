@@ -287,7 +287,7 @@ func (a *Agent) EnvironmentSummary() string {
 // memoryEnvironmentNote renders the long-term-memory section of EnvironmentSummary: the
 // planner must know remembered facts exist beyond the transcript, or its brief will
 // (correctly, from its own view) tell the executor the chat is the only source. When a
-// space is active its identity and notes are included — the planner is the context-aware
+// space is active its identity and guidance are included — the planner is the context-aware
 // component, so the space profile belongs in its view too.
 func memoryEnvironmentNote(sc tools.SpaceContext) string {
 	var b strings.Builder
@@ -300,8 +300,8 @@ func memoryEnvironmentNote(sc tools.SpaceContext) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "\nActive space: %q — memory is scoped to this named context (plus the global scope).", sc.ActiveID)
-	if sp, err := sc.Store.Get(sc.ActiveID); err == nil && strings.TrimSpace(sp.Notes) != "" {
-		fmt.Fprintf(&b, " Its standing notes:\n%s", strings.TrimSpace(sp.Notes))
+	if sp, err := sc.Store.Get(sc.ActiveID); err == nil && strings.TrimSpace(sp.Guidance) != "" {
+		fmt.Fprintf(&b, " Its standing guidance:\n%s", strings.TrimSpace(sp.Guidance))
 	}
 	return b.String()
 }
@@ -544,9 +544,9 @@ type ExecutorConfig struct {
 	// omitted (e.g. one-shot runs with no session store). See tools.NewSessionTools.
 	Sessions tools.SessionReader
 
-	// Space wires the space tools (list/create/switch_space, space_notes) when a space
+	// Space wires the space tools (list/create/switch_space, space_guidance) when a space
 	// store is present (docs/adr/spaces.md §6). The cmd layer also scopes cfg.Memory to
-	// the active space (memory.ScopedStore) and appends the space's notes to the prompt —
+	// the active space (memory.ScopedStore) and appends the space's guidance to the prompt —
 	// this field only surfaces the management tools. Zero value ⇒ tools omitted.
 	Space tools.SpaceContext
 
@@ -726,7 +726,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 			CurrentID: cfg.Usage.SessionID,
 		})...)
 	}
-	// Spaces: switchable data contexts (list/create/switch, notes). Trusted, not
+	// Spaces: switchable data contexts (list/create/switch, guidance). Trusted, not
 	// sandbox-exposed; omitted when no space store is wired (spaces.md §6).
 	if cfg.Space.Store != nil {
 		spaceCtx := cfg.Space

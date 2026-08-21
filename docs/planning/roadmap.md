@@ -135,8 +135,8 @@ Give users a coherent way to steer the existing system before adding a smarter l
 
 - [x] Add durable global/workspace, space, and session guidance with size limits, atomic writes, and
       redacted audit metadata.
-- [ ] Add `/notes` and `/guidance` show/set/add/clear consistently to local chat, remote chat, and
-      Telegram; add the matching space-management CLI/API surface.
+- [ ] Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote
+      chat, and Telegram; add the matching space-management CLI/API surface.
 - [ ] Support `{{base}}` composition and report prompt/guidance provenance.
 - [ ] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits.
 - [ ] Add a read-only effective-config endpoint and make reload return a meaningful diff.
@@ -260,7 +260,7 @@ Keep these out of the active queue until their trigger appears:
 the next slice starts; it is a pointer, not a log.*
 
 **Next slice: expose the guidance services and deterministic command/API surface.** The durable
-layers are now in place: `<workspace>/.agent/guidance.md`, active-space notes, and
+layers are now in place: `<workspace>/.agent/guidance.md`, active-space guidance, and
 `Session.Guidance` are independently capped at 4,000 Unicode characters and compose into executor
 prompts in that order. The desired surfaces are specified in
 [`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). Start from these
@@ -269,19 +269,23 @@ implementation facts:
 - `internal/guidance.FileStore` is the narrow global/workspace `Get`/`Set` seam. Empty writes remove
   the file, unchanged writes are idempotent, and actual changes emit only scope + previous/resulting
   Unicode size/hash. Reuse `guidance.RecordUpdate` for space/session service mutations.
+- `space.Space.Guidance` persists as `guidance` in `space.json`; the agent reads/writes it through
+  `space_guidance` / `update_space_guidance`. There is intentionally no legacy `notes` field,
+  migration, alias tool, or planned `/notes` command.
 - `session.Session.Guidance` persists through the existing atomic file store and reaches the turn
   runner through an internal-only `RunOptions.Guidance` field; `session.Info` exposes only
   `guidance_chars`. Do not add guidance text to listings or ordinary turn request JSON.
-- `withGuidance` owns executor precedence: operator appends, workspace guidance, space notes, then
+- `withGuidance` owns executor precedence: operator appends, workspace guidance, space guidance, then
   session guidance. Workspace guidance is read for every new executor, including one-shot run,
   local chat, serve, eval, and prompt inspection.
 - Keep transport out of the stores: expose narrow workspace/space/session guidance services in the
   API layer, following the existing injected `RunStore`, `FileStore`, and `SpaceResolver` seams.
   Treat an empty write as an idempotent clear: remove the workspace guidance file, omit empty
-  session guidance, or save empty space notes. Audit changed state as scope + previous/resulting
+  session guidance, or save empty space guidance. Audit changed state as scope + previous/resulting
   size/hash, never the guidance body; do not emit a duplicate update for an already-empty scope.
-- Add `/notes` and `/guidance` show/set/add/clear consistently to local chat, remote chat, Telegram,
-  and the CLI/API. Partial removal in v1 is show + set with revised text, not substring matching.
+- Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote chat,
+  Telegram, and the CLI/API. Partial removal in v1 is show + set with revised text, not substring
+  matching.
 
 Also worth knowing while continuing R2:
 

@@ -1,6 +1,7 @@
 package space
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -81,33 +82,40 @@ func TestStore_CreateGetListResolve(t *testing.T) {
 	}
 }
 
-func TestStore_SaveNotesAndCap(t *testing.T) {
+func TestStore_SaveGuidanceAndCap(t *testing.T) {
 	s := NewStore(t.TempDir() + "/spaces")
 	sp, err := s.Create("tax")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp.Notes = "standing profile: married filing jointly"
+	sp.Guidance = "standing profile: married filing jointly"
 	if err := s.Save(sp); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Get("tax")
-	if err != nil || got.Notes != sp.Notes {
-		t.Fatalf("reloaded notes = %q, %v", got.Notes, err)
+	if err != nil || got.Guidance != sp.Guidance {
+		t.Fatalf("reloaded guidance = %q, %v", got.Guidance, err)
+	}
+	data, err := os.ReadFile(s.metaPath(sp.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"guidance"`) || strings.Contains(string(data), `"notes"`) {
+		t.Fatalf("space JSON did not use guidance field: %s", data)
 	}
 	// The always-loaded profile is size-capped.
-	sp.Notes = strings.Repeat("x", MaxNotesLen+1)
+	sp.Guidance = strings.Repeat("x", MaxGuidanceChars+1)
 	if err := s.Save(sp); err == nil {
-		t.Fatal("oversized notes saved, want cap error")
+		t.Fatal("oversized guidance saved, want cap error")
 	}
 	// The cap counts Unicode characters, not UTF-8 bytes.
-	sp.Notes = strings.Repeat("🐻", MaxNotesLen)
+	sp.Guidance = strings.Repeat("🐻", MaxGuidanceChars)
 	if err := s.Save(sp); err != nil {
-		t.Fatalf("Unicode notes at character cap: %v", err)
+		t.Fatalf("Unicode guidance at character cap: %v", err)
 	}
-	sp.Notes += "🐻"
+	sp.Guidance += "🐻"
 	if err := s.Save(sp); err == nil || !strings.Contains(err.Error(), "4001") {
-		t.Fatalf("Unicode notes over cap = %v, want 4001-character error", err)
+		t.Fatalf("Unicode guidance over cap = %v, want 4001-character error", err)
 	}
 	// Saving an unknown space fails (Save is an update, not an upsert).
 	if err := s.Save(Space{ID: "ghost"}); err == nil {

@@ -52,7 +52,7 @@ var chatCmd = &cobra.Command{
 		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
 		"[safe|balanced|permissive] show or switch the model/tier for the session, /space " +
 		"[name|list|-] shows or switches the active space (a named memory context with its own " +
-		"always-loaded notes), /compact " +
+		"always-loaded guidance), /compact " +
 		"summarizes the conversation so far to free context, /verbose [on|off] toggles the " +
 		"trace and the full planner brief (off shows a one-line brief summary), /exit (or " +
 		"Ctrl-D) quits.\n" +
@@ -191,9 +191,9 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return nil, err
 			}
-			// Scope memory to the active space and load its notes into the prompt; the
+			// Scope memory to the active space and load its guidance into the prompt; the
 			// switch_space tool records a change that takes effect at the next (re)build.
-			mem, spaceNote, err := spaceScope(spaces, activeSpace, globalMem, nil)
+			mem, spaceGuidance, err := spaceScope(spaces, activeSpace, globalMem, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -202,7 +202,7 @@ var chatCmd = &cobra.Command{
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 				Usage: tools.UsageContext{}, AuditReader: centralReader,
-				SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceNote, ""),
+				SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceGuidance, ""),
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				Space: tools.SpaceContext{Store: spaces, ActiveID: activeSpace, Switch: func(id string) error {
 					activeSpace, spaceDirty = id, true
@@ -347,7 +347,7 @@ var chatCmd = &cobra.Command{
 			// /space manages the active space (spaces.md §5): no arg shows the current one,
 			// `list` lists them all, `-` returns to the global scope, anything else switches
 			// to that space (by id or name). Switching rebuilds the executor in bare chat
-			// (scoped memory + notes apply immediately); deliberate mode picks it up next turn.
+			// (scoped memory + guidance apply immediately); deliberate mode picks it up next turn.
 			if arg, ok := strings.CutPrefix(line, "/space"); ok {
 				arg = strings.TrimSpace(arg)
 				switch arg {
@@ -681,5 +681,5 @@ func init() {
 	chatCmd.Flags().StringVar(&chatAddrFlag, "addr", "", "drive a running engine's persistent session instead of an in-process executor (host:port or an alias from `agent config set-engine`)")
 	chatCmd.Flags().StringVar(&chatSessionFlag, "session", "", "with --addr: resume this session id instead of starting a new one")
 	chatCmd.Flags().BoolVar(&chatListFlag, "list", false, "with --addr: list resumable sessions on the engine and exit")
-	chatCmd.Flags().StringVar(&chatSpaceFlag, "space", "", "start with this space active (id or name; see /space). Local mode: scopes memory + loads the space's notes")
+	chatCmd.Flags().StringVar(&chatSpaceFlag, "space", "", "start with this space active (id or name; see /space). Local mode: scopes memory + loads the space's guidance")
 }

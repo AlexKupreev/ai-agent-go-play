@@ -40,13 +40,13 @@ without a hostile-isolation boundary.
 inheriting the outer and able to override it: the **config-dir** is *who the agent is* (config,
 tool catalog, audit log, session store, global prompt files and agent types — always trusted, the
 shared data domain above); the **workspace** is the sandbox it *acts in* (shell cwd,
-workspace-common prompt files and agent types) **and where the agent's memory + spaces live**, at
-`<workspace>/.agent/`. Memory is the one deliberate exception to "identity stays in the
-config-dir": the spaces ADR (2026-07-08) put memory and spaces in the workspace so a context's
-notes travel with the directory they belong to and no separate global memory layer has to exist
+workspace-common prompt files and agent types) **and where the agent's memory, guidance, and spaces live**, at
+`<workspace>/.agent/`. This agent data is the deliberate exception to "identity stays in the
+config-dir": the spaces ADR (2026-07-08) put it in the workspace so context travels with the
+directory it belongs to and no separate global memory layer has to exist
 ([`adr/spaces.md`](adr/spaces.md) §Governing decision). The practical consequence is the reverse
 of the old rule: **separating memory means a second workspace, not a second config-dir** — two
-config-dirs in one workspace share memory and spaces while keeping tools and audit apart. Unlike
+config-dirs in one workspace share memory, guidance, and spaces while keeping tools and audit apart. Unlike
 the config-dir, a workspace can be an untrusted checkout, so its prompt/agent files (they land
 *in* a system prompt) auto-load only above the `safe` tier unless named explicitly; `.agent/` is
 the agent's own data and is not tier-gated. Full model in

@@ -105,7 +105,7 @@ func (f TurnRunnerFunc) RunTurn(ctx context.Context, runID, sessionID string, pr
 type RunOptions struct {
 	Model string `json:"model,omitempty"` // model for this run's agents; "" ⇒ engine default
 	Tier  string `json:"tier,omitempty"`  // requested tier, clamped to ≤ the serve tier; "" ⇒ engine default
-	Space string `json:"space,omitempty"` // active space id for this turn's memory scope + notes; "" ⇒ global
+	Space string `json:"space,omitempty"` // active space id for this turn's memory scope + guidance; "" ⇒ global
 
 	// Guidance is copied from the persisted session by PostTurn. It is deliberately not
 	// accepted on the wire: management endpoints mutate durable guidance; turn requests do

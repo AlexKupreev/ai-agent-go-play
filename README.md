@@ -79,7 +79,7 @@ To install system-wide, `go install .` and make sure `~/go/bin` is on your `PATH
 
 Run two independent agents on one box by starting two `serve` processes with separate config dirs,
 workspaces, and ports — the config dir separates tools/audit/sessions, the **workspace** separates
-memory and spaces:
+memory, guidance, and spaces:
 
 ```bash
 ./agent --config-dir ~/.config/ai-agent/work --workspace ~/ws/work \
@@ -126,7 +126,8 @@ internal/
   capability/              capability broker + trust tiers + secret injection
   sandbox/                 gopher-lua sandbox for authored tools
   memory/                  long-term memory store (workspace-local; space-scoped view)
-  space/                   switchable data contexts (per-space memory shard + notes)
+  guidance/                workspace guidance store + redacted update metadata
+  space/                   switchable data contexts (per-space memory shard + guidance)
   session/                 persistent conversations (live + archived), for serve/Telegram
   artifact/                the deliberate turn's scratch-dir manifest + uploads
   usage/                   token-usage ledger over the audit log (session + day totals)
