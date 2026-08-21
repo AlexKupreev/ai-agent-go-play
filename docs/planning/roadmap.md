@@ -10,10 +10,10 @@ must not be treated as a capability list.
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
 credential rotation. R1 is shipped: the Telegram delivery/session repairs, session-space
 validation, truthful capability-failure auditing, durable audit-history access, and the GPT-5.1
-default/context refresh are complete. R2's durable guidance, effective-state, and status-enrichment
-slices are shipped. Space list/show/create parity is next, while space removal is explicitly
-deferred pending a lifecycle decision. See
-[Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on it.
+default/context refresh are complete. R2 is shipped: durable guidance, effective-state and status
+enrichment, plus space list/show/create parity are complete. Space removal remains explicitly
+deferred pending a lifecycle decision. R3's behavior-preserving orchestration seam is next; see
+[Hand-off](#hand-off--next-step).
 
 ## How the planning set fits together
 
@@ -139,9 +139,12 @@ Give users a coherent way to steer the existing system before adding a smarter l
       redacted audit metadata.
 - [x] Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote
       chat, Telegram, CLI, and API.
-- [ ] Add space list/show/create parity to the CLI/API using the metadata schema and output contract
-      in [`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
-      Do not add removal in this slice.
+- [x] Add space list/show/create parity to the CLI/API using the metadata schema and output contract
+      in [`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-shipped-2026-08-21).
+      **Done 2026-08-21** — `GET /spaces`, `GET /spaces/{id}`, and `POST /spaces` expose only id,
+      name, Unicode guidance size, and timestamps; creation returns 201 + `Location` and classifies
+      unusable/duplicate names as 400/409. `agent space list|show|create` provides deterministic
+      remote output through `--addr`. Removal remains deliberately absent.
 - [x] Support `{{base}}` composition and report prompt/guidance provenance.
 - [x] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits;
       expose structured `GET /status[?session_id=<id>]` using the context rule in
@@ -268,13 +271,18 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Updated 2026-08-21 after status enrichment shipped; this is a pointer, not a log.*
+*Updated 2026-08-21 after space metadata parity shipped; this is a pointer, not a log.*
 
-**Next non-destructive slice: space metadata parity.** Implement only `GET /spaces`,
-`GET /spaces/{id}`, `POST /spaces`, and `agent space list|show|create` against the schema/output in
-[`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
-Do not implement `agent space rm` or a delete endpoint. Removal is a separate lifecycle slice after
-archive versus purge, recovery, active-session, confirmation, and audit semantics are decided.
+**Next implementation slice: R3's behavior-preserving orchestration seam.** Move/generalize
+`cmd/deliberate.go` into `internal/orchestration` with explicit phase/result types while preserving
+the current default behavior and tests. Profiles and sparse overrides follow after that seam; do
+not mix adaptive routing into the move. The independent human-only credential rotation in R0 is
+still outstanding.
+
+**Completed slice: space metadata parity.** `GET /spaces`, `GET /spaces/{id}`, `POST /spaces`, and
+`agent space list|show|create` now share the body-redacted metadata contract in the spaces ADR.
+There is deliberately no `DELETE /spaces/{id}` or `agent space rm`; lifecycle semantics remain a
+separate deferred decision.
 
 **Completed slice: status enrichment.** `GET /status` now returns the complete secret-safe effective
 configuration plus live host and bounded state-disk measurements. `?session_id=<id>` explicitly

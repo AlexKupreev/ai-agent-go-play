@@ -105,6 +105,11 @@ characters and cannot remove the agent's security/runtime prompt blocks. Manage 
 the explicit management API.
 See [`docs/usage.md`](docs/usage.md#guidance--standing-user-instructions).
 
+Manage the running engine's workspace-local space registry with `agent space list`, `agent space
+show <id>`, and `agent space create <name>`. These commands expose body-redacted metadata; space
+guidance remains on the explicit guidance surface. Space removal is intentionally unavailable until
+its archive/purge and active-session behavior are defined.
+
 The full command list, trust tiers, approvals, authored tools, memory, audit log, running multiple
 agents, and the optional Telegram frontend are documented in **[`docs/usage.md`](docs/usage.md)**.
 

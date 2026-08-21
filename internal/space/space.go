@@ -14,6 +14,7 @@ package space
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,22 @@ import (
 // whenever the space is active, so it must stay brief — the cap forces the /compact
 // discipline instead of letting the always-on prompt bloat (ADR §9).
 const MaxGuidanceChars = 4000
+
+// Store error classes let management transports map failures without matching
+// human-readable text. The messages remain useful to tools and chat commands.
+var (
+	ErrNotFound      = errors.New("space not found")
+	ErrInvalidName   = errors.New("invalid space name")
+	ErrAlreadyExists = errors.New("space already exists")
+)
+
+type storeError struct {
+	kind    error
+	message string
+}
+
+func (e storeError) Error() string        { return e.message }
+func (e storeError) Is(target error) bool { return target == e.kind }
 
 // Space is one data scope's metadata. Its memory entries live beside it in the space's
 // own memory.json, not in this struct.
@@ -66,12 +83,14 @@ func (s *Store) metaPath(id string) string { return filepath.Join(s.dir, id, "sp
 func (s *Store) Create(name string) (Space, error) {
 	id := Slug(name)
 	if id == "" {
-		return Space{}, fmt.Errorf("space: name %q has no usable characters", name)
+		return Space{}, storeError{ErrInvalidName, fmt.Sprintf("space: name %q has no usable characters", name)}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := os.Stat(s.metaPath(id)); err == nil {
-		return Space{}, fmt.Errorf("space %q already exists", id)
+		return Space{}, storeError{ErrAlreadyExists, fmt.Sprintf("space %q already exists", id)}
+	} else if !os.IsNotExist(err) {
+		return Space{}, err
 	}
 	now := time.Now().UTC()
 	sp := Space{ID: id, Name: strings.TrimSpace(name), CreatedAt: now, UpdatedAt: now}
@@ -177,11 +196,11 @@ func (s *Store) List() ([]Space, error) {
 // read/write assume the caller holds the lock.
 func (s *Store) read(id string) (Space, error) {
 	if id == "" || id != Slug(id) {
-		return Space{}, fmt.Errorf("no space %q", id)
+		return Space{}, storeError{ErrNotFound, fmt.Sprintf("no space %q", id)}
 	}
 	data, err := os.ReadFile(s.metaPath(id))
 	if os.IsNotExist(err) {
-		return Space{}, fmt.Errorf("no space %q", id)
+		return Space{}, storeError{ErrNotFound, fmt.Sprintf("no space %q", id)}
 	}
 	if err != nil {
 		return Space{}, err

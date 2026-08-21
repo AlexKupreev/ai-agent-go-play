@@ -417,6 +417,80 @@ func (c *Client) doGuidance(req *http.Request, scope guidance.Scope, target stri
 	return out, nil
 }
 
+// ListSpaces returns body-redacted space metadata, newest-updated first.
+func (c *Client) ListSpaces(ctx context.Context) ([]SpaceView, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/spaces", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, responseError("list spaces", resp)
+	}
+	var out []SpaceView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetSpace returns one space's body-redacted metadata by canonical id.
+func (c *Client) GetSpace(ctx context.Context, id string) (SpaceView, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, spacePath(id), nil)
+	if err != nil {
+		return SpaceView{}, err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return SpaceView{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return SpaceView{}, responseError("show space "+id, resp)
+	}
+	var out SpaceView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return SpaceView{}, err
+	}
+	return out, nil
+}
+
+// CreateSpace creates a named space and returns its body-redacted metadata.
+func (c *Client) CreateSpace(ctx context.Context, name string) (SpaceView, error) {
+	body, _ := json.Marshal(createSpaceRequest{Name: name})
+	req, err := c.newRequest(ctx, http.MethodPost, "/spaces", bytes.NewReader(body))
+	if err != nil {
+		return SpaceView{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return SpaceView{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return SpaceView{}, responseError("create space", resp)
+	}
+	var out SpaceView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return SpaceView{}, err
+	}
+	return out, nil
+}
+
+func responseError(action string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	message := strings.TrimSpace(string(body))
+	if message == "" {
+		message = resp.Status
+	}
+	return fmt.Errorf("%s: %s", action, message)
+}
+
 // UploadFile stores a user-provided file in the session's working area over POST
 // /sessions/{id}/files and returns where it landed. name is the file's original (untrusted)
 // name — the engine sanitizes it; source says where it came from (e.g. "telegram upload") and

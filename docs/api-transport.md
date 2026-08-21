@@ -41,6 +41,11 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - matching `PUT` endpoints with `{guidance}` → atomically replace that scope and return the updated
   document. An empty string is an idempotent clear; over 4,000 Unicode characters is 400; an
   unknown space/session is 404. Changed writes emit body-redacted `guidance_updated` audit metadata
+- `GET /spaces` → body-redacted space metadata newest-updated first; `GET /spaces/{id}` → one
+  canonical-id match or 404; `POST /spaces {"name":"Polish lessons"}` → the created metadata with
+  201 and `Location: /spaces/polish-lessons` (400 for an unusable name, 409 for an existing id).
+  Metadata includes `id`, `name`, Unicode `guidance_chars`, `created_at`, and `updated_at`, never
+  guidance text or memory. There is deliberately no space-removal endpoint yet
 - `GET /config/effective` → the engine's secret-safe next-run snapshot: effective model and tier
   ceiling with precedence sources, workspace, prompt-file provenance and composition mode,
   global-guidance provenance, winning agent-type sources, actual limits, configured secret names

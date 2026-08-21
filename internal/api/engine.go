@@ -203,6 +203,10 @@ type Engine struct {
 	// It is independent from ordinary turn requests, which never accept guidance text.
 	guidance GuidanceService
 
+	// spaces, when set, exposes body-redacted list/show/create management. Space
+	// lifecycle/removal is deliberately not part of this seam.
+	spaces SpaceService
+
 	// effectiveConfig is the read-only, secret-safe engine configuration snapshot.
 	effectiveConfig EffectiveConfigService
 
@@ -265,6 +269,12 @@ func (e *Engine) SetRunStore(rs RunStore) { e.runStore = rs }
 // is rejected by StartSession/UpdateSession instead of failing the next turn. Optional; see
 // SpaceResolver.
 func (e *Engine) SetSpaceResolver(fn SpaceResolver) { e.resolveSpace = fn }
+
+// SetSpaceService enables the human space-management API.
+func (e *Engine) SetSpaceService(service SpaceService) { e.spaces = service }
+
+// SpacesEnabled reports whether space-management routes should be served.
+func (e *Engine) SpacesEnabled() bool { return e.spaces != nil }
 
 // SetGuidanceService installs the explicit guidance management seam.
 func (e *Engine) SetGuidanceService(service GuidanceService) { e.guidance = service }

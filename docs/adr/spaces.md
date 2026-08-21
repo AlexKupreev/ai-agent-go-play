@@ -12,8 +12,10 @@ the session model ([`../planning/plan.md`](../planning/plan.md) Phase 4f). **Sta
 P1 + P2 + P3-guidance are BUILT** (`internal/space`, `memory.ScopedStore`, the five space tools,
 `Session.Space` sticky + POST/PATCH, `/space` in local/remote chat + Telegram, `--space`, guidance
 injected into the system prompt, and the workspace-local move of memory to
-`<workspace>/.agent/`). Per-space **artifact manifests** (the rest of P3) and P4 remain
-roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table, `memory.md`.
+`<workspace>/.agent/`). **Human list/show/create management shipped 2026-08-21** through the
+body-redacted API and `agent space` CLI described in §6.1. Per-space **artifact manifests** (the
+rest of P3) and P4 remain roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table,
+`memory.md`.
 
 ---
 
@@ -221,7 +223,7 @@ space's **guidance** is injected into the system prompt at session start (like `
 agent-writable and per-space — this is the "profile" the earlier discussion converged on, resolved
 here as a space field rather than a standalone file).
 
-### 6.1 Human management contract (next space-management slice)
+### 6.1 Human management contract *(shipped 2026-08-21)*
 
 The HTTP management surface uses a body-redacted metadata view; guidance text remains exclusive to
 the explicit target-specific guidance endpoint:

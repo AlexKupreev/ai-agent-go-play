@@ -126,6 +126,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the local audit log; add `--addr` to query a running engine. |
 | `agent session list\|purge\|restore` | Manage a running engine's persistent conversations: list resumable ones, purge one irreversibly (`-y` skips the confirm), or restore a closed (archived) one. |
+| `agent space list\|show\|create` | List body-redacted space metadata, show one canonical id, or create a named space on a running engine. |
 | `agent guidance global\|space <target>\|session <target> show\|set\|add\|clear` | Manage standing guidance on a running engine (`--addr` accepts an engine alias). |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
@@ -702,13 +703,18 @@ does **not** change the working directory or trust tier. Design: `docs/adr/space
   plus `space_guidance` / `update_space_guidance`. A switch takes effect from the next turn.
 - **Commands:** local chat `/space` (show), `/space list`, `/space <name>`, `/space -`
   (back to global), and `agent chat --space <name>`; remote chat and Telegram `/space
-  <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`.
+  <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`. For out-of-band
+  management against a running engine, `agent space list`, `agent space show <id>`, and
+  `agent space create <name>` list body-redacted metadata or create a space; all accept `--addr`.
 - **API:** `POST /sessions` and `PATCH /sessions/{id}` accept `"space"` (an id or a name,
   stored as the canonical id); `POST /runs` and turns accept a per-request `"space"`
   override. The session carries the active space (sticky, like model/tier). Setting an
   unknown space is refused there and then — 400, with the available spaces named — so a
   typo cannot stick and break the next turn; a per-request override is still resolved at
-  turn time and fails that turn with the same error.
+  turn time and fails that turn with the same error. `GET /spaces`, `GET /spaces/{id}`, and
+  `POST /spaces {"name":"…"}` provide list/show/create management without returning guidance
+  bodies or memory. Full guidance is available only through `/spaces/{id}/guidance`. There is
+  deliberately no space-removal endpoint yet.
 
 ---
 

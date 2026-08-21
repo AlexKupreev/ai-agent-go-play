@@ -601,8 +601,8 @@ exists. The existing 200,000-file walk bound applies and sets `truncated: true`.
 context-window fill stay on `GET /runs/{id}`; the in-run `status` tool adds those fields and the
 current session overlay before rendering its human-readable report.
 
-The space metadata/create schema and exact `agent space list|show|create` output are settled in
-[`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
+The shipped space metadata/create schema and exact `agent space list|show|create` output are in
+[`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-shipped-2026-08-21).
 There is no space delete endpoint or `agent space rm` until the separate lifecycle decision chooses
 archive/restore versus purge and specifies active-session, confirmation, recovery, and audit
 semantics.

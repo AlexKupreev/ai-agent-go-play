@@ -56,4 +56,5 @@ func init() {
 	rootCmd.AddCommand(reloadCmd)
 	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(guidanceCmd)
+	rootCmd.AddCommand(spaceCmd)
 }

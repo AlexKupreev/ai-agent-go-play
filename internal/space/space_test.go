@@ -1,6 +1,7 @@
 package space
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -43,10 +44,14 @@ func TestStore_CreateGetListResolve(t *testing.T) {
 	// Duplicate (same slug) is rejected.
 	if _, err := s.Create("polish lessons"); err == nil {
 		t.Fatal("duplicate Create returned nil error")
+	} else if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("duplicate error = %v, want ErrAlreadyExists", err)
 	}
 	// A name with no usable characters is rejected.
 	if _, err := s.Create("!!!"); err == nil {
 		t.Fatal("unusable name returned nil error")
+	} else if !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("invalid-name error = %v, want ErrInvalidName", err)
 	}
 
 	if _, err := s.Create("tax"); err != nil {
@@ -79,6 +84,8 @@ func TestStore_CreateGetListResolve(t *testing.T) {
 	// Ids never escape the spaces dir: path-ish ids fail closed.
 	if _, err := s.Get("../evil"); err == nil {
 		t.Fatal("path-traversal id returned nil error")
+	} else if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("path-traversal error = %v, want ErrNotFound", err)
 	}
 }
 

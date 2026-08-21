@@ -203,6 +203,7 @@ var serveCmd = &cobra.Command{
 		// has no notion of the spaces directory, so it takes this resolver as a seam over
 		// the store built above.
 		engine.SetSpaceResolver(spaceResolver(spaces))
+		engine.SetSpaceService(spaces)
 		engine.SetGuidanceService(&guidanceService{
 			workspace: deps.workspaceGuidance,
 			spaces:    spaces,

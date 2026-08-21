@@ -59,6 +59,11 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 			mux.HandleFunc("POST /sessions/{id}/files", handleUploadFile(e))
 		}
 	}
+	if e.SpacesEnabled() {
+		mux.HandleFunc("GET /spaces", handleListSpaces(e.spaces))
+		mux.HandleFunc("GET /spaces/{id}", handleGetSpace(e.spaces))
+		mux.HandleFunc("POST /spaces", handleCreateSpace(e.spaces))
+	}
 	if e.GuidanceEnabled() {
 		noTarget := func(*http.Request) string { return "" }
 		pathTarget := func(r *http.Request) string { return r.PathValue("id") }
