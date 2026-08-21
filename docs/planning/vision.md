@@ -23,7 +23,7 @@ this proposal follows).
 - **The OpenAI adapter** (`internal/provider/openai/openai.go:80`) maps a user message with
   `oai.UserMessage(textOf(m))` — it flattens the message's blocks to a **string**. This one line is
   the whole wire-level obstacle. The adapter is the only file in the tree that imports the OpenAI
-  SDK, and `gpt-4o-mini` (the built-in default model) is already a vision model.
+  SDK, and `gpt-5.1` (the built-in default model) is already a vision model.
 - **A turn is text.** `PostTurn(sessionID, text string)` (`internal/api/engine.go`) and the
   `TurnRunner` interface carry a string. A frontend has no channel to hand the engine anything else —
   which is why an upload's reference travels *inside the turn text* today
@@ -117,7 +117,7 @@ agent: view_image(path, "what does this receipt total?") ───┤
 ### 4.2 Decisions to make (with a lean)
 
 - **V1 — Which model?** *Lean: the session's own model when it is vision-capable, with a
-  `vision_model` config key as an override* (default `gpt-4o-mini`, which is vision-capable). The
+  `vision_model` config key as an override* (default `gpt-5.1`, which is vision-capable). The
   override matters because `openai_base_url` lets the engine point at a local llama.cpp / Ollama /
   vLLM server whose model may be text-only — vision must not become a hard dependency of running
   against a local model. A clear "this model cannot see images" error beats a confusing API failure.

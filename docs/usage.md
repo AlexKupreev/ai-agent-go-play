@@ -43,7 +43,7 @@ go build -o agent .          # or: go install .  (puts `agent` on ~/go/bin)
 Optional defaults (both overridable per-run with `--model` / `--tier`):
 
 ```bash
-./agent config set-model gpt-4o        # default model (built-in default: gpt-4o-mini)
+./agent config set-model gpt-5.1       # default model (also the built-in default)
 ./agent config set-tier balanced       # default trust tier (built-in default: balanced)
 ./agent config set-verbose on          # default trace verbosity (built-in default: off)
 ```
@@ -431,7 +431,7 @@ To decide *which* prompt, model, or agent-type set works best, run one task unde
 configurations and compare them side by side instead of guessing:
 
 ```bash
-./agent eval "summarize this repo" --models gpt-4o-mini,gpt-4o     # quick model sweep
+./agent eval "summarize this repo" --models gpt-5.1,gpt-5.6-terra  # compare before a future default change
 ./agent eval "summarize this repo" --variants variants.yaml        # full control
 ```
 

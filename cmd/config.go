@@ -130,7 +130,7 @@ var setBaseURLCmd = &cobra.Command{
 
 var setModelCmd = &cobra.Command{
 	Use:   "set-model <model>",
-	Short: "Save the default model (e.g. gpt-4o); --model overrides it per run",
+	Short: "Save the default model (e.g. gpt-5.1); --model overrides it per run",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadConfigOrEmpty()

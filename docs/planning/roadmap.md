@@ -8,10 +8,9 @@ close the item here if reality has changed. Reference docs describe shipped beha
 must not be treated as a capability list.
 
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
-credential rotation. R1 is in progress: chunked Telegram delivery, the Telegram session-command
-repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation), and session-space
-validation, truthful capability-failure auditing, and durable audit-history access are shipped.
-Next up is refreshing or replacing the model context-window registry. See
+credential rotation. R1 is shipped: the Telegram delivery/session repairs, session-space
+validation, truthful capability-failure auditing, durable audit-history access, and the GPT-5.1
+default/context refresh are complete. Next up is R2's durable guidance control plane. See
 [Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on it.
 
 ## How the planning set fits together
@@ -121,12 +120,14 @@ This is the fix-first slice. Keep changes small and independently shippable.
       local `<config-dir>/audit.jsonl` without creating a missing file, while an explicitly supplied
       `--addr` preserves API/alias behavior. Command tests cover selection, filters, limits, and a
       missing log.
-- [ ] Update the model context-window registry or replace the hard-coded table with provider/config
-      metadata plus a conservative fallback.
-- [ ] Add a hard per-run/per-day paid-tool call ceiling before expanding unattended behavior.
+- [x] Update the model context-window registry and built-in default. **Done 2026-08-21** — the
+      built-in default is now `gpt-5.1`, whose documented 400k context window is registered for
+      both the alias and dated snapshots. Exact `context_limits` overrides still win, and unknown
+      models still report an unknown window rather than an invented percentage. GPT-5.6 Terra is
+      explicitly deferred to representative evals before any later default change.
 
 **Exit:** no known false-success path remains in Telegram/session management, operational failures
-are classified truthfully, bad state is rejected with a recovery path, and paid calls are bounded.
+are classified truthfully, and bad state is rejected with a recovery path.
 
 ### R2 — user control and effective-state visibility
 
@@ -202,7 +203,8 @@ work is visible/cancellable, and delivery success is observable.
 - [ ] Add token soft/hard budgets and a shared structured exhaustion result; retain operator ceilings
       above profile/session requests.
 - [ ] Run the representative evaluation set repeatedly before considering `adaptive` as the default;
-      never rewrite existing session behavior silently.
+      include `gpt-5.1` versus `gpt-5.6-terra` before any model-default change, and never rewrite
+      existing session behavior silently.
 - [ ] Split the oversized usage guide only after the new surfaces settle.
 - [ ] Update reference docs in the same change that ships behavior, and mark superseded ADR sections
       rather than rewriting history.
@@ -254,30 +256,32 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after durable audit-history access shipped. Replace this section when the next
+*Written 2026-08-21, after R1 and the GPT-5.1 default shipped. Replace this section when the next
 slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's sixth bullet — refresh the model context-window registry or replace it with
-provider/config metadata plus a conservative fallback.** The current gauge is useful but its
-built-in knowledge stops at the `o4-mini` generation. What a first look at the code shows:
+**Next slice: R2's first bullet — build the durable guidance primitives before adding commands in
+every frontend.** The desired layering and surfaces are specified in
+[`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). What a first look
+at the code shows:
 
-- `internal/agent/context.go` owns a small static `contextWindows` map. `ContextWindow` checks an
-  exact id, then the longest matching prefix so dated snapshots and sub-variants inherit a family
-  size. Unknown ids return zero, which truthfully renders "window size unknown" rather than an
-  invented percentage.
-- The built-in default is `gpt-4o-mini`; it currently inherits 128k from the `gpt-4o` prefix.
-  `internal/agent/context_test.go` pins exact, snapshot, longest-prefix, default-family, and unknown
-  behavior. Any refresh should add current model families and prefix-collision cases using current
-  official provider documentation as the source of truth.
-- `config.json`'s `context_limits` remains the operator escape hatch and wins on an exact model id
-  in `cmd.contextLimitFor`. It covers private, renamed, and OpenAI-compatible endpoints and should
-  keep precedence over any built-in/provider metadata.
-- Every executor frontend already receives the resolved limit (`run`, local `chat`, `serve`, and
-  eval), while local and remote chat render the same last-input/window gauge. The provider port
-  currently exposes only `Step`; adding metadata there would be a real interface expansion, so
-  compare that cost with a focused table refresh before choosing the design.
+- Active-space notes are the working precedent: `space.Space.Notes` is capped at 4,000 characters,
+  persisted atomically by `space.Store.Save`, loaded into the executor prompt, and already exposed
+  to the model through `space_notes` / `update_space_notes`. There is no deterministic user command
+  or API for reading/writing them.
+- The global workspace scope has no guidance store. Add `<workspace>/.agent/guidance.md` behind a
+  small interface with atomic writes and the same independent size cap; do not overload memory or
+  config-dir prompt files, because guidance belongs to the workspace and must be user-manageable.
+- `session.Session` already persists sticky `Model`, `Tier`, and `Space` alongside conversation
+  history. A capped `Guidance` field fits that existing atomic file-store path and naturally
+  survives restart/resume, but must be included in lightweight session projections only as size or
+  presence metadata—not full text.
+- Keep transport out of the stores: expose narrow workspace/space/session guidance services in the
+  API layer, following the existing injected `RunStore`, `FileStore`, and `SpaceResolver` seams.
+  Audit updates as scope + resulting size/hash, never the guidance body.
+- Land persistence, prompt composition, and unit tests first; then the following R2 bullet can add
+  `/notes` and `/guidance` consistently to local chat, remote chat, Telegram, and the CLI/API.
 
-Also worth knowing before continuing in R1:
+Also worth knowing before starting R2:
 
 - Injected seams are how the API core reaches disk-backed policy: `SetRunStore`,
   `SetSessionCloseHook`, `SetFileStore`, and now `SetSpaceResolver`, all wired in one block of

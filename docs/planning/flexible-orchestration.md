@@ -113,7 +113,7 @@ is no read-only effective-config endpoint, and `/reload` reports success without
 2. **Safe defaults remain backward compatible.** Existing sessions with no workflow fields retain
    today's deliberate behavior during rollout.
 3. **Requests are clamped by operator ceilings.** The established tier rule generalizes to planning,
-   delegation, paid tools, token/tool budgets, workspace containment, and concurrency.
+   delegation, token/tool budgets, workspace containment, and concurrency.
 4. **Auto decisions are visible.** Record route/review/delegation decisions and short reasons, never
    hidden reasoning or chain-of-thought.
 5. **One orchestration implementation serves every frontend.** CLI, API, and Telegram select policy;
@@ -336,7 +336,6 @@ Replace generic "keep trying" behavior with bounded categories:
 - model iterations: existing executor `max_iterations`;
 - plan revisions: `max_revisions`;
 - repeated identical tool failure: default 1 retry, then return an actionable refusal/result;
-- paid tools: separate hard call budget;
 - sub-agents: count/depth/parallelism budgets;
 - total model steps/tool calls: shared turn budget.
 
@@ -726,7 +725,7 @@ Route: deliberate — multi-step request with external data
 Planner: used
 Critic: skipped — clean low-risk execution met explicit criteria
 Delegation: 1 researcher (read-only, 2 sources)
-Budget: 7/25 model steps, 9/30 tool calls, 0/2 paid calls
+Budget: 7/25 model steps, 9/30 tool calls
 ```
 
 ### 9.3 Effective status
@@ -745,7 +744,7 @@ Keep host/resource/disk/context information already reported.
 
 ---
 
-## 10. Safety, spend, and audit corrections
+## 10. Safety and audit corrections
 
 These are prerequisites for offering greater autonomy:
 
@@ -753,17 +752,15 @@ These are prerequisites for offering greater autonomy:
    `SYSTEM.md` override.
 2. **Space validation:** inject a space resolver/validator at the session API boundary. Unknown
    space returns 400 plus available spaces; never persist a broken sticky value.
-3. **Paid-tool budget:** count `scrape` against per-run and per-day limits. A budget refusal is
-   actionable and auditable.
-4. **Audit semantics:** failed ScrapingAnt/network/HTTP calls are `capability_failed` with
+3. **Audit semantics:** failed ScrapingAnt/network/HTTP calls are `capability_failed` with
    status/error class—not `capability_denied`. Reserve denied for policy refusal.
-5. **Central activity reader:** local `run`/`chat` read the process-wide audit ledger for
+4. **Central activity reader:** local `run`/`chat` read the process-wide audit ledger for
    `recent_activity`, matching `serve`.
-6. **Local audit mode:** `agent audit` reads the local log when `--addr` is not explicitly given.
-7. **Public bind guard:** refuse a non-loopback `serve --addr` unless an explicit
+5. **Local audit mode:** `agent audit` reads the local log when `--addr` is not explicitly given.
+6. **Public bind guard:** refuse a non-loopback `serve --addr` unless an explicit
    `--unsafe-public-no-auth` flag is supplied, or add real API authentication before supporting
    public binding.
-8. **Credential hygiene:** rotate any credentials recorded as exposed in the August review; keep
+7. **Credential hygiene:** rotate any credentials recorded as exposed in the August review; keep
    deployment-specific Fly settings in ignored local TOML files; do not run unattended at
    `permissive` without explicit operator acceptance.
 
@@ -883,7 +880,7 @@ delivery failure is discoverable rather than silent.
 
 ### Phase G — budgets, local consistency, and rollout
 
-- [ ] Per-run/per-day paid-tool budgets and token soft/hard limits.
+- [ ] Token soft/hard limits.
 - [x] Central `recent_activity` reader in run/local chat/serve (eval deliberately stays variant-local).
 - [x] Local `agent audit` mode, with explicit `--addr` retaining remote behavior.
 - [ ] Compare `quick`/`adaptive`/`thorough` with representative eval tasks and repeat runs.
@@ -936,12 +933,12 @@ Include at least:
 6. coding/data task with artifact reuse;
 7. failed tool followed by recovery/review;
 8. conflicting sub-agent reports;
-9. paid scrape temptation/retry loop;
+9. repeated tool-failure/retry loop;
 10. destructive request requiring approval;
 11. long Telegram response;
 12. restart/resume with space/profile/guidance intact.
 
-Measure answer success, model calls, tokens, latency, tool/paid calls, unnecessary planner/critic
+Measure answer success, model calls, tokens, latency, tool calls, unnecessary planner/critic
 rate, delivery success, and user interventions. Default-profile changes require evidence from this
 set, not intuition.
 
@@ -955,7 +952,7 @@ Reference docs must change only when behavior ships:
 - `docs/usage.md`: commands, Telegram behavior, profiles, guidance, queue/cancel, budgets.
 - `docs/environment.md`: profile config, immutable/customizable prompt layers, actual state scopes.
 - `docs/api-transport.md`: nested workflow options, control-plane endpoints, trace/delivery fields.
-- `docs/security.md`: operator ceilings, guidance boundary, public bind guard, paid-tool budgets.
+- `docs/security.md`: operator ceilings, guidance boundary, and public bind guard.
 - `docs/tools.md`: structured/batch sub-agent behavior and budget interaction where relevant.
 - `docs/adr/chat-planner.md`: retain as the historical fixed-deliberate decision, with a superseding
   pointer to the shipped orchestration architecture once Phase C/D lands.
@@ -1029,6 +1026,6 @@ This program of work is complete when:
 - sub-agent work is bounded, attributable, structured, and safely parallel where declared;
 - `/why` and `/status` accurately explain effective behavior and provenance;
 - Telegram delivery, queueing, cancellation, topics, and destructive actions are reliable;
-- operator ceilings prevent profile/guidance escalation and runaway paid-tool/model spend;
+- operator ceilings prevent profile/guidance escalation and runaway model spend;
 - all shipped behavior is reflected in embedded reference docs, with planning claims kept outside
   the agent's current-capability knowledge.

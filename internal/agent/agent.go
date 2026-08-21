@@ -36,7 +36,7 @@ const (
 // DefaultModel is the built-in default model id, used when neither a flag, env, nor config
 // value sets one. Exported so the cmd layer can render it in flag help without duplicating
 // the literal.
-const DefaultModel = "gpt-4o-mini"
+const DefaultModel = "gpt-5.1"
 
 // Limits are the tunable per-run bounds. A zero field falls back to its built-in default
 // (above), so a caller sets only what it wants to change. Threaded via ExecutorConfig.Limits.

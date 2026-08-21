@@ -197,7 +197,7 @@ Config file: `<config-dir>/config.json` (created by `config set-*`).
 | `--sessions-dir` (global flag) | `AI_AGENT_SESSIONS_DIR` | Per-run transcripts (one subdir per run). Default `<config-dir>/runs`, so separate `--config-dir` agents share no transcripts (they still share memory and spaces if they share a workspace). |
 | `openai_key` | — | OpenAI API key. |
 | `openai_base_url` | `AI_AGENT_OPENAI_BASE_URL` | Base URL for the OpenAI-compatible API. Empty ⇒ the real OpenAI API; set it to point at a local llama.cpp/Ollama/vLLM server, OpenRouter, or a proxy (`config set-base-url`). |
-| `model` | `AI_AGENT_MODEL` (`--model` flag wins) | Default model (built-in default `gpt-4o-mini`). |
+| `model` | `AI_AGENT_MODEL` (`--model` flag wins) | Default model (built-in default `gpt-5.1`). |
 | `tier` | `AI_AGENT_TIER` (`--tier` flag wins) | Default trust tier (built-in default `balanced`). |
 | `verbose` | `AI_AGENT_VERBOSE` (`--verbose`/`--quiet` flag wins) | Default trace verbosity (built-in default off). Gates only the live CLI tool-call trace; the on-disk transcript is always written. `chat` is quiet by default and has a live `/verbose [on\|off]` toggle. |
 | `engines` | — | Map of alias → engine `host:port` for `--addr` (managed by `config set-engine`/`rm-engine`/`engines`). |
