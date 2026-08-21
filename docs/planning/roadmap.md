@@ -8,10 +8,11 @@ close the item here if reality has changed. Reference docs describe shipped beha
 must not be treated as a capability list.
 
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
-credential rotation. R1 has started: rune-safe chunked Telegram delivery with propagated send
-errors is shipped. Next up is R1's second bullet — `/start`, `/stop`, and the close/purge
-bindings. See [Hand-off](#hand-off--next-step) at the end of this file for the trace that is
-already done on it.
+credential rotation. R1 is in progress: chunked Telegram delivery and the Telegram session-command
+repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation) are shipped. Next up is
+R1's third bullet — validating a session's space on create/update. See
+[Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on
+it.
 
 ## How the planning set fits together
 
@@ -84,8 +85,17 @@ This is the fix-first slice. Keep changes small and independently shippable.
       was lost. The live transport retries only flood control (429), honoring Telegram's
       `retry_after` up to 30s over 3 attempts. Documented in `usage.md` §"Long answers and delivery
       failures". Persisting delivery status in the run trace remains R6.
-- [ ] Make `/start` onboarding-only; define or remove `/stop`; update close/purge bindings only after
-      API success; confirm `/purge`.
+- [x] Make `/start` onboarding-only; define or remove `/stop`; update close/purge bindings only after
+      API success; confirm `/purge`. **Done 2026-08-21** — `/start` prints the shared `helpText`
+      plus whether a session is running and touches nothing (it no longer shares `/new`'s case);
+      `/stop` is removed as an `/end` alias and now explains itself, since real cancellation needs
+      the chat → active-run binding R6 owns. `closeChat`/`purgeChat` both go through `endChat`,
+      which calls the engine first and drops the chat → session binding only on success, so a
+      failed close reports the error, keeps the session, and `/new` refuses to replace it.
+      `/purge` sends a `Delete permanently` / `Keep it` keyboard whose callback data carries a
+      single-use 12-byte nonce (never the session id) that expires after 2 minutes; an expired,
+      replayed, or superseded confirmation deletes nothing. Documented in `usage.md`
+      §"Ending a conversation".
 - [ ] Validate a session's space on create/update and include available spaces in the error.
 - [ ] Record scrape/service failures as failed capability use, not security denial; preserve paid
       call attribution on failure.
@@ -224,40 +234,45 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after Telegram chunked delivery landed. Replace this section when the next
-slice starts; it is a pointer, not a log.*
+*Written 2026-08-21, after the Telegram session commands were repaired. Replace this section when
+the next slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's second bullet — `/start`, `/stop`, close/purge bindings, `/purge`
-confirmation.** The spec is [`flexible-orchestration.md`](flexible-orchestration.md) §8.3
-("Command service"), but take only the four verbs above here — the shared command service itself is
-R3/R6 work and must not be pulled forward. What a trace of the current code already shows:
+**Next slice: R1's third bullet — validate a session's space on create/update and name the
+available spaces in the error.** Today a space id is stored verbatim and only resolved at turn
+time, so a typo is accepted silently by `POST /sessions` and `PATCH /sessions/{id}` and fails the
+*next turn* instead — the wrong place, with no list of what would have worked. What a trace of the
+current code shows:
 
-- `handleCommand` (`internal/frontend/telegram/telegram.go`) has `/start` in the same case as
-  `/new` and `/reset`, so a new user's very first `/start` closes (archives) the session they were
-  mid-conversation in. It must become onboarding + help + "a session is active", never destructive.
-- `/stop` shares a case with `/end`, so it silently means "archive the conversation". The spec
-  wants it to be `/cancel` or gone. `api.Client` already has `StopRun(ctx, runID)`, but the bot's
-  `Client` interface does not list it and nothing maps a chat to its in-flight run — `stream` is
-  the only place holding a `runID`. Adding a real `/cancel` therefore needs a chat → active-run
-  binding; removing `/stop` needs none. Decide that first, and note that queue/cancellation
-  modelling proper is R6.
-- `closeChat`/`purgeChat` delete the chat → session mapping *before* calling the engine and only
-  log an API failure to stderr, so a failed close still answers "session ended" and orphans the
-  session. Reorder to call the API first and keep the binding on failure; the reply must say what
-  actually happened. This is the same false-success shape the delivery fix just removed.
-- `/purge` is irreversible and takes effect on the bare word. The spec wants a short-lived
-  confirmation button carrying a server-side nonce, not the session id (the callback data is
-  echoed back by Telegram). `handleCallback`/`parseCallback` currently accept only
-  `approve:<id>` / `deny:<id>`, so this adds a third action and a small nonce store beside
-  `pendingQ`.
+- `Engine.StartSession` and `Engine.UpdateSession` (`internal/api/engine.go`) write
+  `sess.Space` with no check; `UpdateSession`'s doc comment states the deferral explicitly ("the
+  engine stores the space id verbatim ... resolving it is the turn runner's job") and must change
+  with the behavior.
+- The engine core deliberately knows nothing about disk paths, and the space store is built in
+  `cmd/serve.go` (`space.NewStore(spacesDir(workDir))`, ~line 92). So this is an injected seam like
+  `onSessionClose`/`runStore`/`auditRec` on the `Engine` struct, not a new import: a resolver the
+  cmd layer supplies, with validation skipped when it is nil (tests and any embedder that has no
+  space store).
+- `space.Store` already has both halves the error needs — `Resolve(nameOrID)` and `List()`
+  (`internal/space/space.go`). An empty string means the global scope and must stay valid.
+- The frontends that set a space are Telegram's `/space` (`telegram.go`) and the CLI REPL's
+  `/space` (`cmd/chat.go`, which already lists spaces for `/space list`); both surface the
+  `UpdateSession` error verbatim, so a good error message here is the whole user-visible fix.
+- `switch_space` (the agent-facing tool) writes `Space` through the store mid-turn on its own path
+  — check whether it validates, so the two entry points agree.
 
 Also worth knowing before continuing in R1:
 
-- All outgoing text now goes through `Bot.send`/`Bot.notify` (`render.go`); `b.transport.Send` has
-  exactly one caller and new code must not add another. A message that is part of a run's result
-  must propagate its error the way `stream` does — `notify` is for acknowledgements only.
-- The fake transport in `telegram_test.go` can now fail selected sends (`sendFail`), which is how
-  the false-success paths in this next slice should be tested.
+- All outgoing Telegram text goes through `Bot.send`/`Bot.notify` (`render.go`); `b.transport.Send`
+  has exactly one caller and new code must not add another. A message that is part of a run's
+  result must propagate its error the way `stream` does — `notify` is for acknowledgements only.
+- Ending a chat's session goes through `Bot.endChat`: engine first, binding dropped only on
+  success. Any new session-ending path must use it rather than deleting from `b.sessions` directly.
+- A destructive Telegram command now has a pattern to copy: `askPurge` + `confirmPurge` +
+  a `purge`/`keep` action in `parseCallback`, with a single-use nonce in the callback data
+  (Telegram echoes that data back, so it can never carry an id that means something on the engine).
+- The fake transport in `telegram_test.go` can fail selected sends (`sendFail`), and `fakeClient`
+  can fail close/purge (`closeErr`, `purgeErr`) — that is how the remaining false-success paths
+  should be tested.
 - `cmd/serve.go` validates `--addr` at the top of `RunE`; anything that adds a second listener
   should reuse `checkBindAddr` rather than re-deriving the rule.
 - Prompt text is no longer one constant. Anything that appends to the executor prompt should decide

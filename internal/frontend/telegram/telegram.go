@@ -12,11 +12,14 @@ package telegram
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/session"
@@ -116,10 +119,10 @@ type Client interface {
 // A message carrying a file uploads it into the session's scratch directory and runs a turn
 // about it (handleUpload), so the agent reads it with its own tools.
 // /new (alias /reset) starts a fresh session, /end terminates (archives) the current one,
-// /purge deletes it for good, /model and /space switch the session's model and data
-// context, and /reload re-reads the engine's prompt files + agent-type catalog (effective
-// from the next turn). The /new + /reset + /end + /purge + /model + /space verbs match the
-// CLI chat REPL.
+// /purge deletes it for good (behind a confirmation button), /model and /space switch the
+// session's model and data context, and /reload re-reads the engine's prompt files +
+// agent-type catalog (effective from the next turn). /start is onboarding only. The /new +
+// /reset + /end + /purge + /model + /space verbs match the CLI chat REPL.
 //
 // All outgoing text leaves through Bot.send/Bot.notify (render.go), which chunk it to
 // Telegram's per-message limit and, for a run's output, refuse to let a failed delivery pass
@@ -129,9 +132,10 @@ type Bot struct {
 	client    Client
 	allowed   map[int64]bool
 
-	mu       sync.Mutex
-	sessions map[int64]string // chat id -> engine session id
-	pendingQ map[int64]string // chat id -> parked ask_user question id awaiting a reply
+	mu           sync.Mutex
+	sessions     map[int64]string       // chat id -> engine session id
+	pendingQ     map[int64]string       // chat id -> parked ask_user question id awaiting a reply
+	pendingPurge map[int64]purgeConfirm // chat id -> outstanding /purge confirmation
 }
 
 // NewBot builds a bot. allowed is the set of Telegram user ids permitted to reach the
@@ -142,11 +146,12 @@ func NewBot(transport Transport, client Client, allowed []int64) *Bot {
 		set[id] = true
 	}
 	return &Bot{
-		transport: transport,
-		client:    client,
-		allowed:   set,
-		sessions:  map[int64]string{},
-		pendingQ:  map[int64]string{},
+		transport:    transport,
+		client:       client,
+		allowed:      set,
+		sessions:     map[int64]string{},
+		pendingQ:     map[int64]string{},
+		pendingPurge: map[int64]purgeConfirm{},
 	}
 }
 
@@ -304,34 +309,69 @@ func uploadTurnText(info api.UploadInfo, m Message) string {
 // type — Telegram delivers a picture sent "as a file" as a document).
 func isImage(f *File) bool { return strings.HasPrefix(f.MIME, "image/") }
 
-// handleCommand handles the chat control commands: /new (alias /reset) starts a fresh
-// session (closing any current one first), /end terminates the current session, /reload
-// re-reads the prompt files + agent-type catalog, /model and /space switch the session's
-// model and data context. The vocabulary is shared with the CLI chat REPL so the
-// session-control verbs are the same on every client. Unknown commands get a short hint.
+// helpText is the command list, shown both by /start and by an unrecognized command, so
+// onboarding and the "what did you mean?" hint cannot drift apart.
+const helpText = "Send me a message and I'll work on it; send a file and I'll work on that. Commands:\n" +
+	"/new (or /reset) — start a fresh session, ending the current one\n" +
+	"/end — end (archive) this session\n" +
+	"/purge — delete this session for good (asks first)\n" +
+	"/model <id> — switch model (bare: show it, -: engine default)\n" +
+	"/space <name> — switch data context (-: the global scope)\n" +
+	"/reload — re-read prompts and agent types"
+
+// handleCommand handles the chat control commands: /start explains the bot, /new (alias
+// /reset) starts a fresh session (closing any current one first), /end terminates the current
+// session, /purge deletes it for good behind a confirmation button, /reload re-reads the
+// prompt files + agent-type catalog, /model and /space switch the session's model and data
+// context. The vocabulary is shared with the CLI chat REPL so the session-control verbs are
+// the same on every client. Unknown commands get the same help text /start gives.
+//
+// No command here is destructive by surprise: /start only reports, and the two verbs that end
+// a conversation say so in their name.
 func (b *Bot) handleCommand(ctx context.Context, m Message) {
 	switch strings.Fields(m.Text)[0] {
-	case "/new", "/start", "/reset":
-		b.closeChat(ctx, m.ChatID) // end any existing session first
+	case "/start":
+		// Onboarding and status only — never destructive. /start used to share /new's case,
+		// so the first thing a returning user typed (Telegram offers it as a button on every
+		// bot) archived the conversation they were in the middle of.
+		state := "No session is running here yet — your next message starts one."
+		if _, ok := b.sessionOf(m.ChatID); ok {
+			state = "A session is already running here — just keep sending messages."
+		}
+		b.notify(ctx, m.ChatID, helpText+"\n\n"+state)
+	case "/new", "/reset":
+		// End any current session first, and start a replacement only if that succeeded: a
+		// failed close that still rebound the chat would leave the old session live on the
+		// engine with nothing pointing at it.
+		if _, err := b.closeChat(ctx, m.ChatID); err != nil {
+			b.notify(ctx, m.ChatID, "could not end the current session: "+err.Error()+" — it is still active, so nothing was replaced")
+			return
+		}
 		if _, err := b.sessionFor(ctx, m.ChatID); err != nil {
 			b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 			return
 		}
 		b.notify(ctx, m.ChatID, "started a new session — send a message to begin")
-	case "/end", "/stop":
-		if b.closeChat(ctx, m.ChatID) {
+	case "/end":
+		active, err := b.closeChat(ctx, m.ChatID)
+		switch {
+		case err != nil:
+			b.notify(ctx, m.ChatID, "could not end the session: "+err.Error()+" — it is still active, so try again")
+		case !active:
+			b.notify(ctx, m.ChatID, "no active session")
+		default:
 			b.notify(ctx, m.ChatID, "session ended")
-		} else {
-			b.notify(ctx, m.ChatID, "no active session")
 		}
+	case "/stop":
+		// No longer an alias for /end. Read as "stop what you are doing", it silently
+		// archived the whole conversation. Cancelling a turn that is already running needs a
+		// chat -> active-run binding, which belongs with queue modelling (roadmap R6), so
+		// until that exists /stop only says what it is not.
+		b.notify(ctx, m.ChatID, "/stop isn't a command here — it used to end the whole conversation, which is not what it sounds like. Use /end to archive this session, or /purge to delete it. A turn that is already running can't be cancelled yet; it will finish on its own.")
 	case "/purge":
-		// Irreversible counterpart to /end: hard-delete this chat's conversation instead of
-		// archiving it. Single-user allowlisted chat, so the command name is the confirmation.
-		if b.purgeChat(ctx, m.ChatID) {
-			b.notify(ctx, m.ChatID, "session purged — permanently deleted")
-		} else {
-			b.notify(ctx, m.ChatID, "no active session")
-		}
+		// Irreversible counterpart to /end, so it asks before acting: this sends the
+		// confirmation, and the button below it does the deleting (confirmPurge).
+		b.askPurge(ctx, m.ChatID)
 	case "/reload":
 		// Re-read SYSTEM.md/AGENTS.md and the agents/*.md catalog on the engine. A
 		// malformed file leaves the running config intact and returns an error. The
@@ -403,7 +443,7 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 			b.notify(ctx, m.ChatID, "model set to "+info.Model+" — effective from your next message")
 		}
 	default:
-		b.notify(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /model <id> (switch model), /space <name> (switch data context), /reload (re-read prompts + agent types)")
+		b.notify(ctx, m.ChatID, helpText)
 	}
 }
 
@@ -426,38 +466,149 @@ func (b *Bot) sessionFor(ctx context.Context, chatID int64) (string, error) {
 	return id, nil
 }
 
-// closeChat terminates the chat's session (if any) on the engine and drops the
-// mapping. Returns whether a session was active.
-func (b *Bot) closeChat(ctx context.Context, chatID int64) bool {
+// sessionOf returns the chat's engine session id without creating one — the read half of
+// sessionFor, for the places that must report state rather than start work (/start, and the
+// checks around a purge confirmation).
+func (b *Bot) sessionOf(chatID int64) (string, bool) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	id, ok := b.sessions[chatID]
-	delete(b.sessions, chatID)
-	delete(b.pendingQ, chatID) // abandon any unanswered question with the session
-	b.mu.Unlock()
-	if !ok {
-		return false
-	}
-	if err := b.client.CloseSession(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "telegram: close session %s: %v\n", id, err)
-	}
-	return true
+	return id, ok
 }
 
-// purgeChat irreversibly deletes the chat's session (if any) on the engine and drops the
-// mapping — the hard-delete sibling of closeChat. Returns whether a session was active.
-func (b *Bot) purgeChat(ctx context.Context, chatID int64) bool {
-	b.mu.Lock()
-	id, ok := b.sessions[chatID]
-	delete(b.sessions, chatID)
-	delete(b.pendingQ, chatID)
-	b.mu.Unlock()
+// endChat applies one session-ending call to the chat's session and drops the chat -> session
+// binding only after the engine confirms it. The old order — drop the binding, then call, then
+// log a failure to stderr — answered "session ended" for a session that was still alive on the
+// engine and no longer reachable from this chat: the same false-success shape the delivery fix
+// removed, with an orphaned conversation attached.
+//
+// It reports whether a session was active and the engine's error, if any. On error the binding
+// is kept, so the user can retry or simply keep talking to the session they still have.
+func (b *Bot) endChat(ctx context.Context, chatID int64, apply func(context.Context, string) error) (bool, error) {
+	id, ok := b.sessionOf(chatID)
 	if !ok {
-		return false
+		return false, nil
 	}
-	if err := b.client.PurgeSession(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "telegram: purge session %s: %v\n", id, err)
+	if err := apply(ctx, id); err != nil {
+		return true, err
 	}
-	return true
+	b.mu.Lock()
+	// Only clear a binding that still points at the session just ended: a /new racing this
+	// call may already have bound a fresh one, and that one is live.
+	if b.sessions[chatID] == id {
+		delete(b.sessions, chatID)
+		delete(b.pendingQ, chatID) // abandon any unanswered question with the session
+	}
+	b.mu.Unlock()
+	return true, nil
+}
+
+// closeChat terminates (archives) the chat's session, if any, on the engine.
+func (b *Bot) closeChat(ctx context.Context, chatID int64) (bool, error) {
+	return b.endChat(ctx, chatID, b.client.CloseSession)
+}
+
+// purgeChat irreversibly deletes the chat's session, if any — the hard-delete sibling of
+// closeChat. It is reached only through a confirmation button (confirmPurge).
+func (b *Bot) purgeChat(ctx context.Context, chatID int64) (bool, error) {
+	return b.endChat(ctx, chatID, b.client.PurgeSession)
+}
+
+// purgeConfirm is an outstanding /purge confirmation: the nonce its button carries, the
+// session it was issued for, and when it stops being valid.
+type purgeConfirm struct {
+	nonce     string
+	sessionID string
+	expires   time.Time
+}
+
+// purgeConfirmTTL is how long a /purge confirmation button stays live. It is short because a
+// stale one is a delete waiting under an old message: long enough to read the question, not
+// long enough to be pressed by accident days later.
+const purgeConfirmTTL = 2 * time.Minute
+
+// askPurge asks before deleting. The button carries a server-side nonce rather than the
+// session id: Telegram echoes callback data straight back to us, so anything guessable in it
+// would be a way to delete a conversation whose confirmation the presser never saw. (The nonce
+// also fits Telegram's 64-byte callback-data limit with room to spare.)
+func (b *Bot) askPurge(ctx context.Context, chatID int64) {
+	id, ok := b.sessionOf(chatID)
+	if !ok {
+		b.notify(ctx, chatID, "no active session")
+		return
+	}
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		b.notify(ctx, chatID, "could not prepare the confirmation: "+err.Error())
+		return
+	}
+	nonce := hex.EncodeToString(raw[:])
+	b.mu.Lock()
+	b.pendingPurge[chatID] = purgeConfirm{nonce: nonce, sessionID: id, expires: time.Now().Add(purgeConfirmTTL)}
+	b.mu.Unlock()
+
+	text := fmt.Sprintf("Delete this session for good? Its transcript and the files it holds go with it and cannot be restored — /end archives it instead. This confirmation expires in %d minutes.", int(purgeConfirmTTL/time.Minute))
+	if err := b.send(ctx, chatID, text, []Button{
+		{Text: "Delete permanently", Data: "purge:" + nonce},
+		{Text: "Keep it", Data: "keep:" + nonce},
+	}); err != nil {
+		// Nobody can answer a question that never arrived; don't leave a live confirmation
+		// sitting behind a message the user cannot see.
+		b.takePurgeConfirm(chatID, nonce)
+		fmt.Fprintf(os.Stderr, "telegram: purge confirmation to chat %d: %v\n", chatID, err)
+	}
+}
+
+// takePurgeConfirm consumes the chat's confirmation if nonce matches it and it has not
+// expired. It is single-use: a matching nonce is removed whether or not it was still valid, so
+// a button cannot be pressed twice.
+func (b *Bot) takePurgeConfirm(chatID int64, nonce string) (purgeConfirm, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pending, ok := b.pendingPurge[chatID]
+	if !ok || pending.nonce != nonce {
+		return purgeConfirm{}, false
+	}
+	delete(b.pendingPurge, chatID)
+	if time.Now().After(pending.expires) {
+		return purgeConfirm{}, false
+	}
+	return pending, true
+}
+
+// confirmPurge handles a press on either button of a purge confirmation. Everything that is
+// not an unexpired, unused nonce for the session this chat is still bound to fails safe:
+// nothing is deleted and the user is told to ask again.
+func (b *Bot) confirmPurge(ctx context.Context, c Callback, nonce string, confirmed bool) {
+	pending, ok := b.takePurgeConfirm(c.ChatID, nonce)
+	if !ok {
+		b.answerCallback(ctx, c.ID, "that confirmation has expired — send /purge again")
+		return
+	}
+	if !confirmed {
+		b.answerCallback(ctx, c.ID, "kept")
+		b.notify(ctx, c.ChatID, "kept — this session is still active")
+		return
+	}
+	// The session may have been replaced (/new) or ended between the question and the press.
+	// Purging whatever is bound now would delete a conversation the user never agreed to.
+	if cur, ok := b.sessionOf(c.ChatID); !ok || cur != pending.sessionID {
+		b.answerCallback(ctx, c.ID, "that confirmation is out of date")
+		b.notify(ctx, c.ChatID, "nothing was deleted: this chat is no longer on the session that /purge asked about. Send /purge again if you still want to delete the current one.")
+		return
+	}
+	active, err := b.purgeChat(ctx, c.ChatID)
+	switch {
+	case err != nil:
+		b.answerCallback(ctx, c.ID, "purge failed")
+		b.notify(ctx, c.ChatID, "could not purge the session: "+err.Error()+" — it is still active, so nothing was deleted")
+	case !active:
+		b.answerCallback(ctx, c.ID, "no active session")
+		b.notify(ctx, c.ChatID, "no active session")
+	default:
+		b.answerCallback(ctx, c.ID, "purged")
+		b.notify(ctx, c.ChatID, "session purged — permanently deleted")
+	}
 }
 
 // stream relays a run's events to a chat until the stream ends.
@@ -583,6 +734,11 @@ func (b *Bot) handleCallback(ctx context.Context, c Callback) {
 		b.answerCallback(ctx, c.ID, "unrecognized action")
 		return
 	}
+	if action == "purge" || action == "keep" {
+		// A /purge confirmation: id is that confirmation's nonce, not a session id.
+		b.confirmPurge(ctx, c, id, action == "purge")
+		return
+	}
 	approved := action == "approve"
 	if err := b.client.Resolve(ctx, id, approved); err != nil {
 		b.answerCallback(ctx, c.ID, "could not resolve: "+err.Error())
@@ -595,11 +751,17 @@ func (b *Bot) handleCallback(ctx context.Context, c Callback) {
 	}
 }
 
-// parseCallback splits button callback data of the form "approve:<id>" / "deny:<id>".
+// parseCallback splits button callback data of the form "<action>:<id>", accepting only the
+// actions the bot itself issues: approve/deny for a parked escalation, where id is the
+// approval id, and purge/keep for a /purge confirmation, where it is a server-side nonce.
 func parseCallback(data string) (action, id string, ok bool) {
 	action, id, found := strings.Cut(data, ":")
-	if !found || id == "" || (action != "approve" && action != "deny") {
+	if !found || id == "" {
 		return "", "", false
 	}
-	return action, id, true
+	switch action {
+	case "approve", "deny", "purge", "keep":
+		return action, id, true
+	}
+	return "", "", false
 }

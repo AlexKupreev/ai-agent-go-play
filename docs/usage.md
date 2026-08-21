@@ -889,17 +889,38 @@ A Telegram bot can act as a peer client of the engine. Each chat maps to a **ses
 (a persistent conversation, below): a message runs a turn with retained context, events
 stream back, and a parked approval becomes an Approve/Deny inline keyboard. Chat commands:
 **`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates (archives) the
-current one, **`/purge`** deletes it for good (a session is also created automatically on your
-first message), **`/model <id>`** switches the session's model (bare `/model` shows the current
-one, `/model -` returns to the engine default) and **`/space <name>`** its data context (both
-effective from your next message, over `PATCH /sessions/{id}`), and **`/reload`** re-reads the
-engine's prompt files + agent-type catalog (effective from your next message — the same
-management action as `agent reload`, gated by the bot's allowlist). The `/new` + `/reset` +
-`/end` + `/purge` + `/model` + `/space` verbs match the CLI chat REPL. It is **entirely
-optional**: with no token set, the engine runs exactly as normal.
+current one, **`/purge`** deletes it for good after you confirm (a session is also created
+automatically on your first message), **`/model <id>`** switches the session's model (bare
+`/model` shows the current one, `/model -` returns to the engine default) and **`/space
+<name>`** its data context (both effective from your next message, over `PATCH
+/sessions/{id}`), **`/reload`** re-reads the engine's prompt files + agent-type catalog
+(effective from your next message — the same management action as `agent reload`, gated by the
+bot's allowlist), and **`/start`** prints this list plus whether a session is running. The
+`/new` + `/reset` + `/end` + `/purge` + `/model` + `/space` verbs match the CLI chat REPL. It
+is **entirely optional**: with no token set, the engine runs exactly as normal.
 
 A model id is **not** validated when you set it — an unknown one fails the next turn with the
 provider's error, and `/model -` gets you back.
+
+### Ending a conversation
+
+Only `/end` and `/purge` end anything, and neither is silent about failing:
+
+- **`/start` never ends a session.** Telegram offers it as a button on every bot, so it is
+  onboarding: the command list and whether a session is running here. It does not create one
+  either — your next message does that.
+- **`/stop` is not a command.** It used to mean `/end`, which is not what the word sounds like;
+  it now says so. Cancelling a turn that is *already running* is not supported yet — it finishes
+  on its own. (`agent chat` cancels the current turn with Ctrl-C.)
+- **`/purge` asks first.** It replies with a `Delete permanently` / `Keep it` keyboard and
+  deletes only when you press. The button carries a short-lived, single-use, server-generated
+  nonce — never the session id — because Telegram echoes callback data back to the bot, and it
+  expires after **2 minutes**. An expired, re-pressed, or out-of-date confirmation (you started
+  a new session in between) deletes nothing and tells you to ask again.
+- **A failed close or purge keeps the session.** The engine is called *first*, and the chat is
+  re-bound only once it confirms. If the call fails you are told the error and that the session
+  is still active, and `/new` will not replace a session it could not end — so a conversation
+  can never be left running on the engine with nothing in the chat pointing at it.
 
 ### Long answers and delivery failures
 

@@ -92,6 +92,25 @@ func (f *fakeTransport) waitForSend(t *testing.T, pred func(sentMessage) bool) s
 	return sentMessage{}
 }
 
+// waitForAnswer polls until a callback toast containing want has been sent, returning it.
+func (f *fakeTransport) waitForAnswer(t *testing.T, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		for _, a := range f.answers {
+			if strings.Contains(a, want) {
+				f.mu.Unlock()
+				return a
+			}
+		}
+		f.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for a callback answer containing %q", want)
+	return ""
+}
+
 // upload is one file the bot pushed to the engine.
 type upload struct {
 	sessionID string
@@ -107,7 +126,9 @@ type fakeClient struct {
 	lastTurnText  string
 	lastSessionID string
 	closedID      string
+	closeErr      error
 	purgedID      string
+	purgeErr      error
 	resolveID     string
 	resolveOK     bool
 	reloadCalls   int
@@ -150,6 +171,9 @@ func (c *fakeClient) PostTurn(_ context.Context, sessionID, text string, _ api.R
 func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closeErr != nil {
+		return c.closeErr
+	}
 	c.closedID = sessionID
 	return nil
 }
@@ -157,6 +181,9 @@ func (c *fakeClient) CloseSession(_ context.Context, sessionID string) error {
 func (c *fakeClient) PurgeSession(_ context.Context, sessionID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.purgeErr != nil {
+		return c.purgeErr
+	}
 	c.purgedID = sessionID
 	return nil
 }
@@ -474,16 +501,240 @@ func TestBot_NewAndEndCommands(t *testing.T) {
 	}
 	cl.mu.Unlock()
 
-	// /purge hard-deletes a fresh session (the irreversible sibling of /end): start one,
-	// then purge it.
+	// /purge hard-deletes a fresh session (the irreversible sibling of /end), but only once
+	// its confirmation button is pressed.
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
 	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/purge"}}
+	ask := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "Delete this session for good?") })
+	tr.updates <- Update{Callback: &Callback{ID: "cb1", ChatID: 100, UserID: 42, Data: ask.buttons[0].Data}}
 	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "purged") })
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 	if cl.purgedID != "sess1" {
 		t.Fatalf("purged session = %q, want sess1", cl.purgedID)
+	}
+}
+
+// TestBot_StartIsOnboardingOnly pins /start as an explain-and-report command. It used to share
+// /new's case, so the button Telegram puts on every bot silently archived whatever
+// conversation the user was in the middle of.
+func TestBot_StartIsOnboardingOnly(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	// Before anything exists: help, and an honest "nothing running yet" — no session created.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/start"}}
+	first := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "No session is running here yet") })
+	if !strings.Contains(first.text, "/purge") {
+		t.Errorf("/start reply %q should list the commands", first.text)
+	}
+	cl.mu.Lock()
+	if cl.sessionCalls != 0 {
+		cl.mu.Unlock()
+		t.Fatalf("StartSession calls = %d, want 0 — /start must not start a session", cl.sessionCalls)
+	}
+	cl.mu.Unlock()
+
+	// With a session running: it reports that, and touches nothing.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/start"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "already running") })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.closedID != "" || cl.purgedID != "" {
+		t.Fatalf("/start ended a session: closed=%q purged=%q", cl.closedID, cl.purgedID)
+	}
+	if cl.sessionCalls != 1 {
+		t.Fatalf("StartSession calls = %d, want 1 — /start must not replace the session", cl.sessionCalls)
+	}
+}
+
+// TestBot_StopIsNotDestructive pins the other half of that fix: /stop shared /end's case, so a
+// word that reads as "stop what you are doing" archived the whole conversation. It now
+// explains itself and leaves the session alone.
+func TestBot_StopIsNotDestructive(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/stop"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "isn't a command here") })
+
+	// The session survives, and /start (which only reports) still sees it.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/start"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "already running") })
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.closedID != "" {
+		t.Fatalf("/stop closed session %q; it must not end the conversation", cl.closedID)
+	}
+}
+
+// TestBot_FailedCloseKeepsSession pins the false-success fix in the session bindings: when the
+// engine refuses to close a session, the chat must not be told "session ended" and must not be
+// unbound from a conversation that is still alive on the engine.
+func TestBot_FailedCloseKeepsSession(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+
+	cl.mu.Lock()
+	cl.closeErr = errors.New("close session sess1: 503 Service Unavailable")
+	cl.mu.Unlock()
+
+	// /end says what actually happened.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/end"}}
+	failed := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "could not end the session") })
+	if !strings.Contains(failed.text, "503") || !strings.Contains(failed.text, "still active") {
+		t.Errorf("failure reply %q should name the error and say the session is still active", failed.text)
+	}
+
+	// /new does not replace a session it could not end.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "could not end the current session") })
+
+	// The binding survived both: the chat is still on sess1, so no second session was started.
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/start"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "already running") })
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.sessionCalls != 1 {
+		t.Fatalf("StartSession calls = %d, want 1 — a failed close must not orphan sess1 and bind a new one", cl.sessionCalls)
+	}
+}
+
+// TestBot_PurgeNeedsConfirmation covers the irreversible command's guard rails: the bare word
+// deletes nothing, the button carries a nonce rather than the session id (Telegram echoes
+// callback data straight back, so a guessable one would be a delete-by-guessing), and pressing
+// it twice does not purge twice.
+func TestBot_PurgeNeedsConfirmation(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/new"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/purge"}}
+	ask := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "Delete this session for good?") })
+	if len(ask.buttons) != 2 {
+		t.Fatalf("purge confirmation should offer two buttons, got %+v", ask.buttons)
+	}
+	nonce, ok := strings.CutPrefix(ask.buttons[0].Data, "purge:")
+	if !ok || nonce == "" {
+		t.Fatalf("confirm button data = %q, want purge:<nonce>", ask.buttons[0].Data)
+	}
+	if strings.Contains(ask.buttons[0].Data, "sess1") {
+		t.Errorf("callback data %q must not carry the session id", ask.buttons[0].Data)
+	}
+	if n := len(ask.buttons[0].Data); n > 64 {
+		t.Errorf("callback data is %d bytes, over Telegram's 64-byte limit", n)
+	}
+
+	// Asking is not deleting, and a guessed nonce fails safe.
+	tr.updates <- Update{Callback: &Callback{ID: "cbX", ChatID: 100, UserID: 42, Data: "purge:0123456789ab"}}
+	tr.waitForAnswer(t, "expired")
+	cl.mu.Lock()
+	if cl.purgedID != "" {
+		cl.mu.Unlock()
+		t.Fatalf("purged %q without a valid confirmation", cl.purgedID)
+	}
+	cl.mu.Unlock()
+
+	// The real button deletes.
+	tr.updates <- Update{Callback: &Callback{ID: "cb1", ChatID: 100, UserID: 42, Data: ask.buttons[0].Data}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "purged") })
+	cl.mu.Lock()
+	if cl.purgedID != "sess1" {
+		cl.mu.Unlock()
+		t.Fatalf("purged session = %q, want sess1", cl.purgedID)
+	}
+	cl.purgedID = "" // watch for a second purge
+	cl.mu.Unlock()
+
+	// Pressing it again (an old message stays pressable forever in Telegram) does nothing.
+	tr.updates <- Update{Callback: &Callback{ID: "cb2", ChatID: 100, UserID: 42, Data: ask.buttons[0].Data}}
+	tr.waitForAnswer(t, "expired")
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.purgedID != "" {
+		t.Fatalf("a re-pressed confirmation purged %q; the nonce must be single-use", cl.purgedID)
+	}
+}
+
+// TestBot_PurgeConfirmationFailsSafe drives confirmPurge directly for the two states an
+// end-to-end test cannot stage: the confirmation has expired, and the chat moved to a
+// different session between the question and the press. Neither may delete anything.
+func TestBot_PurgeConfirmationFailsSafe(t *testing.T) {
+	ctx := context.Background()
+	press := func(t *testing.T, mutate func(*Bot, string)) *fakeClient {
+		t.Helper()
+		tr := newFakeTransport()
+		cl := newFakeClient()
+		bot := NewBot(tr, cl, []int64{42})
+		bot.sessions[100] = "sessA"
+		bot.askPurge(ctx, 100)
+		nonce := bot.pendingPurge[100].nonce
+		mutate(bot, nonce)
+		bot.confirmPurge(ctx, Callback{ID: "cb", ChatID: 100, UserID: 42}, nonce, true)
+		return cl
+	}
+
+	// Expired: the button outlived its window.
+	cl := press(t, func(b *Bot, nonce string) {
+		pending := b.pendingPurge[100]
+		pending.expires = time.Now().Add(-time.Second)
+		b.pendingPurge[100] = pending
+	})
+	if cl.purgedID != "" {
+		t.Errorf("an expired confirmation purged %q", cl.purgedID)
+	}
+
+	// Replaced: a /new landed between the question and the press, so the session the user
+	// agreed to delete is not the one bound now.
+	cl = press(t, func(b *Bot, _ string) { b.sessions[100] = "sessB" })
+	if cl.purgedID != "" {
+		t.Errorf("a stale confirmation purged %q — it must not delete a session the user never saw it named", cl.purgedID)
+	}
+
+	// The "Keep it" button never deletes either.
+	tr := newFakeTransport()
+	keepClient := newFakeClient()
+	bot := NewBot(tr, keepClient, []int64{42})
+	bot.sessions[100] = "sessA"
+	bot.askPurge(ctx, 100)
+	bot.confirmPurge(ctx, Callback{ID: "cb", ChatID: 100, UserID: 42}, bot.pendingPurge[100].nonce, false)
+	if keepClient.purgedID != "" {
+		t.Errorf("the keep button purged %q", keepClient.purgedID)
+	}
+	if _, ok := bot.sessions[100]; !ok {
+		t.Error("the keep button dropped the chat's session binding")
 	}
 }
 
@@ -714,6 +965,8 @@ func TestParseCallback(t *testing.T) {
 	}{
 		{"approve:a1", "approve", "a1", true},
 		{"deny:a9", "deny", "a9", true},
+		{"purge:9f3c", "purge", "9f3c", true},
+		{"keep:9f3c", "keep", "9f3c", true},
 		{"approve:", "", "", false},
 		{"bogus:a1", "", "", false},
 		{"noseparator", "", "", false},
