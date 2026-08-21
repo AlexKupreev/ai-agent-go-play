@@ -8,12 +8,13 @@ close the item here if reality has changed. Reference docs describe shipped beha
 must not be treated as a capability list.
 
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
-credential rotation. R1 is shipped: the Telegram delivery/session repairs, session-space
+credential rotation. Most of R1 is shipped: the Telegram delivery/session repairs, session-space
 validation, truthful capability-failure auditing, durable audit-history access, and the GPT-5.1
 default/context refresh are complete. R2 is shipped: durable guidance, effective-state and status
 enrichment, plus space list/show/create parity are complete. Space removal remains explicitly
-deferred pending a lifecycle decision. R3's behavior-preserving orchestration seam is next; see
-[Hand-off](#hand-off--next-step).
+deferred pending a lifecycle decision. A reproduced critic-evidence/empty-delivery failure reopens
+one focused R1 item; close it using [`execution-evidence.md`](execution-evidence.md) before R3's
+behavior-preserving orchestration move. See [Hand-off](#hand-off--next-step).
 
 ## How the planning set fits together
 
@@ -21,6 +22,7 @@ deferred pending a lifecycle decision. R3's behavior-preserving orchestration se
 | --- | --- | --- |
 | **This roadmap** | Current priority and dependency order | All active work |
 | [`flexible-orchestration.md`](flexible-orchestration.md) | Main target architecture and acceptance criteria | R0-R7 below |
+| [`execution-evidence.md`](execution-evidence.md) | Corrective plan for critic provenance and silent terminal failures | Reopened R1 item below |
 | [`review-2026-08.md`](review-2026-08.md) | Dated audit and evidence for correctness gaps | R0-R2 and R7 |
 | [`scheduling.md`](scheduling.md) | Optional feature specification | F3 |
 | [`vision.md`](vision.md) | Optional, mostly independent feature specification | F2 |
@@ -128,9 +130,17 @@ This is the fix-first slice. Keep changes small and independently shippable.
       both the alias and dated snapshots. Exact `context_limits` overrides still win, and unknown
       models still report an unknown window rather than an invented percentage. GPT-5.6 Terra is
       explicitly deferred to representative evals before any later default change.
+- [ ] Give the critic bounded, redacted, runtime-generated execution evidence and close the silent
+      terminal path. **Observed 2026-08-21** — the critic receives only brief + answer, so it can
+      demand proof of a `web_search`/`web_fetch` call it cannot observe; a whitespace-only final
+      answer and an SSE EOF without a terminal frame can then end Telegram output after a critique
+      note. Implement [`execution-evidence.md`](execution-evidence.md): observable planner criteria,
+      per-attempt evidence metadata (not raw results and no default critic web access), empty-answer
+      rejection, and terminal-frame enforcement.
 
 **Exit:** no known false-success path remains in Telegram/session management, operational failures
-are classified truthfully, and bad state is rejected with a recovery path.
+are classified truthfully, and bad state is rejected with a recovery path. *Reopened until the
+execution-evidence/silent-terminal item above is complete.*
 
 ### R2 — user control and effective-state visibility
 
@@ -282,13 +292,15 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Updated 2026-08-21 after space metadata parity shipped; this is a pointer, not a log.*
+*Updated 2026-08-21 after reproducing the critic-evidence/silent-terminal failure; this is a
+pointer, not a log.*
 
-**Next implementation slice: R3's behavior-preserving orchestration seam.** Move/generalize
-`cmd/deliberate.go` into `internal/orchestration` with explicit phase/result types while preserving
-the current default behavior and tests. Profiles and sparse overrides follow after that seam; do
-not mix adaptive routing into the move. The independent human-only credential rotation in R0 is
-still outstanding.
+**Next implementation slice: close the focused R1 execution-evidence failure.** Follow
+[`execution-evidence.md`](execution-evidence.md): ship the empty-answer/terminal-event hotfix first,
+then the bounded redacted per-attempt evidence recorder and observable planner/critic contract. Keep
+the default critic network-free. Once the acceptance matrix is green, resume R3 by moving/generalizing
+`cmd/deliberate.go` into `internal/orchestration` without mixing adaptive routing into that move. The
+independent human-only credential rotation in R0 is still outstanding.
 
 **Completed slice: space metadata parity.** `GET /spaces`, `GET /spaces/{id}`, `POST /spaces`, and
 `agent space list|show|create` now share the body-redacted metadata contract in the spaces ADR.

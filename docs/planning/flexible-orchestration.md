@@ -327,6 +327,13 @@ Skip critique for ordinary conversation and clean low-risk execution. This decis
 and recorded in the trace. Critic failure continues to fail open by delivering the current answer,
 but the answer gets a visible "review unavailable" note when the profile requested high assurance.
 
+Critique must be grounded in observable execution facts, not a requirement to prove an internal
+tool call that the critic cannot see. The default critic remains network-free and receives a
+bounded, redacted, runtime-generated evidence envelope for the executor attempt it judges. Raw tool
+results are excluded. Independent re-fetching belongs to a separately budgeted verifier mode, not
+ordinary critique. The focused corrective contract, reliability safeguards, and test matrix are in
+[`execution-evidence.md`](execution-evidence.md).
+
 ### 4.3 Completion and retry policy
 
 Replace generic "keep trying" behavior with bounded categories:

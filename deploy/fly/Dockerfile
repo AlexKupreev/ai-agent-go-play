@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/agent .
 
 # ---- runtime ----
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates bash git curl coreutils tini
+RUN apk add --no-cache ca-certificates bash git curl coreutils jq tini
 
 WORKDIR /workspace
 
