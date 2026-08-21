@@ -148,6 +148,22 @@ Two escape hatches:
   `--context-file` loading **and** the workspace/config-dir `agents/*.md` sub-agent types, and
   run on the bare built-in base prompts + built-in agent types (reproducible runs, debugging).
 
+### User guidance after operator prompts
+
+User-owned guidance is a separate layer after the operator prompt files: workspace guidance
+(`<workspace>/.agent/guidance.md`), then active-space guidance (`space.json`), then persistent
+session guidance. The current turn remains last. Each guidance scope is independently limited to
+4,000 Unicode characters and cannot remove the kernel blocks above, change the tier, or grant a
+capability. Active-space guidance is also included in a deliberate planner's environment context;
+the workspace and session layers currently go only to the executor.
+
+Unlike workspace prompt files, `.agent/` guidance is the agent's own trusted state: it is not
+suppressed by the `safe` tier or by `--no-context-files`. Workspace guidance is re-read whenever an
+executor is built, including every `serve` turn, so it does not need `/reload`. `agent prompts show`
+includes this workspace layer; it has no active space/session context. See
+[`usage.md`](usage.md#guidance--standing-user-instructions) for storage and the management surface
+that is actually available today.
+
 ---
 
 ## Sub-agent types (agents/\*.md)
@@ -243,7 +259,7 @@ Under the **config dir** (default `~/.config/ai-agent`, overridable with `--conf
 | `<config-dir>/config.json` | API key, default model/tier, engine aliases, Telegram settings. |
 | `<config-dir>/tools.json` | Persisted agent-authored tool catalog. |
 | `<config-dir>/audit.jsonl` | Process-wide audit log (written by `serve`). |
-| `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state). |
+| `<config-dir>/sessions/<id>.json` | Persisted conversations (one file per session — the resumable session **store**, agent state), including sticky model/tier/space and optional session guidance. |
 | `<config-dir>/sessions/archive/<id>.json` | Closed conversations, **archived not deleted** (`/end` / `DELETE /sessions/{id}`). Excluded from the resumable listing; `agent session restore <id>` un-archives it, `agent session purge <id>` removes it for good. |
 | `<config-dir>/session-scratch/<id>/` | Deliberate `serve` turns: a session's disk-backed artifact cache + `manifest.json`, persistent across turns/restarts (keyed by session id). Reaped when the session is closed; cache-with-fallback keeps a stale/absent file correct otherwise. |
 | `<config-dir>/runs/<run-id>/` | Per-run transcripts (**logs**) + `info.json` (final run metadata), unless overridden by `--sessions-dir`. Distinct from `sessions/` above. |
@@ -263,7 +279,7 @@ own state, written by it):
 | Path | What |
 | --- | --- |
 | `<workspace>/.agent/memory.json` | Long-term memory store, **global scope** (`remember`/`recall`). Moved here from `<config-dir>/memory.json` when spaces landed — move an old file here to keep its entries. For `serve`, point `--workspace` at a persistent dir so memory survives restarts. |
-| `<workspace>/.agent/guidance.md` | Workspace guidance, loaded into every executor prompt. |
+| `<workspace>/.agent/guidance.md` | Workspace guidance, loaded into every executor prompt after operator prompt files (4,000 Unicode characters maximum; missing means empty). |
 | `<workspace>/.agent/spaces/<id>/` | One directory per **space** (switchable data context, usage.md §Spaces): `space.json` (name + always-loaded guidance) and that space's `memory.json` shard. |
 
 Under the **runs dir** (default `<config-dir>/runs`, override with `--sessions-dir` /

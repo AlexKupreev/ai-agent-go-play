@@ -103,3 +103,52 @@ func TestOversizedFileFailsClosed(t *testing.T) {
 		t.Fatal("Get oversized guidance returned nil error")
 	}
 }
+
+func TestCommandGrammarAndOperations(t *testing.T) {
+	values := map[Scope]string{}
+	get := func(scope Scope) (string, error) { return values[scope], nil }
+	set := func(scope Scope, text string) error { values[scope] = text; return nil }
+
+	setCmd, err := ParseCommand("space set   answer in Polish 🐻  ")
+	if err != nil || setCmd.Scope != ScopeSpace || setCmd.Op != "set" || setCmd.Text != "answer in Polish 🐻" {
+		t.Fatalf("ParseCommand set = %+v, %v", setCmd, err)
+	}
+	result, err := ApplyCommand(setCmd, get, set)
+	if err != nil || !result.Changed || result.Chars != 18 {
+		t.Fatalf("ApplyCommand set = %+v, %v", result, err)
+	}
+
+	add, _ := ParseCommand("space add be concise")
+	result, err = ApplyCommand(add, get, set)
+	if err != nil || values[ScopeSpace] != "answer in Polish 🐻\nbe concise" || !result.Changed {
+		t.Fatalf("ApplyCommand add = %+v, %v; value %q", result, err, values[ScopeSpace])
+	}
+
+	show, _ := ParseCommand("space show")
+	result, err = ApplyCommand(show, get, set)
+	if err != nil || result.Guidance != values[ScopeSpace] || !strings.Contains(FormatResult(result), result.Guidance) {
+		t.Fatalf("ApplyCommand show = %+v, %v", result, err)
+	}
+
+	clear, _ := ParseCommand("space clear")
+	first, err := ApplyCommand(clear, get, set)
+	if err != nil || !first.Changed || values[ScopeSpace] != "" {
+		t.Fatalf("first clear = %+v, %v", first, err)
+	}
+	second, err := ApplyCommand(clear, get, set)
+	if err != nil || second.Changed {
+		t.Fatalf("idempotent clear = %+v, %v", second, err)
+	}
+}
+
+func TestCommandGrammarRejectsAmbiguity(t *testing.T) {
+	bad := []string{
+		"", "project show", "global", "global remove x", "global show extra",
+		"global clear extra", "global set", "global add",
+	}
+	for _, input := range bad {
+		if _, err := ParseCommand(input); err == nil {
+			t.Errorf("ParseCommand(%q) returned nil error", input)
+		}
+	}
+}

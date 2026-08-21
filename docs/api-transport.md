@@ -33,10 +33,18 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - `GET /tools/{name}` → one tool's detail (adds impl source + smoke test); `DELETE /tools/{name}` →
   revoke it (404 if absent, audited as `tool_revoked`)
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
-  authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
+  authoring/revocation, memory writes, redacted guidance updates); oldest first, `limit` keeps the
+  last N matches
+- `GET /guidance/global`, `GET /spaces/{id}/guidance`, `GET /sessions/{id}/guidance` → the
+  target's explicit guidance document `{scope, target?, guidance, chars}`; unlike listings, these
+  target-specific management endpoints intentionally return the text
+- matching `PUT` endpoints with `{guidance}` → atomically replace that scope and return the updated
+  document. An empty string is an idempotent clear; over 4,000 Unicode characters is 400; an
+  unknown space/session is 404. Changed writes emit body-redacted `guidance_updated` audit metadata
 - `POST /sessions` `{model?, tier?, space?}` → `{session_id}` (optional initial sticky model/tier/space;
   400 on a malformed tier or an unknown space);
-  `GET /sessions` → list (each Info carries the session's sticky `model`/`tier`/`space`);
+  `GET /sessions` → list (each Info carries the session's sticky `model`/`tier`/`space` and a
+  `guidance_chars` size when session guidance is present; the text is not exposed);
   `PATCH /sessions/{id}` `{model?, tier?, space?}` → updated Info (per-field: an omitted field is left
   unchanged, a present field is set — an empty string clears it back to the default; 400 on a
   malformed tier or an unknown space, 404 on an unknown session). `space` may be a space id or its
@@ -191,8 +199,15 @@ duplicated.
 - **Turns are serialized per session** (a per-session mutex) so history can't interleave.
 - **The system prompt is not stored** — it's re-seeded from current code each turn, so prompt
   changes take effect on resume.
-- `Client.StartSession` / `PostTurn` / `CloseSession` / `ListSessions` are the peer methods;
-  a conversational frontend streams a turn's reply on the returned run id.
+- A session record may carry **session guidance**, loaded after workspace and active-space guidance
+  on every turn. It survives restart and is capped at 4,000 Unicode characters. Turn requests do
+  not accept an ad-hoc `guidance` field; explicit `GET`/`PUT /sessions/{id}/guidance` endpoints
+  manage the durable value, while `GET /sessions` exposes only its redacted `guidance_chars` size.
+  This prevents the ordinary turn endpoint from becoming a hidden, non-persistent prompt-override
+  channel.
+- `Client.StartSession` / `PostTurn` / `CloseSession` / `ListSessions` are the conversation peer
+  methods; `GetGuidance` / `SetGuidance` drive the explicit management endpoints. A conversational
+  frontend streams a turn's reply on the returned run id.
 
 ## Frontends as peer clients (Telegram)
 

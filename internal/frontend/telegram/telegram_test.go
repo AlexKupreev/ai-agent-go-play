@@ -13,6 +13,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/session"
 )
 
@@ -136,6 +137,7 @@ type fakeClient struct {
 	lastSpace     string
 	lastModel     string
 	modelWrites   int // UpdateSession calls that passed a non-nil model (a set, not a read)
+	guidance      map[string]string
 	uploads       []upload
 	uploadErr     error
 	resolved      chan bool
@@ -149,7 +151,7 @@ type fakeClient struct {
 }
 
 func newFakeClient() *fakeClient {
-	return &fakeClient{resolved: make(chan bool, 1), answered: make(chan string, 1)}
+	return &fakeClient{resolved: make(chan bool, 1), answered: make(chan string, 1), guidance: map[string]string{}}
 }
 
 func (c *fakeClient) StartSession(context.Context, api.RunOptions) (string, error) {
@@ -200,6 +202,20 @@ func (c *fakeClient) UpdateSession(_ context.Context, sessionID string, model, _
 		c.modelWrites++
 	}
 	return session.Info{ID: sessionID, Space: c.lastSpace, Model: c.lastModel}, nil
+}
+
+func (c *fakeClient) GetGuidance(_ context.Context, scope guidance.Scope, target string) (api.GuidanceDocument, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	text := c.guidance[string(scope)+":"+target]
+	return api.GuidanceDocument{Scope: scope, Target: target, Guidance: text, Chars: guidance.CharCount(text)}, nil
+}
+
+func (c *fakeClient) SetGuidance(_ context.Context, scope guidance.Scope, target, text string) (api.GuidanceDocument, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.guidance[string(scope)+":"+target] = text
+	return api.GuidanceDocument{Scope: scope, Target: target, Guidance: text, Chars: guidance.CharCount(text)}, nil
 }
 
 // UploadFile records what the bot uploaded and echoes back a plausible stored location, as
@@ -260,6 +276,41 @@ func (c *fakeClient) Resolve(_ context.Context, id string, approved bool) error 
 	c.mu.Unlock()
 	c.resolved <- approved
 	return nil
+}
+
+func TestGuidanceCommandAllScopes(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+	ctx := context.Background()
+
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance global set answer in Polish 🐻"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "global guidance updated") })
+	if got := cl.guidance["global:"]; got != "answer in Polish 🐻" {
+		t.Fatalf("global guidance = %q", got)
+	}
+
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance session add keep it concise"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "session guidance updated") })
+	if got := cl.guidance["session:sess1"]; got != "keep it concise" {
+		t.Fatalf("session guidance = %q", got)
+	}
+
+	cl.mu.Lock()
+	cl.lastSpace = "polish"
+	cl.mu.Unlock()
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance space set level B1"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "space guidance updated") })
+	if got := cl.guidance["space:polish"]; got != "level B1" {
+		t.Fatalf("space guidance = %q", got)
+	}
+
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance global show"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "answer in Polish 🐻") })
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance global clear"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "global guidance cleared") })
+	bot.handleMessage(ctx, Message{ChatID: 7, UserID: 42, Text: "/guidance global clear"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "global guidance unchanged") })
 }
 
 // streamQuestion scripts a run that parks an ask_user question, waits for the answer

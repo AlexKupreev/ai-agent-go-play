@@ -11,6 +11,7 @@ import (
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/guidance"
 )
 
 // runRemoteChat is `agent chat --addr`: a REPL that drives a running engine's
@@ -48,7 +49,7 @@ func runRemoteChat(addr string) error {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
 	fmt.Fprintf(os.Stderr, "model %s, tier %s, space %s\n", modelLabel(curModel), tierLabel(curTier), spaceLabel(curSpace))
-	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] & /space [name] switch for the session, /end close, /purge delete for good, /exit or Ctrl-D detach)")
+	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] & /space [name] switch, /guidance manages standing instructions, /end close, /purge delete for good, /exit or Ctrl-D detach)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -103,6 +104,19 @@ func runRemoteChat(addr string) error {
 			}
 			curTier = info.Tier
 			fmt.Fprintf(os.Stderr, "(tier set to %s — effective next turn; clamped to the serve ceiling)\n", tierLabel(curTier))
+			continue
+		}
+		if arg, ok := strings.CutPrefix(line, "/guidance"); ok && (arg == "" || strings.ContainsAny(arg[:1], " \t")) {
+			result, err := applyRemoteGuidance(ctx, c, strings.TrimSpace(arg), curSpace, sessionID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "/guidance: %v\n", err)
+				continue
+			}
+			message := guidance.FormatResult(result)
+			if result.Changed {
+				message += " — effective from your next message"
+			}
+			fmt.Fprintln(os.Stderr, message)
 			continue
 		}
 		// /space [name] switches the session's active space (spaces.md §5): the name or id

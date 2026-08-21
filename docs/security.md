@@ -130,11 +130,14 @@ self-extension reviewable. `capability_denied` means policy refused the operatio
   file as empty without creating it. `Recorders` fans one event to several sinks. A richer store
   (SQLite) can implement the interfaces later without touching callers.
 - Event types: `capability_exercised`, `capability_failed`, `capability_denied`, `tool_authored`,
-  `tool_revoked`, `memory_write`, `run_usage` (per-run token spend —
+  `tool_revoked`, `memory_write`, `guidance_updated`, `run_usage` (per-run token spend —
   [`usage.md`](usage.md#token-usage)), and `session_purged` (irreversible session deletion —
   [`usage.md`](usage.md#conversations-over-the-api-sessions)). Failed events carry a stable
   `error_class` and, for an HTTP response failure, its numeric `status`; they do not carry raw
   error text that could include a URL or secret.
+- `guidance_updated` is body-redacted: it records the scope, previous/resulting Unicode-character
+  counts and SHA-256 hashes, plus a non-sensitive space/session id where applicable. Direct disk
+  edits bypass the managed-write audit path.
 - **Audit-write failures are surfaced** to stderr, never dropped silently — an unserializable or
   unwritable audit record is treated as a bug, because the log *is* the security record.
 - **Reviewable locally and over the API:** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
@@ -250,6 +253,21 @@ explicit fallback rule.
 highest-leverage reduction of injection leverage. The durable control remains the deployment dial
 (see top).
 
+### Standing guidance cannot remove kernel controls
+
+Workspace, active-space, and session guidance are trusted user instructions appended after the
+operator prompt layers. They are always loaded, including at `safe` and with
+`--no-context-files`, but they remain below the host's enforcement boundaries: guidance cannot
+change the capability broker, loosen the effective tier, grant a sandbox capability, or remove the
+executor's immutable runtime and untrusted-content blocks. Each scope is independently capped at
+4,000 Unicode characters to bound its always-on prompt cost.
+
+This is a composition guarantee, not instruction-level isolation. Later guidance is deliberately
+more specific and may contradict an operator preference that is not a kernel rule; the model still
+has to reconcile ordinary instructions. See
+[`usage.md`](usage.md#guidance--standing-user-instructions) for the exact ordering and current
+management surface.
+
 ---
 
 ## 6. Tool-authoring gate (`author_tool`)
@@ -335,6 +353,7 @@ restriction — the flag is the placeholder until then.
 | `call_tool` → `shell` transitive escape | Trusted/Exposed + direct-name gate | `capability/broker.go` |
 | Prompt injection via web content | Untrusted-content framing + prompt rule | `tools/untrusted.go`, `agent/agent.go` |
 | Prompt customization silently dropping the injection rule or the runtime limits | Kernel prompt blocks re-attached over any override | `agent/agent.go` (`kernelPromptBlocks`) |
+| User guidance removes host security controls | Immutable prompt blocks + host-enforced tier/broker; independent size caps | `cmd/guidance.go`, `internal/guidance` |
 | Unauthenticated engine reachable from the network | Loopback bind guard + explicit `--unsafe-public` | `cmd/serve.go` (`checkBindAddr`) |
 | Agent silently gaining new capability | `author_tool` gate (validate→approve→test→audit) | `tools/authortool.go` |
 | Unattended capability over-reach | Tier dial (`Tier.AutoApproves`) | `capability/capability.go` |

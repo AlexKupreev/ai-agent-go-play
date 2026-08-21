@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/session"
 )
 
@@ -103,6 +104,8 @@ type Client interface {
 	CloseSession(ctx context.Context, sessionID string) error
 	PurgeSession(ctx context.Context, sessionID string) error
 	UpdateSession(ctx context.Context, sessionID string, model, tier, space *string) (session.Info, error)
+	GetGuidance(ctx context.Context, scope guidance.Scope, target string) (api.GuidanceDocument, error)
+	SetGuidance(ctx context.Context, scope guidance.Scope, target, text string) (api.GuidanceDocument, error)
 	UploadFile(ctx context.Context, sessionID, name, source string, r io.Reader) (api.UploadInfo, error)
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
@@ -119,7 +122,8 @@ type Client interface {
 // about it (handleUpload), so the agent reads it with its own tools.
 // /new (alias /reset) starts a fresh session, /end terminates (archives) the current one,
 // /purge deletes it for good (behind a confirmation button), /model and /space switch the
-// session's model and data context, and /reload re-reads the engine's prompt files +
+// session's model and data context, /guidance manages its standing instruction layers, and
+// /reload re-reads the engine's prompt files +
 // agent-type catalog (effective from the next turn). /start is onboarding only. The /new +
 // /reset + /end + /purge + /model + /space verbs match the CLI chat REPL.
 //
@@ -316,6 +320,7 @@ const helpText = "Send me a message and I'll work on it; send a file and I'll wo
 	"/purge — delete this session for good (asks first)\n" +
 	"/model <id> — switch model (bare: show it, -: engine default)\n" +
 	"/space <name> — switch data context (-: the global scope)\n" +
+	"/guidance <global|space|session> <show|set|add|clear> [text]\n" +
 	"/reload — re-read prompts and agent types"
 
 // handleCommand handles the chat control commands: /start explains the bot, /new (alias
@@ -411,6 +416,53 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		} else {
 			b.notify(ctx, m.ChatID, "space set to "+info.Space+" — effective from your next message")
 		}
+	case "/guidance":
+		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/guidance"))
+		command, err := guidance.ParseCommand(arg)
+		if err != nil {
+			b.notify(ctx, m.ChatID, err.Error())
+			return
+		}
+		target := ""
+		if command.Scope == guidance.ScopeSpace || command.Scope == guidance.ScopeSession {
+			sessionID, err := b.sessionFor(ctx, m.ChatID)
+			if err != nil {
+				b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
+				return
+			}
+			target = sessionID
+			if command.Scope == guidance.ScopeSpace {
+				info, err := b.client.UpdateSession(ctx, sessionID, nil, nil, nil)
+				if err != nil {
+					b.notify(ctx, m.ChatID, "read active space failed: "+err.Error())
+					return
+				}
+				if info.Space == "" {
+					b.notify(ctx, m.ChatID, "no space is active; use /space <name> first")
+					return
+				}
+				target = info.Space
+			}
+		}
+		result, err := guidance.ApplyCommand(command,
+			func(scope guidance.Scope) (string, error) {
+				doc, err := b.client.GetGuidance(ctx, scope, target)
+				return doc.Guidance, err
+			},
+			func(scope guidance.Scope, text string) error {
+				_, err := b.client.SetGuidance(ctx, scope, target, text)
+				return err
+			},
+		)
+		if err != nil {
+			b.notify(ctx, m.ChatID, "guidance update failed: "+err.Error())
+			return
+		}
+		message := guidance.FormatResult(result)
+		if result.Changed {
+			message += " — effective from your next message"
+		}
+		b.notify(ctx, m.ChatID, message)
 	case "/model":
 		// Switch this chat's session to another model, mirroring the CLI REPL's /model:
 		// `/model <id>` sets it, `/model -` drops back to the engine default, bare /model

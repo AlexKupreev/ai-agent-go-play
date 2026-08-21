@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/tools"
 )
 
@@ -56,6 +57,16 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 		if e.UploadsEnabled() {
 			mux.HandleFunc("POST /sessions/{id}/files", handleUploadFile(e))
 		}
+	}
+	if e.GuidanceEnabled() {
+		noTarget := func(*http.Request) string { return "" }
+		pathTarget := func(r *http.Request) string { return r.PathValue("id") }
+		mux.HandleFunc("GET /guidance/global", guidanceHandler(e, guidance.ScopeGlobal, noTarget, false))
+		mux.HandleFunc("PUT /guidance/global", guidanceHandler(e, guidance.ScopeGlobal, noTarget, true))
+		mux.HandleFunc("GET /spaces/{id}/guidance", guidanceHandler(e, guidance.ScopeSpace, pathTarget, false))
+		mux.HandleFunc("PUT /spaces/{id}/guidance", guidanceHandler(e, guidance.ScopeSpace, pathTarget, true))
+		mux.HandleFunc("GET /sessions/{id}/guidance", guidanceHandler(e, guidance.ScopeSession, pathTarget, false))
+		mux.HandleFunc("PUT /sessions/{id}/guidance", guidanceHandler(e, guidance.ScopeSession, pathTarget, true))
 	}
 	return mux
 }

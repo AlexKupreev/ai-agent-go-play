@@ -17,6 +17,7 @@ is the *how*.
 - [Self-authored tools](#self-authored-tools)
 - [Scraping JS-rendered and bot-walled pages (`scrape`)](#scraping-js-rendered-and-bot-walled-pages-scrape)
 - [Using an external API (secrets)](#using-an-external-api-secrets)
+- [Guidance — standing user instructions](#guidance--standing-user-instructions)
 - [Long-term memory](#long-term-memory)
 - [Spaces — switchable data contexts](#spaces--switchable-data-contexts)
 - [Self-documentation](#self-documentation)
@@ -125,6 +126,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
 | `agent audit` | Browse the local audit log; add `--addr` to query a running engine. |
 | `agent session list\|purge\|restore` | Manage a running engine's persistent conversations: list resumable ones, purge one irreversibly (`-y` skips the confirm), or restore a closed (archived) one. |
+| `agent guidance global\|space <target>\|session <target> show\|set\|add\|clear` | Manage standing guidance on a running engine (`--addr` accepts an engine alias). |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
 | `agent tool revoke <name>` | Remove an authored tool. |
@@ -184,8 +186,9 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   the working history with it, freeing context (the on-disk transcript is untouched — it only
   shrinks the *live* context; in deliberate mode the last turn is kept verbatim); `/verbose
   [on|off]` toggles the tool-call trace **and** the full brief block (off ⇒ one-line brief
-  summaries); `/reload` re-reads the prompt files
-  and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
+  summaries); `/guidance global|space|session show|set|add|clear [text]` manages the three
+  guidance layers (`space` uses the active space; local `session` lasts for this REPL); `/reload`
+  re-reads the prompt files and agent-type catalog (in the default deliberate mode prompts are re-read every turn, so
   `/reload` is a no-op there; in `--no-plan` it rebuilds the executor *without losing the
   conversation* — a malformed file is reported and the current setup kept); `/exit` (or
   Ctrl-D) quits. **Ctrl-C** cancels the *current* turn and returns you to the prompt.
@@ -210,8 +213,10 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
   one); `/model [id]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
   model / trust tier (no arg prints the current value), effective from the next turn; `/space
   [name]` shows or switches the session's sticky [space](#spaces--switchable-data-contexts)
-  (`/space -` returns to the global scope), effective from the next turn; `/end` closes
-  (archives) the current session and `/purge` deletes it for good; `/exit` (or Ctrl-D) **detaches**
+  (`/space -` returns to the global scope), effective from the next turn; `/guidance
+  global|space|session show|set|add|clear [text]` manages durable guidance (`space` uses the
+  session's active space); `/end` closes (archives) the current session and `/purge` deletes it for
+  good; `/exit` (or Ctrl-D) **detaches**
   and leaves it resumable (the resume command
   is printed on exit). **Ctrl-C** cancels the current turn (stopping the remote run) and returns you
   to the prompt.
@@ -588,6 +593,57 @@ the deployed machine lists the name tagged `(env)`. See
 
 ---
 
+## Guidance — standing user instructions
+
+Guidance is persistent, user-owned text added to every executor prompt. It is for preferences and
+instructions such as "answer in Polish", "prefer concise explanations", or the current goals for
+one context. It is deliberately separate from operator-owned `SYSTEM.md` / `AGENTS.md`: changing or
+clearing guidance does not edit those files, and guidance cannot remove the immutable runtime and
+untrusted-content rules described in [`security.md`](security.md#5-untrusted-content-framing-prompt-injection-defense).
+
+The three scopes layer from broadest to most specific:
+
+| Scope | Stored at | Applies to | Current management surface |
+| --- | --- | --- | --- |
+| **Workspace** (global) | `<workspace>/.agent/guidance.md` | Every executor in that workspace | `/guidance global …`; `agent guidance global …`; `GET`/`PUT /guidance/global`; direct file edits also work. |
+| **Active space** | `<workspace>/.agent/spaces/<id>/space.json` (`guidance`) | Turns using that space | `/guidance space …`; `agent guidance space <id-or-name> …`; `GET`/`PUT /spaces/{id}/guidance`; agent tools `space_guidance` / `update_space_guidance`. |
+| **Session** | `<config-dir>/sessions/<id>.json` (`guidance`) | That persistent API conversation | `/guidance session …`; `agent guidance session <id> …`; `GET`/`PUT /sessions/{id}/guidance`. |
+
+The effective executor order is operator prompt files, workspace guidance, active-space guidance,
+session guidance, then the current turn. The later scope is more specific context, but all scopes
+remain instructions rather than a security boundary: none can loosen the trust tier, grant a
+capability, or replace kernel prompt blocks. Active-space guidance is also shown to the deliberate
+planner as context; workspace and session guidance are executor-only today.
+
+Each persistent scope has its own **4,000 Unicode-character** limit. The limit counts characters,
+not UTF-8 bytes. Guidance is agent-owned workspace/session state, so it is loaded even on `safe`;
+`--no-context-files` suppresses operator prompt files and agent types, **not guidance**. Workspace
+guidance is read whenever an executor is built (each `run`, `eval` variant, `prompts show`, and each
+`serve` turn); editing it needs no `/reload`. `agent prompts show` includes workspace guidance, but
+has no active space or session from which to load the other two scopes.
+
+Managed changes emit a redacted `guidance_updated` audit event containing the scope, previous and
+resulting character counts and SHA-256 hashes—not the guidance body. A space update also identifies
+the space; a session update identifies the session. Editing persistence files directly naturally
+bypasses that managed-write audit path.
+
+All chat frontends use the same deterministic grammar:
+
+```text
+/guidance [global|space|session] show
+/guidance <scope> set <text>
+/guidance <scope> add <text>
+/guidance <scope> clear
+```
+
+`add` inserts a newline before the added text. `clear` succeeds when the scope is already empty;
+partial removal in v1 is `show` followed by `set` with the revised text. In chat, `space` means the
+active space and errors if none is active; `session` means the current conversation. The standalone
+management client makes non-global targets explicit, for example `agent guidance space polish show`
+or `agent guidance session <id> set "be concise"`, and accepts `--addr` like other engine clients.
+
+---
+
 ## Long-term memory
 
 The agent has `remember` / `recall` built-ins backed by a persistent store at
@@ -732,8 +788,8 @@ effects to their per-run transcripts (and `run` appends its `run_usage` to the p
 
 Everything effectful is recorded to an append-only audit log: capability use
 (`capability_exercised` / `capability_failed` / `capability_denied`), tool authoring/revocation
-(`tool_authored` / `tool_revoked`), memory writes (`memory_write`), and per-run token
-usage (`run_usage` — see [Token usage](#token-usage)).
+(`tool_authored` / `tool_revoked`), memory writes (`memory_write`), redacted guidance changes
+(`guidance_updated`), and per-run token usage (`run_usage` — see [Token usage](#token-usage)).
 
 There is **one process-wide log** at `~/.config/ai-agent/audit.jsonl` (or the selected
 `--config-dir`). `agent audit` reads that file directly by default, with no running engine needed:
@@ -897,7 +953,9 @@ automatically on your first message), **`/model <id>`** switches the session's m
 /sessions/{id}`), **`/reload`** re-reads the engine's prompt files + agent-type catalog
 (effective from your next message — the same management action as `agent reload`, gated by the
 bot's allowlist), and **`/start`** prints this list plus whether a session is running. The
-`/new` + `/reset` + `/end` + `/purge` + `/model` + `/space` verbs match the CLI chat REPL. It
+**`/guidance global|space|session show|set|add|clear`** command manages the same standing guidance
+as the CLI/API. The `/new` + `/reset` + `/end` + `/purge` + `/model` + `/space` + `/guidance` verbs
+match the CLI chat REPL. It
 is **entirely optional**: with no token set, the engine runs exactly as normal.
 
 A model id is **not** validated when you set it — an unknown one fails the next turn with the

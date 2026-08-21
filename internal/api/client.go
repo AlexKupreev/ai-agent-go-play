@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/session"
 )
 
@@ -301,6 +302,48 @@ func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tie
 	var out session.Info
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return session.Info{}, err
+	}
+	return out, nil
+}
+
+// GetGuidance reads one explicit guidance scope. target is required for space/session
+// and ignored for global guidance.
+func (c *Client) GetGuidance(ctx context.Context, scope guidance.Scope, target string) (GuidanceDocument, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, guidancePathFor(scope, target), nil)
+	if err != nil {
+		return GuidanceDocument{}, err
+	}
+	return c.doGuidance(req, scope, target)
+}
+
+// SetGuidance replaces one explicit guidance scope. An empty value is an idempotent clear.
+func (c *Client) SetGuidance(ctx context.Context, scope guidance.Scope, target, text string) (GuidanceDocument, error) {
+	body, _ := json.Marshal(putGuidanceRequest{Guidance: text})
+	req, err := c.newRequest(ctx, http.MethodPut, guidancePathFor(scope, target), bytes.NewReader(body))
+	if err != nil {
+		return GuidanceDocument{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.doGuidance(req, scope, target)
+}
+
+func (c *Client) doGuidance(req *http.Request, scope guidance.Scope, target string) (GuidanceDocument, error) {
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return GuidanceDocument{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return GuidanceDocument{}, fmt.Errorf("%s guidance %q: %s", scope, target, message)
+	}
+	var out GuidanceDocument
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return GuidanceDocument{}, err
 	}
 	return out, nil
 }

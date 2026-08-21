@@ -177,6 +177,12 @@ var serveCmd = &cobra.Command{
 		// has no notion of the spaces directory, so it takes this resolver as a seam over
 		// the store built above.
 		engine.SetSpaceResolver(spaceResolver(spaces))
+		engine.SetGuidanceService(&guidanceService{
+			workspace: deps.workspaceGuidance,
+			spaces:    spaces,
+			sessions:  sessions,
+			rec:       rec,
+		})
 		// Persist each finished run's metadata as info.json next to its transcript, so a run's
 		// status survives eviction (maxFinishedRuns) and a restart (GET /runs/{id} then reads
 		// it back). Best-effort — skipped if the runs dir can't be resolved.

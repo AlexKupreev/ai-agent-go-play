@@ -12,6 +12,7 @@ import (
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/provider"
 	"ai-agent-go-play/internal/session"
 	"ai-agent-go-play/internal/usage"
@@ -194,6 +195,10 @@ type Engine struct {
 	// cmd. Nil (tests, an embedder with no space store) skips validation and stores the
 	// requested value verbatim, as before. Optional.
 	resolveSpace SpaceResolver
+
+	// guidance, when set, exposes explicit global/space/session guidance management.
+	// It is independent from ordinary turn requests, which never accept guidance text.
+	guidance GuidanceService
 }
 
 // SpaceResolver maps a requested space — an id or a display name — to the canonical space
@@ -244,6 +249,50 @@ func (e *Engine) SetRunStore(rs RunStore) { e.runStore = rs }
 // is rejected by StartSession/UpdateSession instead of failing the next turn. Optional; see
 // SpaceResolver.
 func (e *Engine) SetSpaceResolver(fn SpaceResolver) { e.resolveSpace = fn }
+
+// SetGuidanceService installs the explicit guidance management seam.
+func (e *Engine) SetGuidanceService(service GuidanceService) { e.guidance = service }
+
+// GuidanceEnabled reports whether guidance management routes should be served.
+func (e *Engine) GuidanceEnabled() bool { return e.guidance != nil }
+
+// GetGuidance and SetGuidance proxy the injected service. Session guidance shares the
+// per-session turn lock so an update cannot be lost beneath a concurrent history save.
+func (e *Engine) GetGuidance(scope guidance.Scope, target string) (string, error) {
+	if e.guidance == nil {
+		return "", errors.New("guidance management is not enabled")
+	}
+	if scope == guidance.ScopeSession {
+		if e.sessions == nil {
+			return "", ErrSessionsDisabled
+		}
+		if _, err := e.sessions.Get(target); err != nil {
+			return "", err
+		}
+		lock := e.sessionLock(target)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	return e.guidance.GetGuidance(scope, target)
+}
+
+func (e *Engine) SetGuidance(scope guidance.Scope, target, text string) error {
+	if e.guidance == nil {
+		return errors.New("guidance management is not enabled")
+	}
+	if scope == guidance.ScopeSession {
+		if e.sessions == nil {
+			return ErrSessionsDisabled
+		}
+		if _, err := e.sessions.Get(target); err != nil {
+			return err
+		}
+		lock := e.sessionLock(target)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	return e.guidance.SetGuidance(scope, target, text)
+}
 
 // SetMaxFinishedRuns tunes how many finished runs the engine retains in memory (a positive n;
 // non-positive is ignored, keeping the default). Lets a small box run a tighter cap without a

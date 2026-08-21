@@ -256,14 +256,17 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after the durable R2 guidance primitives shipped. Replace this section when
-the next slice starts; it is a pointer, not a log.*
+*Updated 2026-08-21 after the guidance management surface shipped. Replace this section when the
+next slice is selected; it is a pointer, not a log.*
 
-**Next slice: expose the guidance services and deterministic command/API surface.** The durable
-layers are now in place: `<workspace>/.agent/guidance.md`, active-space guidance, and
+**Completed slice: guidance services and deterministic command/API surface.** The durable layers
+and their management surface are now in place: `<workspace>/.agent/guidance.md`, active-space
+guidance, and
 `Session.Guidance` are independently capped at 4,000 Unicode characters and compose into executor
-prompts in that order. The desired surfaces are specified in
-[`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). Start from these
+prompts in that order. Local/remote chat and Telegram share `/guidance
+global|space|session show|set|add|clear`; the standalone `agent guidance` client and explicit
+`GET`/`PUT` management endpoints cover out-of-band use. The design is specified in
+[`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). Current
 implementation facts:
 
 - `internal/guidance.FileStore` is the narrow global/workspace `Get`/`Set` seam. Empty writes remove
@@ -278,12 +281,12 @@ implementation facts:
 - `withGuidance` owns executor precedence: operator appends, workspace guidance, space guidance, then
   session guidance. Workspace guidance is read for every new executor, including one-shot run,
   local chat, serve, eval, and prompt inspection.
-- Keep transport out of the stores: expose narrow workspace/space/session guidance services in the
+- Transport stays out of the stores: narrow workspace/space/session guidance services in the
   API layer, following the existing injected `RunStore`, `FileStore`, and `SpaceResolver` seams.
   Treat an empty write as an idempotent clear: remove the workspace guidance file, omit empty
   session guidance, or save empty space guidance. Audit changed state as scope + previous/resulting
   size/hash, never the guidance body; do not emit a duplicate update for an already-empty scope.
-- Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote chat,
+- `/guidance` global/space/session show/set/add/clear is consistent across local chat, remote chat,
   Telegram, and the CLI/API. Partial removal in v1 is show + set with revised text, not substring
   matching.
 

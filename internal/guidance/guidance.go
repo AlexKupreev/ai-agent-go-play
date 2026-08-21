@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
@@ -19,6 +20,136 @@ import (
 // MaxChars is the independent limit for each persistent guidance scope. Character
 // counts are Unicode code points, not UTF-8 bytes, matching what the UI reports.
 const MaxChars = 4000
+
+// Scope names the three durable guidance layers, from broadest to most specific.
+type Scope string
+
+const (
+	ScopeGlobal  Scope = "global"
+	ScopeSpace   Scope = "space"
+	ScopeSession Scope = "session"
+)
+
+// ParseScope validates a user/API-facing scope name.
+func ParseScope(value string) (Scope, error) {
+	scope := Scope(strings.ToLower(strings.TrimSpace(value)))
+	switch scope {
+	case ScopeGlobal, ScopeSpace, ScopeSession:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("unknown guidance scope %q (want global, space, or session)", value)
+	}
+}
+
+// Command is the transport-neutral form of a /guidance command.
+type Command struct {
+	Scope Scope
+	Op    string
+	Text  string
+}
+
+// ParseCommand parses "<scope> show|set|add|clear [text]" without losing spaces in
+// the guidance body. The leading /guidance word is intentionally not part of input.
+func ParseCommand(input string) (Command, error) {
+	scopeWord, rest := cutWord(input)
+	scope, err := ParseScope(scopeWord)
+	if err != nil {
+		if scopeWord == "" {
+			return Command{}, fmt.Errorf("usage: /guidance global|space|session show|set|add|clear [text]")
+		}
+		return Command{}, err
+	}
+	op, text := cutWord(rest)
+	op = strings.ToLower(op)
+	switch op {
+	case "show", "clear":
+		if text != "" {
+			return Command{}, fmt.Errorf("/guidance %s %s does not take text", scope, op)
+		}
+	case "set", "add":
+		if text == "" {
+			return Command{}, fmt.Errorf("usage: /guidance %s %s <text>", scope, op)
+		}
+	default:
+		return Command{}, fmt.Errorf("usage: /guidance %s show|set|add|clear [text]", scope)
+	}
+	return Command{Scope: scope, Op: op, Text: text}, nil
+}
+
+func cutWord(input string) (string, string) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", ""
+	}
+	if at := strings.IndexAny(input, " \t\r\n"); at >= 0 {
+		return input[:at], strings.TrimSpace(input[at:])
+	}
+	return input, ""
+}
+
+// CommandResult is returned by ApplyCommand. Guidance is populated only for show;
+// mutation acknowledgements therefore cannot accidentally echo the body.
+type CommandResult struct {
+	Scope    Scope
+	Op       string
+	Guidance string
+	Chars    int
+	Changed  bool
+}
+
+// ApplyCommand executes a parsed command against context-resolved read/write functions.
+// Add places a newline between existing and appended guidance. Clear is idempotent.
+func ApplyCommand(cmd Command, get func(Scope) (string, error), set func(Scope, string) error) (CommandResult, error) {
+	previous, err := get(cmd.Scope)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	result := CommandResult{Scope: cmd.Scope, Op: cmd.Op, Chars: CharCount(previous)}
+	if cmd.Op == "show" {
+		result.Guidance = previous
+		return result, nil
+	}
+
+	next := cmd.Text
+	switch cmd.Op {
+	case "add":
+		if previous != "" {
+			next = previous + "\n" + cmd.Text
+		}
+	case "clear":
+		next = ""
+	}
+	if err := Validate(next); err != nil {
+		return CommandResult{}, err
+	}
+	result.Chars = CharCount(next)
+	result.Changed = previous != next
+	if !result.Changed {
+		return result, nil
+	}
+	if err := set(cmd.Scope, next); err != nil {
+		return CommandResult{}, err
+	}
+	return result, nil
+}
+
+// FormatResult renders the common human-facing response used by CLI and chat frontends.
+func FormatResult(result CommandResult) string {
+	label := string(result.Scope) + " guidance"
+	if result.Op == "show" {
+		if result.Guidance == "" {
+			return fmt.Sprintf("%s is empty (0/%d chars)", label, MaxChars)
+		}
+		return fmt.Sprintf("%s (%d/%d chars):\n\n%s", label, result.Chars, MaxChars, result.Guidance)
+	}
+	if !result.Changed {
+		return fmt.Sprintf("%s unchanged (%d/%d chars)", label, result.Chars, MaxChars)
+	}
+	if result.Op == "clear" {
+		return fmt.Sprintf("%s cleared (0/%d chars)", label, MaxChars)
+	}
+	return fmt.Sprintf("%s updated (%d/%d chars)", label, result.Chars, MaxChars)
+}
 
 // CharCount returns the size used for guidance limits and user-facing metadata.
 func CharCount(text string) int { return utf8.RuneCountInString(text) }

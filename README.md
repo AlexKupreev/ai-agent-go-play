@@ -97,6 +97,13 @@ set-engine home 127.0.0.1:8081` → `agent client --addr home "…"`).
 chat`, `agent reload --addr` against a running engine), and compare configurations with `agent
 eval <task> --models …` / `--variants file.yaml`.
 
+For user-owned standing instructions, use **guidance** instead of operator prompt files. Guidance
+layers from workspace → active space → persistent session; each scope is capped at 4,000 Unicode
+characters and cannot remove the agent's security/runtime prompt blocks. Manage it with the uniform
+`/guidance global|space|session show|set|add|clear` command in chat/Telegram, `agent guidance`, or
+the explicit management API.
+See [`docs/usage.md`](docs/usage.md#guidance--standing-user-instructions).
+
 The full command list, trust tiers, approvals, authored tools, memory, audit log, running multiple
 agents, and the optional Telegram frontend are documented in **[`docs/usage.md`](docs/usage.md)**.
 

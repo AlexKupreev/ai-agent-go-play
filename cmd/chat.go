@@ -15,6 +15,7 @@ import (
 	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
@@ -52,7 +53,8 @@ var chatCmd = &cobra.Command{
 		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
 		"[safe|balanced|permissive] show or switch the model/tier for the session, /space " +
 		"[name|list|-] shows or switches the active space (a named memory context with its own " +
-		"always-loaded guidance), /compact " +
+		"always-loaded guidance), /guidance global|space|session show|set|add|clear manages " +
+		"standing instructions, /compact " +
 		"summarizes the conversation so far to free context, /verbose [on|off] toggles the " +
 		"trace and the full planner brief (off shows a one-line brief summary), /exit (or " +
 		"Ctrl-D) quits.\n" +
@@ -170,6 +172,8 @@ var chatCmd = &cobra.Command{
 		usage := agent.NewUsageObserver()
 		trace := agent.NewGatedObserver(agent.NewCLIObserver(os.Stderr), resolveVerbose(cmd, cfg))
 		obs := agent.Observers{agent.NewLoggerObserver(log), trace, usage}
+		globalGuidance := workspaceGuidanceStore(workDir, rec)
+		sessionGuidance := ""
 
 		// buildExecutor reads the prompt files + agent-type catalog from disk and builds a
 		// fresh executor over the shared, session-stable deps (provider, transcript, catalog,
@@ -183,7 +187,7 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return nil, err
 			}
-			workspaceGuidance, err := workspaceGuidanceStore(workDir, nil).Get()
+			workspaceGuidance, err := globalGuidance.Get()
 			if err != nil {
 				return nil, fmt.Errorf("load workspace guidance: %w", err)
 			}
@@ -202,7 +206,7 @@ var chatCmd = &cobra.Command{
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 				Usage: tools.UsageContext{}, AuditReader: centralReader,
-				SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceGuidance, ""),
+				SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceGuidance, sessionGuidance),
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				Space: tools.SpaceContext{Store: spaces, ActiveID: activeSpace, Switch: func(id string) error {
 					activeSpace, spaceDirty = id, true
@@ -342,6 +346,23 @@ var chatCmd = &cobra.Command{
 				}
 				tier = t
 				applyConfigChange("tier set to " + string(t))
+				continue
+			}
+			// /guidance uses one grammar across local chat, remote chat, Telegram, and
+			// the standalone management command. Space means this REPL's active space;
+			// session is temporary guidance for this in-process conversation.
+			if arg, ok := strings.CutPrefix(line, "/guidance"); ok && (arg == "" || strings.ContainsAny(arg[:1], " \t")) {
+				result, err := applyLocalGuidance(strings.TrimSpace(arg), globalGuidance, spaces, activeSpace, &sessionGuidance, rec, log.RunID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "/guidance: %v\n", err)
+					continue
+				}
+				message := guidance.FormatResult(result)
+				if result.Changed {
+					applyConfigChange(message)
+				} else {
+					fmt.Fprintln(os.Stderr, message)
+				}
 				continue
 			}
 			// /space manages the active space (spaces.md §5): no arg shows the current one,
