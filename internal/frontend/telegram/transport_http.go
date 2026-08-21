@@ -2,9 +2,11 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -137,8 +139,23 @@ func (t *httpTransport) Download(ctx context.Context, fileID string) (io.ReadClo
 	return resp.Body, nil
 }
 
-// Send posts a message, attaching a single inline-keyboard row when buttons are given.
-func (t *httpTransport) Send(_ context.Context, chatID int64, text string, buttons []Button) error {
+// sendAttempts bounds how many times one message is posted before its failure is returned.
+// Only flood control is retried (retryAfter), and Telegram says how long to wait, so a small
+// number is enough: three attempts survive a burst without letting a chat's output stall for
+// minutes behind a limit that is not going to lift.
+const sendAttempts = 3
+
+// maxRetryAfter caps how long a flood-control hint is honored. Telegram's hint is normally a
+// few seconds; a far larger one means the chat is rate-limited beyond what a turn should wait
+// out, and returning the error is more useful than blocking the run's remaining output.
+const maxRetryAfter = 30 * time.Second
+
+// Send posts a message, attaching a single inline-keyboard row when buttons are given, and
+// retries flood control with the delay Telegram asks for. The retry lives here because
+// chunking (render.go) turns one long answer into several messages posted back to back,
+// which is exactly what trips per-chat flood control — and a 429 is the one send failure that
+// is expected to succeed unchanged a moment later.
+func (t *httpTransport) Send(ctx context.Context, chatID int64, text string, buttons []Button) error {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if len(buttons) > 0 {
 		row := make([]tgbotapi.InlineKeyboardButton, len(buttons))
@@ -147,8 +164,41 @@ func (t *httpTransport) Send(_ context.Context, chatID int64, text string, butto
 		}
 		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(row)
 	}
-	_, err := t.bot.Send(msg)
-	return err
+	for attempt := 1; ; attempt++ {
+		_, err := t.bot.Send(msg)
+		if err == nil {
+			return nil
+		}
+		wait, retry := retryAfter(err)
+		if !retry || attempt == sendAttempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// retryAfter reports whether err is Telegram's flood-control response and how long it asks
+// the bot to wait. Every other API failure — a blocked bot, a chat that no longer exists, a
+// message Telegram refuses — is permanent: retrying it would only delay the error the caller
+// needs to see. A 429 with no usable hint still gets a short default rather than an immediate
+// re-post, which would just be refused again.
+func retryAfter(err error) (time.Duration, bool) {
+	var apiErr *tgbotapi.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusTooManyRequests {
+		return 0, false
+	}
+	wait := time.Duration(apiErr.RetryAfter) * time.Second
+	if wait <= 0 {
+		wait = time.Second
+	}
+	if wait > maxRetryAfter {
+		return 0, false
+	}
+	return wait, true
 }
 
 // Answer acknowledges a callback (button press) with a short toast.

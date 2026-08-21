@@ -901,6 +901,22 @@ optional**: with no token set, the engine runs exactly as normal.
 A model id is **not** validated when you set it — an unknown one fails the next turn with the
 provider's error, and `/model -` gets you back.
 
+### Long answers and delivery failures
+
+Telegram accepts at most **4,096 characters** per message (characters, not bytes — Cyrillic or
+emoji do not count double). A longer answer is split before it is sent, preferring a paragraph
+break, then a line break, then a word boundary; an Approve/Deny keyboard stays attached to the
+last part, under the request it authorizes. Several messages posted back to back can trip
+Telegram's per-chat flood control, so a rate-limited send is retried a few times with the delay
+Telegram asks for; every other send failure is permanent and is reported rather than retried.
+
+**A failed delivery is not a silent success.** If part of a run's output cannot be delivered —
+the bot was blocked, the chat is gone, Telegram refused the message — the chat gets a
+`⚠️ part of this run's output could not be delivered` notice naming the error, and the failure
+is logged by `serve`. The run itself has still completed on the engine, so its answer is in the
+transcript (`agent audit`, `GET /runs/{id}`) and you can ask the agent to repeat it. Delivery
+status is not yet part of the stored run record.
+
 ### Sending files
 
 Send a file (or a photo) to the chat and it is stored in that session's **scratch directory**,

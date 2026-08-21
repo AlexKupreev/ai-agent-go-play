@@ -8,9 +8,10 @@ close the item here if reality has changed. Reference docs describe shipped beha
 must not be treated as a capability list.
 
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
-credential rotation. Next up is R1's first bullet — Telegram rune-safe chunked delivery with
-propagated send errors. See [Hand-off](#hand-off--next-step) at the end of this file for the trace
-that is already done on it.
+credential rotation. R1 has started: rune-safe chunked Telegram delivery with propagated send
+errors is shipped. Next up is R1's second bullet — `/start`, `/stop`, and the close/purge
+bindings. See [Hand-off](#hand-off--next-step) at the end of this file for the trace that is
+already done on it.
 
 ## How the planning set fits together
 
@@ -73,8 +74,16 @@ do it.*
 
 This is the fix-first slice. Keep changes small and independently shippable.
 
-- [ ] Make Telegram delivery rune-safe and chunked; propagate send failures instead of reporting a
-      successful turn whose answer was not delivered.
+- [x] Make Telegram delivery rune-safe and chunked; propagate send failures instead of reporting a
+      successful turn whose answer was not delivered. **Done 2026-08-21** — all outgoing text goes
+      through one renderer (`internal/frontend/telegram/render.go`): `splitMessage` splits by rune
+      count at 4,096, preferring paragraph → line → word boundaries, `Bot.send` attaches an inline
+      keyboard to the last chunk only and returns the first failure, and `Bot.notify` is the single
+      place where a delivery failure is deliberately only logged. `stream` carries a run's first
+      delivery failure out of the event callback, logs it against the run, and tells the chat what
+      was lost. The live transport retries only flood control (429), honoring Telegram's
+      `retry_after` up to 30s over 3 attempts. Documented in `usage.md` §"Long answers and delivery
+      failures". Persisting delivery status in the run trace remains R6.
 - [ ] Make `/start` onboarding-only; define or remove `/stop`; update close/purge bindings only after
       API success; confirm `/purge`.
 - [ ] Validate a session's space on create/update and include available spaces in the error.
@@ -215,29 +224,41 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after R0's code landed. Replace this section when the next slice starts; it is
-a pointer, not a log.*
+*Written 2026-08-21, after Telegram chunked delivery landed. Replace this section when the next
+slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's first bullet — Telegram delivery.** The spec is
-[`flexible-orchestration.md`](flexible-orchestration.md) §8.2 ("Reliable renderer"). What a trace of
-the current code already shows:
+**Next slice: R1's second bullet — `/start`, `/stop`, close/purge bindings, `/purge`
+confirmation.** The spec is [`flexible-orchestration.md`](flexible-orchestration.md) §8.3
+("Command service"), but take only the four verbs above here — the shared command service itself is
+R3/R6 work and must not be pulled forward. What a trace of the current code already shows:
 
-- `internal/frontend/telegram/telegram.go` has ~30 call sites of the form
-  `_ = b.transport.Send(...)`, including the final-answer path — a send failure is discarded and the
-  turn still reports success. That discard is the bug, not just a style issue.
-- `Transport.Send(ctx, chatID, text, buttons)` (`telegram.go:85`, implemented in
-  `transport_http.go:141`) is the single seam: the chunking renderer belongs above it, and every
-  call site must propagate its error.
-- Telegram's limit is 4,096 **characters**, so splitting must count runes and prefer paragraph then
-  newline boundaries; today nothing splits at all.
-- Buttons attach to the last chunk only (`sendApproval`/`sendQuestion` at `telegram.go:494`/`508`
-  are the current button senders).
-- Deferred to R6, deliberately: persisting delivery status in the run trace. Keep this slice to
-  chunking + error propagation so it stays independently shippable.
+- `handleCommand` (`internal/frontend/telegram/telegram.go`) has `/start` in the same case as
+  `/new` and `/reset`, so a new user's very first `/start` closes (archives) the session they were
+  mid-conversation in. It must become onboarding + help + "a session is active", never destructive.
+- `/stop` shares a case with `/end`, so it silently means "archive the conversation". The spec
+  wants it to be `/cancel` or gone. `api.Client` already has `StopRun(ctx, runID)`, but the bot's
+  `Client` interface does not list it and nothing maps a chat to its in-flight run — `stream` is
+  the only place holding a `runID`. Adding a real `/cancel` therefore needs a chat → active-run
+  binding; removing `/stop` needs none. Decide that first, and note that queue/cancellation
+  modelling proper is R6.
+- `closeChat`/`purgeChat` delete the chat → session mapping *before* calling the engine and only
+  log an API failure to stderr, so a failed close still answers "session ended" and orphans the
+  session. Reorder to call the API first and keep the binding on failure; the reply must say what
+  actually happened. This is the same false-success shape the delivery fix just removed.
+- `/purge` is irreversible and takes effect on the bare word. The spec wants a short-lived
+  confirmation button carrying a server-side nonce, not the session id (the callback data is
+  echoed back by Telegram). `handleCallback`/`parseCallback` currently accept only
+  `approve:<id>` / `deny:<id>`, so this adds a third action and a small nonce store beside
+  `pendingQ`.
 
-Also worth knowing before starting R1:
+Also worth knowing before continuing in R1:
 
-- `cmd/serve.go` now validates `--addr` at the top of `RunE`; anything that adds a second listener
+- All outgoing text now goes through `Bot.send`/`Bot.notify` (`render.go`); `b.transport.Send` has
+  exactly one caller and new code must not add another. A message that is part of a run's result
+  must propagate its error the way `stream` does — `notify` is for acknowledgements only.
+- The fake transport in `telegram_test.go` can now fail selected sends (`sendFail`), which is how
+  the false-success paths in this next slice should be tested.
+- `cmd/serve.go` validates `--addr` at the top of `RunE`; anything that adds a second listener
   should reuse `checkBindAddr` rather than re-deriving the rule.
 - Prompt text is no longer one constant. Anything that appends to the executor prompt should decide
   whether it is a kernel block (`kernelPromptBlocks`) or a style block, and `environment.md`'s

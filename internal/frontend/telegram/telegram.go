@@ -81,7 +81,9 @@ type Transport interface {
 	// Updates returns a channel of inbound updates. It closes when ctx is done or the
 	// transport stops.
 	Updates(ctx context.Context) (<-chan Update, error)
-	// Send posts a message to a chat, optionally with one row of inline buttons.
+	// Send posts one message to a chat, optionally with one row of inline buttons. It is
+	// called only through Bot.send (render.go), which has already split the text into
+	// deliverable chunks — an implementation must not have to think about the size limit.
 	Send(ctx context.Context, chatID int64, text string, buttons []Button) error
 	// Answer acknowledges a callback (button press) with a short toast.
 	Answer(ctx context.Context, callbackID, text string) error
@@ -118,6 +120,10 @@ type Client interface {
 // context, and /reload re-reads the engine's prompt files + agent-type catalog (effective
 // from the next turn). The /new + /reset + /end + /purge + /model + /space verbs match the
 // CLI chat REPL.
+//
+// All outgoing text leaves through Bot.send/Bot.notify (render.go), which chunk it to
+// Telegram's per-message limit and, for a run's output, refuse to let a failed delivery pass
+// for a completed turn.
 type Bot struct {
 	transport Transport
 	client    Client
@@ -178,7 +184,7 @@ func (b *Bot) allow(userID int64) bool { return b.allowed[userID] }
 
 func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	if !b.allow(m.UserID) {
-		_ = b.transport.Send(ctx, m.ChatID, "not authorized", nil)
+		b.notify(ctx, m.ChatID, "not authorized")
 		return
 	}
 	if strings.HasPrefix(m.Text, "/") {
@@ -191,7 +197,7 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	// rather than hanging.
 	if m.File != nil {
 		if b.hasPendingQuestion(m.ChatID) {
-			_ = b.transport.Send(ctx, m.ChatID, "answer the question above first, then send the file", nil)
+			b.notify(ctx, m.ChatID, "answer the question above first, then send the file")
 			return
 		}
 		b.handleUpload(ctx, m)
@@ -202,7 +208,7 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	// deliver it to the still-running turn rather than starting a new one.
 	if qid, ok := b.takePendingQuestion(m.ChatID); ok {
 		if err := b.client.Answer(ctx, qid, m.Text); err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "could not deliver answer: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "could not deliver answer: "+err.Error())
 		}
 		return
 	}
@@ -210,13 +216,13 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	// A normal message is a turn on this chat's session (created on first use).
 	sessionID, err := b.sessionFor(ctx, m.ChatID)
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 		return
 	}
 	// Telegram sets no per-turn model/tier override (it uses the session/engine defaults).
 	runID, err := b.client.PostTurn(ctx, sessionID, m.Text, api.RunOptions{})
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "failed to run turn: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "failed to run turn: "+err.Error())
 		return
 	}
 	// Stream the turn's events back to the chat. It outlives this update, so give the
@@ -236,17 +242,17 @@ const maxUploadBytes = 20 << 20
 // what makes this work for a text-shaped file (CSV, log, source) on a text-only model.
 func (b *Bot) handleUpload(ctx context.Context, m Message) {
 	if m.File.Size > maxUploadBytes {
-		_ = b.transport.Send(ctx, m.ChatID, fmt.Sprintf("that file is too large (%.1f MB; the limit is %d MB)", float64(m.File.Size)/(1<<20), maxUploadBytes>>20), nil)
+		b.notify(ctx, m.ChatID, fmt.Sprintf("that file is too large (%.1f MB; the limit is %d MB)", float64(m.File.Size)/(1<<20), maxUploadBytes>>20))
 		return
 	}
 	sessionID, err := b.sessionFor(ctx, m.ChatID)
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 		return
 	}
 	rc, err := b.transport.Download(ctx, m.File.ID)
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "could not download that file: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "could not download that file: "+err.Error())
 		return
 	}
 	defer rc.Close()
@@ -255,14 +261,14 @@ func (b *Bot) handleUpload(ctx context.Context, m Message) {
 	// name it returns (info.Name) is the one to show and to hand to the agent.
 	info, err := b.client.UploadFile(ctx, sessionID, m.File.Name, "telegram upload", rc)
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "could not save that file: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "could not save that file: "+err.Error())
 		return
 	}
-	_ = b.transport.Send(ctx, m.ChatID, fmt.Sprintf("saved %s (%d bytes) — working on it", info.Name, info.Bytes), nil)
+	b.notify(ctx, m.ChatID, fmt.Sprintf("saved %s (%d bytes) — working on it", info.Name, info.Bytes))
 
 	runID, err := b.client.PostTurn(ctx, sessionID, uploadTurnText(info, m), api.RunOptions{})
 	if err != nil {
-		_ = b.transport.Send(ctx, m.ChatID, "failed to run turn: "+err.Error(), nil)
+		b.notify(ctx, m.ChatID, "failed to run turn: "+err.Error())
 		return
 	}
 	go b.stream(ctx, m.ChatID, runID)
@@ -308,23 +314,23 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 	case "/new", "/start", "/reset":
 		b.closeChat(ctx, m.ChatID) // end any existing session first
 		if _, err := b.sessionFor(ctx, m.ChatID); err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 			return
 		}
-		_ = b.transport.Send(ctx, m.ChatID, "started a new session — send a message to begin", nil)
+		b.notify(ctx, m.ChatID, "started a new session — send a message to begin")
 	case "/end", "/stop":
 		if b.closeChat(ctx, m.ChatID) {
-			_ = b.transport.Send(ctx, m.ChatID, "session ended", nil)
+			b.notify(ctx, m.ChatID, "session ended")
 		} else {
-			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
+			b.notify(ctx, m.ChatID, "no active session")
 		}
 	case "/purge":
 		// Irreversible counterpart to /end: hard-delete this chat's conversation instead of
 		// archiving it. Single-user allowlisted chat, so the command name is the confirmation.
 		if b.purgeChat(ctx, m.ChatID) {
-			_ = b.transport.Send(ctx, m.ChatID, "session purged — permanently deleted", nil)
+			b.notify(ctx, m.ChatID, "session purged — permanently deleted")
 		} else {
-			_ = b.transport.Send(ctx, m.ChatID, "no active session", nil)
+			b.notify(ctx, m.ChatID, "no active session")
 		}
 	case "/reload":
 		// Re-read SYSTEM.md/AGENTS.md and the agents/*.md catalog on the engine. A
@@ -332,10 +338,10 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		// swapped snapshot lands on the next turn of every session, including this
 		// chat's live one (each turn builds a fresh executor from the current snapshot).
 		if err := b.client.Reload(ctx); err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "reload failed: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "reload failed: "+err.Error())
 			return
 		}
-		_ = b.transport.Send(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message", nil)
+		b.notify(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message")
 	case "/space":
 		// Switch this chat's session to a space (a scoped memory context, spaces.md §5),
 		// mirroring the CLI REPL's /space: `/space <name>` switches, `/space -` returns to
@@ -343,12 +349,12 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		// time, so an unknown space fails that turn with a clear error.
 		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/space"))
 		if arg == "" {
-			_ = b.transport.Send(ctx, m.ChatID, "usage: /space <name-or-id> (switch), /space - (back to the global scope)", nil)
+			b.notify(ctx, m.ChatID, "usage: /space <name-or-id> (switch), /space - (back to the global scope)")
 			return
 		}
 		sessionID, err := b.sessionFor(ctx, m.ChatID)
 		if err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 			return
 		}
 		val := space.Slug(arg)
@@ -356,13 +362,13 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 			val = ""
 		}
 		if _, err := b.client.UpdateSession(ctx, sessionID, nil, nil, &val); err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "set space failed: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "set space failed: "+err.Error())
 			return
 		}
 		if val == "" {
-			_ = b.transport.Send(ctx, m.ChatID, "space cleared — back to the global scope from your next message", nil)
+			b.notify(ctx, m.ChatID, "space cleared — back to the global scope from your next message")
 		} else {
-			_ = b.transport.Send(ctx, m.ChatID, "space set to "+val+" — effective from your next message", nil)
+			b.notify(ctx, m.ChatID, "space set to "+val+" — effective from your next message")
 		}
 	case "/model":
 		// Switch this chat's session to another model, mirroring the CLI REPL's /model:
@@ -371,7 +377,7 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		// provider rejects an unknown one on the next turn, loudly.
 		sessionID, err := b.sessionFor(ctx, m.ChatID)
 		if err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "could not start a session: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 			return
 		}
 		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/model"))
@@ -385,19 +391,19 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		}
 		info, err := b.client.UpdateSession(ctx, sessionID, set, nil, nil)
 		if err != nil {
-			_ = b.transport.Send(ctx, m.ChatID, "set model failed: "+err.Error(), nil)
+			b.notify(ctx, m.ChatID, "set model failed: "+err.Error())
 			return
 		}
 		switch {
 		case set == nil:
-			_ = b.transport.Send(ctx, m.ChatID, "model: "+modelLabel(info.Model)+"\nusage: /model <id> (switch), /model - (back to the default)", nil)
+			b.notify(ctx, m.ChatID, "model: "+modelLabel(info.Model)+"\nusage: /model <id> (switch), /model - (back to the default)")
 		case info.Model == "":
-			_ = b.transport.Send(ctx, m.ChatID, "model reset to "+modelLabel("")+" — effective from your next message", nil)
+			b.notify(ctx, m.ChatID, "model reset to "+modelLabel("")+" — effective from your next message")
 		default:
-			_ = b.transport.Send(ctx, m.ChatID, "model set to "+info.Model+" — effective from your next message", nil)
+			b.notify(ctx, m.ChatID, "model set to "+info.Model+" — effective from your next message")
 		}
 	default:
-		_ = b.transport.Send(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /model <id> (switch model), /space <name> (switch data context), /reload (re-read prompts + agent types)", nil)
+		b.notify(ctx, m.ChatID, "commands: /new (or /reset — start a fresh session), /end (terminate it), /purge (delete it for good), /model <id> (switch model), /space <name> (switch data context), /reload (re-read prompts + agent types)")
 	}
 }
 
@@ -455,13 +461,34 @@ func (b *Bot) purgeChat(ctx context.Context, chatID int64) bool {
 }
 
 // stream relays a run's events to a chat until the stream ends.
+//
+// Every send here carries part of the turn's result, so — unlike notify's fire-and-forget
+// acknowledgements — a failure is carried out of the event callback: an answer the user never
+// saw must not leave a turn looking successful. Relaying continues past a failure (one
+// rejected message says nothing about the next), and at the end the first failure is logged
+// against the run and reported to the chat, where a one-line notice stands a much better
+// chance of arriving than the long answer that just failed.
+//
+// Persisting that failure in the run trace, so `/status` or a resume can surface it, is R6's
+// job (docs/planning/roadmap.md); this slice keeps it in the operator log and the chat.
 func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
+	var undelivered error
+	deliver := func(text string, buttons []Button) {
+		if err := b.send(ctx, chatID, text, buttons); err != nil && undelivered == nil {
+			undelivered = err
+		}
+	}
 	err := b.client.StreamEvents(ctx, runID, func(e api.Event) {
 		switch e.Kind {
 		case api.KindApprovalRequested:
-			b.sendApproval(ctx, chatID, e)
+			text, buttons := approvalPrompt(e)
+			deliver(text, buttons)
 		case api.KindQuestionRequested:
-			b.sendQuestion(ctx, chatID, e)
+			// The pending marker is set even when the send fails: the run is genuinely
+			// parked on this question, so the user's next reply is still its answer. The
+			// failure notice below is what tells them a question they never saw is waiting.
+			b.markPendingQuestion(chatID, e.ApprovalID)
+			deliver("❓ "+e.Text+"\n(reply with your answer)", nil)
 		case api.KindQuestionAnswered:
 			// Answered (here or elsewhere) — drop any lingering pending marker for this chat.
 			b.clearPendingQuestion(chatID, e.ApprovalID)
@@ -473,43 +500,47 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 			// distinct from the answer, so the deliberation is legible without drowning the
 			// chat (the full brief stays in the run transcript on the engine).
 			if e.Text != "" {
-				_ = b.transport.Send(ctx, chatID, "🧭 "+api.SummarizeBrief(e.Text), nil)
+				deliver("🧭 "+api.SummarizeBrief(e.Text), nil)
 			}
 		case api.KindError:
-			_ = b.transport.Send(ctx, chatID, "run error: "+e.Text, nil)
+			deliver("run error: "+e.Text, nil)
 		default:
 			// Assistant prose (agent EvResponse) carries Text; forward anything with
 			// visible text, skip the noisier structured events.
 			if e.Text != "" {
-				_ = b.transport.Send(ctx, chatID, e.Text, nil)
+				deliver(e.Text, nil)
 			}
 		}
 	})
 	if err != nil && ctx.Err() == nil {
-		_ = b.transport.Send(ctx, chatID, "stream ended: "+err.Error(), nil)
+		deliver("stream ended: "+err.Error(), nil)
+	}
+	if undelivered != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "telegram: run %s: output not delivered to chat %d: %v\n", runID, chatID, undelivered)
+		b.notify(ctx, chatID, "⚠️ part of this run's output could not be delivered to this chat ("+undelivered.Error()+") — the run itself finished; ask me to repeat the answer")
 	}
 }
 
-// sendApproval renders a parked escalation as an Approve/Deny inline keyboard.
-func (b *Bot) sendApproval(ctx context.Context, chatID int64, e api.Event) {
+// approvalPrompt renders a parked escalation as its message text plus an Approve/Deny
+// inline keyboard. The keyboard lands under the last chunk of a long request (send), so the
+// buttons always sit beneath the command they authorize.
+func approvalPrompt(e api.Event) (string, []Button) {
 	text := fmt.Sprintf("Approval needed — %s: %s", e.Tool, e.Text)
 	if e.Input != "" {
 		text += "\n" + e.Input
 	}
-	buttons := []Button{
+	return text, []Button{
 		{Text: "Approve", Data: "approve:" + e.ApprovalID},
 		{Text: "Deny", Data: "deny:" + e.ApprovalID},
 	}
-	_ = b.transport.Send(ctx, chatID, text, buttons)
 }
 
-// sendQuestion relays a parked ask_user question as a plain prompt and marks it pending
-// for this chat, so the user's next reply is delivered as the answer.
-func (b *Bot) sendQuestion(ctx context.Context, chatID int64, e api.Event) {
+// markPendingQuestion records that a parked ask_user question awaits this chat's reply, so
+// the user's next message is delivered as its answer.
+func (b *Bot) markPendingQuestion(chatID int64, id string) {
 	b.mu.Lock()
-	b.pendingQ[chatID] = e.ApprovalID
-	b.mu.Unlock()
-	_ = b.transport.Send(ctx, chatID, "❓ "+e.Text+"\n(reply with your answer)", nil)
+	defer b.mu.Unlock()
+	b.pendingQ[chatID] = id
 }
 
 // takePendingQuestion returns and clears the chat's pending question id, if any.
@@ -544,23 +575,23 @@ func (b *Bot) clearPendingQuestion(chatID int64, id string) {
 
 func (b *Bot) handleCallback(ctx context.Context, c Callback) {
 	if !b.allow(c.UserID) {
-		_ = b.transport.Answer(ctx, c.ID, "not authorized")
+		b.answerCallback(ctx, c.ID, "not authorized")
 		return
 	}
 	action, id, ok := parseCallback(c.Data)
 	if !ok {
-		_ = b.transport.Answer(ctx, c.ID, "unrecognized action")
+		b.answerCallback(ctx, c.ID, "unrecognized action")
 		return
 	}
 	approved := action == "approve"
 	if err := b.client.Resolve(ctx, id, approved); err != nil {
-		_ = b.transport.Answer(ctx, c.ID, "could not resolve: "+err.Error())
+		b.answerCallback(ctx, c.ID, "could not resolve: "+err.Error())
 		return
 	}
 	if approved {
-		_ = b.transport.Answer(ctx, c.ID, "approved")
+		b.answerCallback(ctx, c.ID, "approved")
 	} else {
-		_ = b.transport.Answer(ctx, c.ID, "denied")
+		b.answerCallback(ctx, c.ID, "denied")
 	}
 }
 

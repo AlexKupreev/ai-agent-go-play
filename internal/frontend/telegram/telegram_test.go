@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
@@ -31,6 +32,7 @@ type fakeTransport struct {
 	answers  []string
 	files    map[string]string // file id -> content served by Download
 	download error             // when set, Download fails with it
+	sendFail func(text string) error
 }
 
 func newFakeTransport() *fakeTransport {
@@ -55,6 +57,11 @@ func (f *fakeTransport) Download(_ context.Context, fileID string) (io.ReadClose
 func (f *fakeTransport) Send(_ context.Context, chatID int64, text string, buttons []Button) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sendFail != nil {
+		if err := f.sendFail(text); err != nil {
+			return err
+		}
+	}
 	f.sent = append(f.sent, sentMessage{chatID, text, buttons})
 	return nil
 }
@@ -114,6 +121,7 @@ type fakeClient struct {
 	// question mode: when set, StreamEvents parks an ask_user question instead of an
 	// approval and waits for an answer delivered via Answer.
 	question     bool
+	answerPrefix string // prepended to the scripted answer, to script an oversized one
 	answeredID   string
 	answeredText string
 	answered     chan string
@@ -234,8 +242,9 @@ func (c *fakeClient) streamQuestion(ctx context.Context, onEvent func(api.Event)
 	select {
 	case ans := <-c.answered:
 		onEvent(api.Event{Kind: api.KindQuestionAnswered, ApprovalID: "q1", Text: ans})
-		onEvent(api.Event{Kind: string(agent.EvResponse), Text: "using " + ans})
-		onEvent(api.Event{Kind: api.KindDone, Text: "using " + ans})
+		answer := c.answerPrefix + "using " + ans
+		onEvent(api.Event{Kind: string(agent.EvResponse), Text: answer})
+		onEvent(api.Event{Kind: api.KindDone, Text: answer})
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -327,6 +336,70 @@ func TestBot_QuestionFlow(t *testing.T) {
 	}
 	if cl.turnCalls != 1 {
 		t.Fatalf("turnCalls = %d, want 1 — the answer must not start a new turn", cl.turnCalls)
+	}
+}
+
+// TestBot_UndeliveredAnswerIsReported pins the R1 fix: when the final answer cannot be
+// delivered, the turn must not end silently as if the user had read it. The bot reports the
+// loss in the chat (a one-line notice is far likelier to get through than the answer that
+// failed) and names the underlying error.
+func TestBot_UndeliveredAnswerIsReported(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	// Only the answer fails; the approval keyboard and the failure notice go through.
+	tr.sendFail = func(text string) error {
+		if text == "did it" {
+			return errors.New("message is too long")
+		}
+		return nil
+	}
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "clean up"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return len(m.buttons) == 2 })
+	tr.updates <- Update{Callback: &Callback{ID: "cb1", ChatID: 100, UserID: 42, Data: "approve:a1"}}
+
+	notice := tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "could not be delivered") })
+	if !strings.Contains(notice.text, "message is too long") {
+		t.Errorf("failure notice %q should name the delivery error", notice.text)
+	}
+}
+
+// TestBot_LongAnswerIsChunked covers the delivery path end to end: an answer past Telegram's
+// per-message limit arrives as several messages rather than one rejected send.
+func TestBot_LongAnswerIsChunked(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.question = true
+	cl.answerPrefix = strings.Repeat("сообщение ", 900) // ~9,000 runes, ~16,000 bytes
+	bot := NewBot(tr, cl, []int64{42})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "explain"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "which environment?") })
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "staging"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.HasSuffix(m.text, "using staging") })
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	var parts int
+	for _, m := range tr.sent {
+		if strings.Contains(m.text, "сообщение") {
+			parts++
+			if n := utf8.RuneCountInString(m.text); n > maxMessageRunes {
+				t.Errorf("delivered a %d-rune message, over Telegram's %d limit", n, maxMessageRunes)
+			}
+		}
+	}
+	if parts < 3 {
+		t.Errorf("the long answer arrived in %d messages, want it chunked", parts)
 	}
 }
 
