@@ -512,7 +512,10 @@ capability_exercised  capability=scrape  arg=example.com [secret:scrapingant] [b
 ```
 
 `[browser]` marks the calls that used JS rendering — roughly 10x the credits of a plain proxied
-fetch, so it is worth seeing. Reasoning in [`adr/external-apis.md`](adr/external-apis.md) §5.
+fetch, so it is worth seeing. A call that reaches ScrapingAnt but fails is still attributed to its
+run and the same host/cost markers as `capability_failed`, with `error_class` and (for a non-200)
+`status`; `capability_denied` is reserved for policy refusal. Reasoning in
+[`adr/external-apis.md`](adr/external-apis.md) §5.
 
 ---
 
@@ -727,7 +730,7 @@ empty. Ask a `serve` engine, or read the central log with `agent audit --addr`, 
 ## Audit log
 
 Everything effectful is recorded to an append-only audit log: capability use
-(`capability_exercised` / `capability_denied`), tool authoring/revocation
+(`capability_exercised` / `capability_failed` / `capability_denied`), tool authoring/revocation
 (`tool_authored` / `tool_revoked`), memory writes (`memory_write`), and per-run token
 usage (`run_usage` — see [Token usage](#token-usage)).
 

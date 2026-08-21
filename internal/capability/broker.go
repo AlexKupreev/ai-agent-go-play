@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,39 +68,44 @@ func NewBroker(rec audit.Recorder, tools ToolCaller) *Broker {
 	}
 }
 
-func (b *Broker) record(g *GrantContext, kind Kind, summary string, allowed bool) {
+func (b *Broker) record(g *GrantContext, kind Kind, summary string, outcome audit.CapabilityOutcome, extra ...map[string]any) {
 	if b.Audit == nil {
 		return
-	}
-	typ := audit.EventCapabilityExercised
-	if !allowed {
-		typ = audit.EventCapabilityDenied
 	}
 	run := ""
 	if g != nil {
 		run = g.Run
 	}
-	b.Audit.Record(audit.Event{
-		Type:   typ,
-		Run:    run,
-		Fields: map[string]any{"capability": string(kind), "arg": summary},
-	})
+	var details map[string]any
+	if len(extra) > 0 {
+		details = extra[0]
+	}
+	b.Audit.Record(audit.NewCapabilityEvent(outcome, run, string(kind), summary, details))
+}
+
+type denialError struct {
+	kind   Kind
+	detail string
+}
+
+func (e denialError) Error() string {
+	return fmt.Sprintf("capability denied: %s (%s)", e.kind, e.detail)
 }
 
 func denied(kind Kind, detail string) error {
-	return fmt.Errorf("capability denied: %s (%s)", kind, detail)
+	return denialError{kind: kind, detail: detail}
 }
 
 // HTTPGet fetches a URL if the grant allows the host.
 func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		b.record(g, HTTPGet, rawURL, false)
+		b.record(g, HTTPGet, "", audit.CapabilityFailed, map[string]any{"error_class": "invalid_url"})
 		return "", fmt.Errorf("http_get: invalid url %q", rawURL)
 	}
 	c, ok := g.find(HTTPGet)
 	if !ok || !hostAllowed(c.Hosts, u.Hostname()) {
-		b.record(g, HTTPGet, u.Host, false)
+		b.record(g, HTTPGet, u.Host, audit.CapabilityDenied)
 		return "", denied(HTTPGet, u.Host)
 	}
 	// The audit summary carries the secret's NAME (not value) when one is used, so the log
@@ -111,6 +117,7 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
+		b.record(g, HTTPGet, summary, audit.CapabilityFailed, map[string]any{"error_class": "request_build"})
 		return "", err
 	}
 	// Inject a named secret host-side, if the cap requests one. It is bounded to the same
@@ -119,17 +126,17 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 	// closed: a named-but-unresolvable secret denies the call rather than fetching without it.
 	if c.Secret != "" {
 		if b.Secrets == nil {
-			b.record(g, HTTPGet, summary, false)
+			b.record(g, HTTPGet, summary, audit.CapabilityDenied)
 			return "", denied(HTTPGet, "secret "+c.Secret+" requested but no secret store is configured")
 		}
 		val, found := b.Secrets(c.Secret)
 		if !found || val == "" {
-			b.record(g, HTTPGet, summary, false)
+			b.record(g, HTTPGet, summary, audit.CapabilityDenied)
 			return "", denied(HTTPGet, "unknown or empty secret "+c.Secret)
 		}
 		where, key, prefix, perr := c.SecretPlacement()
 		if perr != nil {
-			b.record(g, HTTPGet, summary, false)
+			b.record(g, HTTPGet, summary, audit.CapabilityDenied)
 			return "", fmt.Errorf("http_get: %w", perr)
 		}
 		switch where {
@@ -164,6 +171,12 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		var deniedErr denialError
+		if errors.As(err, &deniedErr) {
+			b.record(g, HTTPGet, summary, audit.CapabilityDenied)
+		} else {
+			b.record(g, HTTPGet, summary, audit.CapabilityFailed, map[string]any{"error_class": "transport"})
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -173,9 +186,17 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
+		b.record(g, HTTPGet, summary, audit.CapabilityFailed, map[string]any{"error_class": "response_read"})
 		return "", err
 	}
-	b.record(g, HTTPGet, summary, true)
+	if resp.StatusCode >= http.StatusBadRequest {
+		b.record(g, HTTPGet, summary, audit.CapabilityFailed, map[string]any{
+			"error_class": "http_status",
+			"status":      resp.StatusCode,
+		})
+	} else {
+		b.record(g, HTTPGet, summary, audit.CapabilityExercised)
+	}
 	return string(body), nil
 }
 
@@ -183,14 +204,15 @@ func (b *Broker) HTTPGet(ctx context.Context, g *GrantContext, rawURL string) (s
 func (b *Broker) ReadFile(g *GrantContext, path string) (string, error) {
 	c, ok := g.find(ReadFile)
 	if !ok || !pathAllowed(c.PathPrefix, path) {
-		b.record(g, ReadFile, path, false)
+		b.record(g, ReadFile, path, audit.CapabilityDenied)
 		return "", denied(ReadFile, path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		b.record(g, ReadFile, path, audit.CapabilityFailed, map[string]any{"error_class": "filesystem_read"})
 		return "", err
 	}
-	b.record(g, ReadFile, path, true)
+	b.record(g, ReadFile, path, audit.CapabilityExercised)
 	return string(data), nil
 }
 
@@ -198,13 +220,14 @@ func (b *Broker) ReadFile(g *GrantContext, path string) (string, error) {
 func (b *Broker) WriteFile(g *GrantContext, path, content string) error {
 	c, ok := g.find(WriteFile)
 	if !ok || !pathAllowed(c.PathPrefix, path) {
-		b.record(g, WriteFile, path, false)
+		b.record(g, WriteFile, path, audit.CapabilityDenied)
 		return denied(WriteFile, path)
 	}
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		b.record(g, WriteFile, path, audit.CapabilityFailed, map[string]any{"error_class": "filesystem_write"})
 		return err
 	}
-	b.record(g, WriteFile, path, true)
+	b.record(g, WriteFile, path, audit.CapabilityExercised)
 	return nil
 }
 
@@ -215,7 +238,7 @@ func (b *Broker) WriteFile(g *GrantContext, path, content string) error {
 func (b *Broker) CallTool(ctx context.Context, g *GrantContext, name string, input map[string]any) (string, error) {
 	c, ok := g.find(CallTool)
 	if !ok || !toolAllowed(c.Tools, name) {
-		b.record(g, CallTool, name, false)
+		b.record(g, CallTool, name, audit.CapabilityDenied)
 		return "", denied(CallTool, name)
 	}
 	// A trusted (ambient-authority) built-in is reachable from sandboxed code
@@ -223,41 +246,44 @@ func (b *Broker) CallTool(ctx context.Context, g *GrantContext, name string, inp
 	// "*" grant never escalates into one — that would make call_tool a
 	// transitive sandbox escape into e.g. shell.
 	if b.trusted(name) && (!b.exposed(name) || !toolNamed(c.Tools, name)) {
-		b.record(g, CallTool, name, false)
+		b.record(g, CallTool, name, audit.CapabilityDenied)
 		return "", denied(CallTool, name+": trusted built-in not callable from sandbox")
 	}
 	if b.Tools == nil {
+		b.record(g, CallTool, name, audit.CapabilityFailed, map[string]any{"error_class": "unavailable"})
 		return "", fmt.Errorf("call_tool: no tool caller configured")
 	}
 	out, err := b.Tools(ctx, name, input)
 	if err != nil {
+		b.record(g, CallTool, name, audit.CapabilityFailed, map[string]any{"error_class": "tool_error"})
 		return "", err
 	}
-	b.record(g, CallTool, name, true)
+	b.record(g, CallTool, name, audit.CapabilityExercised)
 	return out, nil
 }
 
 // Now returns the current time if the grant includes the Clock capability.
 func (b *Broker) Now(g *GrantContext) (time.Time, error) {
 	if !g.Has(Clock) {
-		b.record(g, Clock, "", false)
+		b.record(g, Clock, "", audit.CapabilityDenied)
 		return time.Time{}, denied(Clock, "now")
 	}
 	clk := b.Clock
 	if clk == nil {
 		clk = time.Now
 	}
-	b.record(g, Clock, "", true)
+	b.record(g, Clock, "", audit.CapabilityExercised)
 	return clk(), nil
 }
 
 // RandomBytes returns n random bytes if the grant includes the Random capability.
 func (b *Broker) RandomBytes(g *GrantContext, n int) ([]byte, error) {
 	if !g.Has(Random) {
-		b.record(g, Random, "", false)
+		b.record(g, Random, "", audit.CapabilityDenied)
 		return nil, denied(Random, "random")
 	}
 	if n <= 0 || n > 4096 {
+		b.record(g, Random, "", audit.CapabilityFailed, map[string]any{"error_class": "invalid_argument"})
 		return nil, fmt.Errorf("random: n out of range")
 	}
 	src := b.RandSrc
@@ -266,8 +292,9 @@ func (b *Broker) RandomBytes(g *GrantContext, n int) ([]byte, error) {
 	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(src, buf); err != nil {
+		b.record(g, Random, "", audit.CapabilityFailed, map[string]any{"error_class": "random_source"})
 		return nil, err
 	}
-	b.record(g, Random, "", true)
+	b.record(g, Random, "", audit.CapabilityExercised)
 	return buf, nil
 }

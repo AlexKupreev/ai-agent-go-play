@@ -1,5 +1,6 @@
 // Package audit is the append-only event log that makes self-extension
-// reviewable: every capability a tool exercises (or is denied) is recorded here.
+// reviewable: every capability a tool exercises, fails to execute, or is denied
+// is recorded here.
 // A JSONL file is the Phase 2 backing store; a richer store (e.g. SQLite) can
 // implement Recorder later without touching callers.
 package audit
@@ -16,6 +17,7 @@ import (
 // Event types. More are added as later phases record richer history.
 const (
 	EventCapabilityExercised = "capability_exercised"
+	EventCapabilityFailed    = "capability_failed"
 	EventCapabilityDenied    = "capability_denied"
 	EventToolAuthored        = "tool_authored"
 	EventToolRevoked         = "tool_revoked"
@@ -24,12 +26,33 @@ const (
 	EventSessionPurged       = "session_purged"
 )
 
+// CapabilityOutcome is the result of one brokered or otherwise audited capability
+// invocation. Failed means policy allowed the operation but execution failed; Denied
+// is reserved for a policy refusal before (or during) execution.
+type CapabilityOutcome string
+
+const (
+	CapabilityExercised CapabilityOutcome = EventCapabilityExercised
+	CapabilityFailed    CapabilityOutcome = EventCapabilityFailed
+	CapabilityDenied    CapabilityOutcome = EventCapabilityDenied
+)
+
 // Event is one append-only record.
 type Event struct {
 	Type   string         `json:"type"`
 	Run    string         `json:"run,omitempty"`
 	At     time.Time      `json:"at"`
 	Fields map[string]any `json:"fields,omitempty"`
+}
+
+// NewCapabilityEvent builds a consistently shaped capability audit record. Extra
+// fields may carry non-sensitive failure classification such as error_class or status.
+func NewCapabilityEvent(outcome CapabilityOutcome, run, capability, arg string, extra map[string]any) Event {
+	fields := map[string]any{"capability": capability, "arg": arg}
+	for key, value := range extra {
+		fields[key] = value
+	}
+	return Event{Type: string(outcome), Run: run, Fields: fields}
 }
 
 // Recorder appends events. Implementations must be safe for concurrent use.

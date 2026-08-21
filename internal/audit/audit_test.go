@@ -96,3 +96,19 @@ func TestRecorders_FansOut(t *testing.T) {
 		t.Fatalf("fan-out did not reach both recorders: a=%d b=%d", len(a.Snapshot()), len(b.Snapshot()))
 	}
 }
+
+func TestNewCapabilityEvent(t *testing.T) {
+	e := NewCapabilityEvent(CapabilityFailed, "run-a", "http_get", "example.com", map[string]any{
+		"error_class": "http_status",
+		"status":      503,
+	})
+	if e.Type != EventCapabilityFailed || e.Run != "run-a" {
+		t.Fatalf("event identity = type %q run %q", e.Type, e.Run)
+	}
+	if e.Fields["capability"] != "http_get" || e.Fields["arg"] != "example.com" {
+		t.Fatalf("event base fields = %+v", e.Fields)
+	}
+	if e.Fields["error_class"] != "http_status" || e.Fields["status"] != 503 {
+		t.Fatalf("event failure fields = %+v", e.Fields)
+	}
+}

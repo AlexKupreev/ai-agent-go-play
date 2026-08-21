@@ -10,9 +10,10 @@ must not be treated as a capability list.
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
 credential rotation. R1 is in progress: chunked Telegram delivery, the Telegram session-command
 repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation), and session-space
-validation are shipped. Next up is R1's fourth bullet — recording scrape/service failures as failed
-capability use rather than security denial. See [Hand-off](#hand-off--next-step) at the end of this
-file for the trace that is already done on it.
+validation and truthful capability-failure auditing are shipped. Next up is R1's fifth bullet —
+giving every frontend the central audit reader and making `agent audit` work locally like
+`agent usage`. See [Hand-off](#hand-off--next-step) at the end of this file for the trace that is
+already done on it.
 
 ## How the planning set fits together
 
@@ -105,8 +106,15 @@ This is the fix-first slice. Keep changes small and independently shippable.
       chat's `/space` and `--space` — gained the same error for free. The remote REPL and Telegram
       send the argument as typed (the engine resolves a name or an id) and report the id it stored.
       A nil resolver keeps the old store-verbatim behavior for embedders with no space store.
-- [ ] Record scrape/service failures as failed capability use, not security denial; preserve paid
-      call attribution on failure.
+- [x] Record scrape/service failures as failed capability use, not security denial; preserve paid
+      call attribution on failure. **Done 2026-08-21** — audit has a typed three-state capability
+      outcome (`capability_exercised`, `capability_failed`, `capability_denied`) shared by the
+      broker and paid scraper. Once policy allows an operation, transport, response-read,
+      filesystem, called-tool, random-source, and HTTP-status failures use `capability_failed`
+      with a stable `error_class` and optional numeric `status`; `capability_denied` is policy-only.
+      Failed scrapes retain their run id, host, `[secret:scrapingant]`, and `[browser]` cost marker
+      while never logging the full URL, raw error, or key. The API/CLI/activity readers already
+      filter arbitrary event-type strings, and their documented type lists now include the new one.
 - [ ] Pass the central audit reader to every frontend and add local `agent audit` behavior consistent
       with local `agent usage`.
 - [ ] Update the model context-window registry or replace the hard-coded table with provider/config
@@ -242,29 +250,32 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after session-space validation shipped. Replace this section when the next
+*Written 2026-08-21, after capability-failure auditing shipped. Replace this section when the next
 slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's fourth bullet — record scrape/service failures as failed capability use, not
-security denial, and preserve paid-call attribution on failure.** Today both audit writers have
-exactly two outcomes, `capability_exercised` and `capability_denied`, so a paid call that the policy
-allowed and the *network* or the upstream service failed is logged as if the agent had been refused.
-That misreads the security surface (a denial should mean the grant said no) and muddies spend
-review. What a first look at the code shows:
+**Next slice: R1's fifth bullet — pass the central audit reader to every frontend and make local
+`agent audit` behave like local `agent usage`.** Today the reader differs by front door even though
+the central log already exists. What a first look at the code shows:
 
-- `Broker.record(g, kind, summary, allowed bool)` (`internal/capability/broker.go`, ~line 70) picks
-  `audit.EventCapabilityExercised` / `audit.EventCapabilityDenied` off one bool; `scraper.record`
-  (`internal/tools/scrape.go`, ~line 178) is a second copy of the same two-outcome shape for the
-  paid scrape path. Both need a third outcome, and the `ok bool` parameters should become something
-  with three states rather than growing a second bool.
-- The event type would be new in `internal/audit/audit.go` (beside `EventCapabilityExercised` /
-  `EventCapabilityDenied`). Anything that filters the log by type must learn it: `GET /audit?type=`,
-  the `agent audit` command, and the usage/spend readers.
-- "Preserve paid call attribution on failure" is the scrape half: a failed ScrapingAnt call still
-  costs money, so it must stay in the log with its host + `[browser]` summary (the cost driver) and
-  keep its `Run` id — the record already carries these; what changes is the type it is filed under.
-- Do not put the API key or the full URL in the summary; both writers deliberately record only the
-  host and the secret's *name*.
+- `serveDeps.reader` is the process-wide `audit.JSONLRecorder`, and `serveDeps.newExecutor` passes
+  it as `ExecutorConfig.AuditReader`; this is the correct durable behavior.
+- `agent run` already calls `openCentralLedger()` for day-wide token totals, but passes its per-run
+  transcript recorder as `AuditReader`. It can pass the returned central recorder instead without
+  changing where broker events are written. Local `agent chat` passes its per-run recorder too and
+  does not open the central ledger at all; it needs a central reader with a session-long lifetime.
+  `eval` also passes a per-variant recorder, so decide explicitly whether "every frontend" includes
+  model-facing `recent_activity` during eval (consistency argues yes; reproducibility may argue no).
+- `openCentralLedger` (`cmd/usage.go`) opens the central JSONL path read/write and returns both the
+  recorder and `usage.Ledger`; a small central-audit opener can avoid making callers construct the
+  path differently. Keep one open handle per command, not one per turn/executor rebuild.
+- `agent audit` (`cmd/audit.go`) always constructs an API client from the defaulted `--addr`, so it
+  cannot tell whether the user explicitly requested remote mode. Cobra exposes
+  `cmd.Flags().Changed("addr")`: when false, read the local central log under `--config-dir`; when
+  true, retain the existing API behavior. `agent usage` is the local precedent, though audit needs
+  a read-only open path (the current `NewJSONLRecorder` opens append/create).
+- `GET /audit?type=` and `audit.Reader.Tail` already accept arbitrary event-type strings; there is
+  no validation list to keep in sync. Add command tests for local default, explicit remote, filters,
+  limits, and a missing log returning the same empty result as an empty remote response.
 
 Also worth knowing before continuing in R1:
 

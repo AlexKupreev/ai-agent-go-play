@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -164,6 +165,50 @@ func TestBrokerHTTPGet_AllowedAndDenied(t *testing.T) {
 	}
 }
 
+func TestBrokerHTTPGet_FailuresAreNotDenials(t *testing.T) {
+	grant := &GrantContext{Run: "run-failed", Granted: []Capability{
+		{Kind: HTTPGet, Hosts: []string{"example.com"}},
+	}}
+
+	t.Run("transport", func(t *testing.T) {
+		rec := &audit.MemoryRecorder{}
+		b := NewBroker(rec, nil)
+		b.HTTP = &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("network unavailable")
+		})}
+		if _, err := b.HTTPGet(context.Background(), grant, "https://example.com/private?q=secret"); err == nil {
+			t.Fatal("transport failure should be returned")
+		}
+		e := lastEvent(t, rec)
+		if e.Type != audit.EventCapabilityFailed || e.Run != "run-failed" {
+			t.Fatalf("event = %+v, want failed event attributed to run-failed", e)
+		}
+		if e.Fields["arg"] != "example.com" || e.Fields["error_class"] != "transport" {
+			t.Fatalf("fields = %+v, want host-only transport classification", e.Fields)
+		}
+	})
+
+	t.Run("http status", func(t *testing.T) {
+		rec := &audit.MemoryRecorder{}
+		b := NewBroker(rec, nil)
+		b.HTTP = &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("try later")),
+				Header:     make(http.Header),
+			}, nil
+		})}
+		out, err := b.HTTPGet(context.Background(), grant, "https://example.com/x")
+		if err != nil || out != "try later" {
+			t.Fatalf("HTTPGet preserved response: out=%q err=%v", out, err)
+		}
+		e := lastEvent(t, rec)
+		if e.Type != audit.EventCapabilityFailed || e.Fields["status"] != http.StatusServiceUnavailable {
+			t.Fatalf("event = %+v, want failed event with status 503", e)
+		}
+	})
+}
+
 // TestBrokerHTTPGet_MaxBytesCap proves the configurable body cap truncates a large response;
 // the default (unset MaxHTTPBytes) applies when zero.
 func TestBrokerHTTPGet_MaxBytesCap(t *testing.T) {
@@ -207,6 +252,38 @@ func TestBrokerHTTPGet_RedirectToDisallowedHostBlocked(t *testing.T) {
 	if strings.Contains(out, "secret") {
 		t.Fatal("broker followed redirect to a disallowed host")
 	}
+	if e := lastEvent(t, rec); e.Type != audit.EventCapabilityDenied {
+		t.Fatalf("redirect policy refusal event = %q, want denied", e.Type)
+	}
+}
+
+func TestBrokerExecutionFailuresAreAudited(t *testing.T) {
+	t.Run("read file", func(t *testing.T) {
+		dir := t.TempDir()
+		rec := &audit.MemoryRecorder{}
+		b := NewBroker(rec, nil)
+		grant := &GrantContext{Run: "r", Granted: []Capability{{Kind: ReadFile, PathPrefix: dir}}}
+		if _, err := b.ReadFile(grant, filepath.Join(dir, "missing")); err == nil {
+			t.Fatal("missing file should fail")
+		}
+		if e := lastEvent(t, rec); e.Type != audit.EventCapabilityFailed || e.Fields["error_class"] != "filesystem_read" {
+			t.Fatalf("event = %+v, want filesystem_read failure", e)
+		}
+	})
+
+	t.Run("called tool", func(t *testing.T) {
+		rec := &audit.MemoryRecorder{}
+		b := NewBroker(rec, func(context.Context, string, map[string]any) (string, error) {
+			return "", errors.New("tool broke")
+		})
+		grant := &GrantContext{Run: "r", Granted: []Capability{{Kind: CallTool, Tools: []string{"broken"}}}}
+		if _, err := b.CallTool(context.Background(), grant, "broken", nil); err == nil {
+			t.Fatal("tool failure should be returned")
+		}
+		if e := lastEvent(t, rec); e.Type != audit.EventCapabilityFailed || e.Fields["error_class"] != "tool_error" {
+			t.Fatalf("event = %+v, want tool_error failure", e)
+		}
+	})
 }
 
 func TestBrokerHTTPGet_NotGranted(t *testing.T) {

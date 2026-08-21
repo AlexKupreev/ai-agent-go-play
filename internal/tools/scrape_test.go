@@ -225,15 +225,26 @@ func TestScrape_AuditsCallWithoutLeakingKey(t *testing.T) {
 		t.Errorf("audit leaked the API key: %q", arg)
 	}
 
-	// A failed call is audited as denied, so a burst of failures is visible too.
+	// A failed call is still attributed to the run and cost shape, but it is not a
+	// policy denial. The status is enough to group failures without logging the URL.
 	antFail := newStubAnt(t, http.StatusLocked, "")
 	rec2 := &audit.MemoryRecorder{}
 	s2 := newScraper(t, antFail, rec2)
 	if _, err := s2.run(context.Background(), map[string]any{"url": "https://example.com/x"}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := rec2.Snapshot(); len(got) != 1 || got[0].Type != audit.EventCapabilityDenied {
-		t.Errorf("failed scrape should record one %q event, got %+v", audit.EventCapabilityDenied, got)
+	got := rec2.Snapshot()
+	if len(got) != 1 || got[0].Type != audit.EventCapabilityFailed {
+		t.Fatalf("failed scrape should record one %q event, got %+v", audit.EventCapabilityFailed, got)
+	}
+	failed := got[0]
+	if failed.Run != "run-1" || failed.Fields["status"] != http.StatusLocked || failed.Fields["error_class"] != "http_status" {
+		t.Errorf("failed scrape attribution = %+v", failed)
+	}
+	failedArg, _ := failed.Fields["arg"].(string)
+	if !strings.Contains(failedArg, "example.com") || !strings.Contains(failedArg, "[browser]") ||
+		!strings.Contains(failedArg, "[secret:scrapingant]") || strings.Contains(failedArg, "/x") {
+		t.Errorf("failed scrape arg = %q, want host + cost markers and no URL path", failedArg)
 	}
 }
 

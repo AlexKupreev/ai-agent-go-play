@@ -138,7 +138,7 @@ func (s scraper) run(ctx context.Context, args map[string]any) (string, error) {
 	client := &http.Client{Timeout: scrapeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		s.record(u.Host, renderJS, false)
+		s.record(u.Host, renderJS, audit.CapabilityFailed, map[string]any{"error_class": "transport"})
 		// Errors come back as content (like shell) so the model can adapt rather than abort.
 		return fmt.Sprintf("scrape failed: %v", err), nil
 	}
@@ -146,16 +146,19 @@ func (s scraper) run(ctx context.Context, args map[string]any) (string, error) {
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxScrapeBytes))
 	if err != nil {
-		s.record(u.Host, renderJS, false)
+		s.record(u.Host, renderJS, audit.CapabilityFailed, map[string]any{"error_class": "response_read"})
 		return fmt.Sprintf("scrape failed reading response: %v", err), nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		s.record(u.Host, renderJS, false)
+		s.record(u.Host, renderJS, audit.CapabilityFailed, map[string]any{
+			"error_class": "http_status",
+			"status":      resp.StatusCode,
+		})
 		return scrapeError(resp.StatusCode, body), nil
 	}
 
-	s.record(u.Host, renderJS, true)
+	s.record(u.Host, renderJS, audit.CapabilityExercised, nil)
 
 	out := string(body)
 	if !boolArg(args, "return_html", false) {
@@ -175,23 +178,15 @@ const maxScrapeBytes = 5 << 20 // 5 MiB
 // record logs one paid call so spend is reconstructable from the audit log. It records the
 // target host and whether a browser was used (the cost driver) — never the API key, and
 // never the full URL, matching how the broker summarizes a secret-bearing fetch.
-func (s scraper) record(host string, renderJS, ok bool) {
+func (s scraper) record(host string, renderJS bool, outcome audit.CapabilityOutcome, extra map[string]any) {
 	if s.audit == nil {
 		return
-	}
-	typ := audit.EventCapabilityExercised
-	if !ok {
-		typ = audit.EventCapabilityDenied
 	}
 	summary := host + " [secret:" + ScrapeSecretName + "]"
 	if renderJS {
 		summary += " [browser]"
 	}
-	s.audit.Record(audit.Event{
-		Type:   typ,
-		Run:    s.runID,
-		Fields: map[string]any{"capability": "scrape", "arg": summary},
-	})
+	s.audit.Record(audit.NewCapabilityEvent(outcome, s.runID, "scrape", summary, extra))
 }
 
 // scrapeError turns a non-200 into a message the model can act on. ScrapingAnt returns a

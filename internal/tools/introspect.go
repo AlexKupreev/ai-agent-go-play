@@ -18,7 +18,8 @@ func NewRecentActivityTool(reader audit.Reader) Tool {
 		Name: "recent_activity",
 		Description: "Review your own recently recorded activity from the audit log: capabilities you used, " +
 			"tools you authored or revoked, memory you saved, and token usage. Filter by `type` (e.g. " +
-			"tool_authored, memory_write, capability_exercised, run_usage) or `run`. Answers 'what have I done?'",
+			"tool_authored, memory_write, capability_exercised, capability_failed, run_usage) or `run`. " +
+			"Answers 'what have I done?'",
 		Parameters: map[string]any{
 			"type":  map[string]any{"type": "string", "description": "filter by event type"},
 			"run":   map[string]any{"type": "string", "description": "filter by run id"},

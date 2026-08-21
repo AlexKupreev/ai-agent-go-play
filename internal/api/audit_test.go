@@ -14,6 +14,7 @@ func seededLog() *audit.MemoryRecorder {
 	rec := &audit.MemoryRecorder{}
 	rec.Record(audit.Event{Type: audit.EventCapabilityExercised, Run: "run-a"})
 	rec.Record(audit.Event{Type: audit.EventToolRevoked, Fields: map[string]any{"name": "x"}})
+	rec.Record(audit.Event{Type: audit.EventCapabilityFailed, Run: "run-a"})
 	rec.Record(audit.Event{Type: audit.EventCapabilityExercised, Run: "run-b"})
 	return rec
 }
@@ -39,11 +40,14 @@ func TestHTTP_Audit(t *testing.T) {
 		return out
 	}
 
-	if len(get("")) != 3 {
-		t.Fatalf("unfiltered = %d, want 3", len(get("")))
+	if len(get("")) != 4 {
+		t.Fatalf("unfiltered = %d, want 4", len(get("")))
 	}
-	if evs := get("?run=run-a"); len(evs) != 1 || evs[0].Run != "run-a" {
+	if evs := get("?run=run-a"); len(evs) != 2 || evs[0].Run != "run-a" {
 		t.Fatalf("run filter = %+v", evs)
+	}
+	if evs := get("?type=capability_failed"); len(evs) != 1 || evs[0].Type != audit.EventCapabilityFailed {
+		t.Fatalf("failed type filter = %+v", evs)
 	}
 	if evs := get("?type=tool_revoked"); len(evs) != 1 || evs[0].Type != audit.EventToolRevoked {
 		t.Fatalf("type filter = %+v", evs)

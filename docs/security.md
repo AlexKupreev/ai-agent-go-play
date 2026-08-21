@@ -121,14 +121,19 @@ reserved for Phase 5, pulled only if a concrete need arises.
 
 **File:** `internal/audit/audit.go`
 
-Every capability a tool exercises **or is denied** is recorded, making self-extension reviewable.
+Every capability a tool exercises, fails to execute, **or is denied** is recorded, making
+self-extension reviewable. `capability_denied` means policy refused the operation;
+`capability_failed` means policy allowed it but execution failed.
 
 - `Recorder` interface; `MemoryRecorder` (tests/inspection) and `JSONLRecorder` (one JSON object
   per line, append-only, mode `0600`). `Recorders` fans one event to several sinks. A richer store
   (SQLite) can implement `Recorder`/`Reader` later without touching callers.
-- Event types: `capability_exercised`, `capability_denied`, `tool_authored`, `tool_revoked`,
-  `memory_write`, `run_usage` (per-run token spend — [`usage.md`](usage.md#token-usage)), and
-  `session_purged` (irreversible session deletion — [`usage.md`](usage.md#conversations-over-the-api-sessions)).
+- Event types: `capability_exercised`, `capability_failed`, `capability_denied`, `tool_authored`,
+  `tool_revoked`, `memory_write`, `run_usage` (per-run token spend —
+  [`usage.md`](usage.md#token-usage)), and `session_purged` (irreversible session deletion —
+  [`usage.md`](usage.md#conversations-over-the-api-sessions)). Failed events carry a stable
+  `error_class` and, for an HTTP response failure, its numeric `status`; they do not carry raw
+  error text that could include a URL or secret.
 - **Audit-write failures are surfaced** to stderr, never dropped silently — an unserializable or
   unwritable audit record is treated as a bug, because the log *is* the security record.
 - **Reviewable over the API (Phase 4e-4):** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
@@ -189,7 +194,9 @@ What *does* constrain it:
 - The tool is **omitted entirely** when no `scrapingant` secret resolves, so it cannot be called
   into existence by the model.
 - Every call is **one audit line** carrying the host and a `[browser]` marker, so spend is
-  reconstructable after the fact.
+  reconstructable after the fact. Success is `capability_exercised`; a transport, response-read,
+  or non-200 failure is `capability_failed` with an error class/status while retaining the run,
+  host, secret name, and browser cost marker.
 
 What does **not** constrain it, and is worth knowing before running unattended:
 
@@ -200,8 +207,8 @@ What does **not** constrain it, and is worth knowing before running unattended:
   roughly 10× a plain proxied fetch. This is the one built-in whose blast radius is financial
   rather than local, and it is the strongest current argument for the deferred budget dial
   ([`planning/plan.md`](planning/plan.md) §6d).
-- Failed calls are currently recorded as `capability_denied`, which conflates "the site 404'd"
-  with "policy refused" in the one stream an operator would grep for denials.
+- `capability_denied` remains reserved for policy refusal, so service failures do not pollute the
+  security-denial stream.
 
 ---
 

@@ -755,8 +755,8 @@ These are prerequisites for offering greater autonomy:
    space returns 400 plus available spaces; never persist a broken sticky value.
 3. **Paid-tool budget:** count `scrape` against per-run and per-day limits. A budget refusal is
    actionable and auditable.
-4. **Audit semantics:** failed ScrapingAnt/network/HTTP calls are `capability_exercised` with
-   `ok:false` and status/error class—not `capability_denied`. Reserve denied for policy refusal.
+4. **Audit semantics:** failed ScrapingAnt/network/HTTP calls are `capability_failed` with
+   status/error class—not `capability_denied`. Reserve denied for policy refusal.
 5. **Central activity reader:** local `run`/`chat` read the process-wide audit ledger for
    `recent_activity`, matching `serve`.
 6. **Local audit mode:** `agent audit` reads the local log when `--addr` is not explicitly given.
