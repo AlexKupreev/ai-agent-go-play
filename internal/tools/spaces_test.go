@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/space"
 )
 
@@ -84,10 +86,43 @@ func TestSpaceTools(t *testing.T) {
 	if out := runSpaceTool(t, activeTools, "list_spaces", nil); !strings.Contains(out, "* polish-lessons") {
 		t.Fatalf("list_spaces active marker missing: %q", out)
 	}
+	if out := runSpaceTool(t, activeTools, "update_space_notes", map[string]any{"notes": "🐻🐻"}); !strings.Contains(out, "(2 chars)") {
+		t.Fatalf("update_space_notes Unicode count = %q", out)
+	}
 
 	// No session to carry the switch (nil Switch): explained, not an error.
 	noSwitch := NewSpaceTools(SpaceContext{Store: store})
 	if out := runSpaceTool(t, noSwitch, "switch_space", map[string]any{"space": "polish-lessons"}); !strings.Contains(out, "no session") {
 		t.Fatalf("switch_space without session = %q", out)
+	}
+}
+
+func TestUpdateSpaceNotesAuditIsRedactedAndIdempotent(t *testing.T) {
+	store := space.NewStore(t.TempDir() + "/spaces")
+	sp, err := store.Create("Private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &audit.MemoryRecorder{}
+	tools := NewSpaceTools(SpaceContext{Store: store, ActiveID: sp.ID, Audit: rec, RunID: "run-1"})
+	secret := "sensitive standing context"
+	if out := runSpaceTool(t, tools, "update_space_notes", map[string]any{"notes": secret}); !strings.Contains(out, "updated") {
+		t.Fatalf("update = %q", out)
+	}
+	if out := runSpaceTool(t, tools, "update_space_notes", map[string]any{"notes": secret}); !strings.Contains(out, "unchanged") {
+		t.Fatalf("idempotent update = %q", out)
+	}
+	events := rec.Snapshot()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one changed update", len(events))
+	}
+	e := events[0]
+	if e.Type != audit.EventGuidanceUpdated || e.Run != "run-1" || e.Fields["scope"] != "space" || e.Fields["space_id"] != sp.ID {
+		t.Fatalf("audit event = %+v", e)
+	}
+	for key, value := range e.Fields {
+		if strings.Contains(fmt.Sprint(value), secret) {
+			t.Fatalf("audit field %q leaked notes body", key)
+		}
 	}
 }

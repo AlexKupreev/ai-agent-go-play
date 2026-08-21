@@ -468,9 +468,9 @@ output contract or workflow ceilings.
 | session | new `Session.Guidance` | temporary conversation instructions | `/guidance session ...` |
 | turn | session history only | one-off request | ordinary message |
 
-Limit global/space/session guidance independently (start at 4,000 chars each) and display the size.
-Writes are atomic. Guidance is trusted user input only after frontend authorization, but still cannot
-override kernel invariants.
+Limit global/space/session guidance independently (start at 4,000 Unicode characters each) and
+display the size using the same character-counting rule. Writes and clears are atomic. Guidance is
+trusted user input only after frontend authorization, but still cannot override kernel invariants.
 
 ### 6.3 Commands
 
@@ -480,13 +480,22 @@ Support the same operations in local/remote chat and Telegram:
 /notes                         show active-space notes
 /notes set <text>              replace
 /notes add <text>              append
+/notes clear                   remove all active-space notes
 /guidance [global|session]     show
 /guidance <scope> set <text>
 /guidance <scope> add <text>
+/guidance <scope> clear        remove all guidance in that scope
 ```
 
 Natural-language guidance ("always answer this space in Polish") may be handled by the existing
 `update_space_notes` tool, but explicit commands are deterministic and discoverable.
+
+`clear` is idempotent: clearing an already-empty scope succeeds. For v1, removing only part of a
+guidance blob uses `show` followed by `set` with the revised text; do not add ambiguous substring
+removal. At the storage/API boundary, setting guidance or notes to the empty string has the same
+semantics as `clear`: remove `.agent/guidance.md` for workspace guidance (a missing file reads as
+empty), set `Session.Guidance` to empty so `omitempty` drops it from JSON, or persist empty space
+notes. Successful state changes use the same atomic path as other updates.
 
 ---
 
@@ -499,6 +508,7 @@ Introduce small service interfaces wired into the HTTP server:
 ```go
 type ProfileService interface { List/Get(...) }
 type SpaceService interface { List/Get/SetNotes(...) }
+type WorkspaceGuidanceService interface { Get/Set(...) }
 type EffectiveConfigService interface { Snapshot(...) }
 type BindingStore interface { Get/Put/Delete/List(...) }
 ```
@@ -516,6 +526,8 @@ GET   /profiles/{name}
 GET   /spaces
 GET   /spaces/{id}
 PUT   /spaces/{id}/notes
+GET   /guidance/global
+PUT   /guidance/global
 GET   /sessions/{id}/guidance
 PUT   /sessions/{id}/guidance
 GET   /sessions/{id}/runs
@@ -770,10 +782,12 @@ Audit additions:
 - `route_decided`;
 - `subagent_started` / `subagent_finished`;
 - `budget_refused`;
-- `guidance_updated` (scope and size/hash, never full text if it may contain sensitive material);
+- `guidance_updated` (scope plus previous/resulting size and hash, never the guidance body);
 - `frontend_delivery_failed`.
 
 Avoid flooding the audit log with every normal phase transition; the run trace owns those.
+An idempotent clear that changes no state returns success without emitting another
+`guidance_updated` event.
 
 ---
 
@@ -808,14 +822,16 @@ cannot be stored; custom `SYSTEM.md` retains immutable security/runtime text.
 
 **Goal:** let a Telegram-only user manage standing instructions safely.
 
-- [ ] Add workspace guidance store and session guidance field.
+- [x] Add workspace guidance store and session guidance field.
 - [ ] Expose profile/space/guidance service interfaces and API clients.
-- [ ] Implement `/notes` and `/guidance` in local/remote chat and Telegram.
+- [ ] Implement show/set/add/clear for `/notes` and `/guidance` in local/remote chat and Telegram.
 - [ ] Add `{{base}}` prompt composition and prompt-provenance reporting.
-- [ ] Add guidance length limits, atomic writes, and audit metadata.
+- [x] Add guidance length limits, atomic writes, and audit metadata.
 
-**Acceptance:** an allowlisted Telegram user can set global/space/session guidance, see it, restart
-the engine, and observe it in the next turn; no guidance can remove immutable prompt blocks.
+**Acceptance:** an allowlisted Telegram user can set, append, show, and clear global/space/session
+guidance, restart the engine, and observe the resulting state in the next turn; clearing an empty
+scope succeeds, partial removal is possible by replacing the text, and no guidance can remove
+immutable prompt blocks.
 
 ### Phase C — orchestration package and profiles, behavior-preserving
 

@@ -133,10 +133,10 @@ are classified truthfully, and bad state is rejected with a recovery path.
 
 Give users a coherent way to steer the existing system before adding a smarter loop.
 
-- [ ] Add durable global/workspace, space, and session guidance with size limits, atomic writes, and
+- [x] Add durable global/workspace, space, and session guidance with size limits, atomic writes, and
       redacted audit metadata.
-- [ ] Add `/notes` and `/guidance` consistently to local chat, remote chat, and Telegram; add the
-      matching space-management CLI/API surface.
+- [ ] Add `/notes` and `/guidance` show/set/add/clear consistently to local chat, remote chat, and
+      Telegram; add the matching space-management CLI/API surface.
 - [ ] Support `{{base}}` composition and report prompt/guidance provenance.
 - [ ] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits.
 - [ ] Add a read-only effective-config endpoint and make reload return a meaningful diff.
@@ -256,32 +256,34 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after R1 and the GPT-5.1 default shipped. Replace this section when the next
-slice starts; it is a pointer, not a log.*
+*Written 2026-08-21, after the durable R2 guidance primitives shipped. Replace this section when
+the next slice starts; it is a pointer, not a log.*
 
-**Next slice: R2's first bullet — build the durable guidance primitives before adding commands in
-every frontend.** The desired layering and surfaces are specified in
-[`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). What a first look
-at the code shows:
+**Next slice: expose the guidance services and deterministic command/API surface.** The durable
+layers are now in place: `<workspace>/.agent/guidance.md`, active-space notes, and
+`Session.Guidance` are independently capped at 4,000 Unicode characters and compose into executor
+prompts in that order. The desired surfaces are specified in
+[`flexible-orchestration.md`](flexible-orchestration.md#6-guidance-architecture). Start from these
+implementation facts:
 
-- Active-space notes are the working precedent: `space.Space.Notes` is capped at 4,000 characters,
-  persisted atomically by `space.Store.Save`, loaded into the executor prompt, and already exposed
-  to the model through `space_notes` / `update_space_notes`. There is no deterministic user command
-  or API for reading/writing them.
-- The global workspace scope has no guidance store. Add `<workspace>/.agent/guidance.md` behind a
-  small interface with atomic writes and the same independent size cap; do not overload memory or
-  config-dir prompt files, because guidance belongs to the workspace and must be user-manageable.
-- `session.Session` already persists sticky `Model`, `Tier`, and `Space` alongside conversation
-  history. A capped `Guidance` field fits that existing atomic file-store path and naturally
-  survives restart/resume, but must be included in lightweight session projections only as size or
-  presence metadata—not full text.
+- `internal/guidance.FileStore` is the narrow global/workspace `Get`/`Set` seam. Empty writes remove
+  the file, unchanged writes are idempotent, and actual changes emit only scope + previous/resulting
+  Unicode size/hash. Reuse `guidance.RecordUpdate` for space/session service mutations.
+- `session.Session.Guidance` persists through the existing atomic file store and reaches the turn
+  runner through an internal-only `RunOptions.Guidance` field; `session.Info` exposes only
+  `guidance_chars`. Do not add guidance text to listings or ordinary turn request JSON.
+- `withGuidance` owns executor precedence: operator appends, workspace guidance, space notes, then
+  session guidance. Workspace guidance is read for every new executor, including one-shot run,
+  local chat, serve, eval, and prompt inspection.
 - Keep transport out of the stores: expose narrow workspace/space/session guidance services in the
   API layer, following the existing injected `RunStore`, `FileStore`, and `SpaceResolver` seams.
-  Audit updates as scope + resulting size/hash, never the guidance body.
-- Land persistence, prompt composition, and unit tests first; then the following R2 bullet can add
-  `/notes` and `/guidance` consistently to local chat, remote chat, Telegram, and the CLI/API.
+  Treat an empty write as an idempotent clear: remove the workspace guidance file, omit empty
+  session guidance, or save empty space notes. Audit changed state as scope + previous/resulting
+  size/hash, never the guidance body; do not emit a duplicate update for an already-empty scope.
+- Add `/notes` and `/guidance` show/set/add/clear consistently to local chat, remote chat, Telegram,
+  and the CLI/API. Partial removal in v1 is show + set with revised text, not substring matching.
 
-Also worth knowing before starting R2:
+Also worth knowing while continuing R2:
 
 - Injected seams are how the API core reaches disk-backed policy: `SetRunStore`,
   `SetSessionCloseHook`, `SetFileStore`, and now `SetSpaceResolver`, all wired in one block of

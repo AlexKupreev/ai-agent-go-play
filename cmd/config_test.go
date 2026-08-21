@@ -340,6 +340,9 @@ func TestConfigDirPrecedence(t *testing.T) {
 		if got := memoryPath("/repo"); got != "/repo/.agent/memory.json" {
 			t.Fatalf("memoryPath = %q, want /repo/.agent/memory.json", got)
 		}
+		if got := guidancePath("/repo"); got != "/repo/.agent/guidance.md" {
+			t.Fatalf("guidancePath = %q, want /repo/.agent/guidance.md", got)
+		}
 		if got := spacesDir("/repo"); got != "/repo/.agent/spaces" {
 			t.Fatalf("spacesDir = %q, want /repo/.agent/spaces", got)
 		}

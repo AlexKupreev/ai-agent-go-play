@@ -24,6 +24,7 @@ const (
 	EventMemoryWrite         = "memory_write"
 	EventRunUsage            = "run_usage"
 	EventSessionPurged       = "session_purged"
+	EventGuidanceUpdated     = "guidance_updated"
 )
 
 // CapabilityOutcome is the result of one brokered or otherwise audited capability

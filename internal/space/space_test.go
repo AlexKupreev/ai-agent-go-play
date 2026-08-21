@@ -100,6 +100,15 @@ func TestStore_SaveNotesAndCap(t *testing.T) {
 	if err := s.Save(sp); err == nil {
 		t.Fatal("oversized notes saved, want cap error")
 	}
+	// The cap counts Unicode characters, not UTF-8 bytes.
+	sp.Notes = strings.Repeat("🐻", MaxNotesLen)
+	if err := s.Save(sp); err != nil {
+		t.Fatalf("Unicode notes at character cap: %v", err)
+	}
+	sp.Notes += "🐻"
+	if err := s.Save(sp); err == nil || !strings.Contains(err.Error(), "4001") {
+		t.Fatalf("Unicode notes over cap = %v, want 4001-character error", err)
+	}
 	// Saving an unknown space fails (Save is an update, not an upsert).
 	if err := s.Save(Space{ID: "ghost"}); err == nil {
 		t.Fatal("Save of unknown space returned nil error")

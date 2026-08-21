@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // MaxNotesLen caps a space's notes blob. The notes are injected into the system prompt
@@ -133,8 +134,8 @@ func available(all []Space) string {
 // Save persists metadata changes (rename, notes). The notes cap is enforced here so no
 // caller can grow the always-loaded profile past the prompt budget.
 func (s *Store) Save(sp Space) error {
-	if len(sp.Notes) > MaxNotesLen {
-		return fmt.Errorf("space notes exceed %d characters (%d) — keep the profile brief; move detail into memory entries", MaxNotesLen, len(sp.Notes))
+	if err := validateNotes(sp.Notes); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,7 +190,17 @@ func (s *Store) read(id string) (Space, error) {
 	if err := json.Unmarshal(data, &sp); err != nil {
 		return Space{}, fmt.Errorf("parse space %s: %w", id, err)
 	}
+	if err := validateNotes(sp.Notes); err != nil {
+		return Space{}, fmt.Errorf("parse space %s: %w", id, err)
+	}
 	return sp, nil
+}
+
+func validateNotes(notes string) error {
+	if n := utf8.RuneCountInString(notes); n > MaxNotesLen {
+		return fmt.Errorf("space notes exceed %d characters (%d) — keep the profile brief; move detail into memory entries", MaxNotesLen, n)
+	}
+	return nil
 }
 
 func (s *Store) write(sp Space) error {

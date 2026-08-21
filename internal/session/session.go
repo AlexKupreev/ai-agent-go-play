@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/provider"
 )
 
@@ -45,6 +46,11 @@ type Session struct {
 	// scope. Sticky like Model/Tier (POST/PATCH /sessions), and switched mid-conversation
 	// by the switch_space tool or the /space command.
 	Space string `json:"space,omitempty"`
+
+	// Guidance is temporary, conversation-scoped user guidance. It is persisted with
+	// the session and loaded after workspace guidance and active-space notes. Empty means
+	// no session guidance and is omitted from the JSON file.
+	Guidance string `json:"guidance,omitempty"`
 }
 
 // Info is the lightweight listing form (no message bodies).
@@ -57,11 +63,13 @@ type Info struct {
 	Model     string    `json:"model,omitempty"`
 	Tier      string    `json:"tier,omitempty"`
 	Space     string    `json:"space,omitempty"`
+	// GuidanceChars reports presence/size without exposing the guidance text in listings.
+	GuidanceChars int `json:"guidance_chars,omitempty"`
 }
 
 // ToInfo projects a session onto its listing form.
 func (s Session) ToInfo() Info {
-	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Model: s.Model, Tier: s.Tier, Space: s.Space}
+	info := Info{ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Model: s.Model, Tier: s.Tier, Space: s.Space, GuidanceChars: guidance.CharCount(s.Guidance)}
 	for _, m := range s.Messages {
 		if m.Role == provider.RoleUser {
 			info.Turns++
@@ -126,6 +134,9 @@ func (s *FileStore) Get(id string) (Session, error) {
 }
 
 func (s *FileStore) Save(sess Session) error {
+	if err := guidance.Validate(sess.Guidance); err != nil {
+		return fmt.Errorf("session guidance: %w", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess.UpdatedAt = time.Now().UTC()
@@ -222,6 +233,9 @@ func (s *FileStore) read(id string) (Session, error) {
 	var sess Session
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return Session{}, fmt.Errorf("parse session %s: %w", id, err)
+	}
+	if err := guidance.Validate(sess.Guidance); err != nil {
+		return Session{}, fmt.Errorf("parse session %s: session guidance: %w", id, err)
 	}
 	return sess, nil
 }

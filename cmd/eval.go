@@ -212,6 +212,11 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 	if v.AgentsMD != "" {
 		prompts.Appends = append(prompts.Appends, v.AgentsMD)
 	}
+	workspaceGuidance, err := workspaceGuidanceStore(workDir, nil).Get()
+	if err != nil {
+		res.Err = fmt.Errorf("load workspace guidance: %w", err)
+		return res
+	}
 
 	// Per-variant limits/spawn-depth layered over the ambient config.
 	limits := resolveAgentLimits(Config{Limits: cfg.Limits.merge(v.Limits)})
@@ -248,7 +253,7 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		// Keep eval history variant-local so comparisons are reproducible and do
 		// not depend on ambient process-wide activity.
 		Usage: tools.UsageContext{}, AuditReader: rec,
-		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+		SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, "", ""),
 		AgentCatalog: catalog, SpawnDepth: spawnDepth,
 		StatusDirs: agentStateDirs(workDir), Limits: limits,
 		ContextLimit: resolveContextLimit(model, cfg),

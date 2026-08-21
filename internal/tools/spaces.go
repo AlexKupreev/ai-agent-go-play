@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
+	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/space"
 )
 
@@ -17,6 +20,8 @@ type SpaceContext struct {
 	Store    *space.Store
 	ActiveID string
 	Switch   func(id string) error
+	Audit    audit.Recorder
+	RunID    string
 }
 
 // NewSpaceTools returns the space management built-ins: list_spaces, create_space,
@@ -142,11 +147,16 @@ func NewSpaceTools(sc SpaceContext) []Tool {
 				if err != nil {
 					return fmt.Sprintf("update_space_notes failed: %v", err), nil
 				}
+				previous := sp.Notes
+				if previous == notes {
+					return fmt.Sprintf("notes for space %q unchanged (%d chars)", sp.Name, utf8.RuneCountInString(notes)), nil
+				}
 				sp.Notes = notes
 				if err := sc.Store.Save(sp); err != nil {
 					return fmt.Sprintf("update_space_notes failed: %v", err), nil
 				}
-				return fmt.Sprintf("notes for space %q updated (%d chars); they load into context from the next turn", sp.Name, len(notes)), nil
+				guidance.RecordUpdate(sc.Audit, sc.RunID, "space", previous, notes, map[string]any{"space_id": sp.ID})
+				return fmt.Sprintf("notes for space %q updated (%d chars); they load into context from the next turn", sp.Name, utf8.RuneCountInString(notes)), nil
 			},
 		},
 	}
@@ -158,8 +168,9 @@ func notesPreview(notes string) string {
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])
 	}
-	if len(line) > 80 {
-		line = line[:80] + "…"
+	runes := []rune(line)
+	if len(runes) > 80 {
+		line = string(runes[:80]) + "…"
 	}
 	return line
 }

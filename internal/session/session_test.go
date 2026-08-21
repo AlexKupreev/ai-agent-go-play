@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/provider"
 )
 
@@ -88,6 +90,38 @@ func TestFileStore_StickyModelTier(t *testing.T) {
 	}
 	if len(infos) != 1 || infos[0].Model != "gpt-4o" || infos[0].Tier != "safe" {
 		t.Fatalf("listing Info did not carry model/tier: %+v", infos)
+	}
+}
+
+func TestFileStore_SessionGuidanceRoundTripMetadataAndLimit(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	s, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Guidance = "Pisz zwięźle 🐻"
+	if err := store.Save(s); err != nil {
+		t.Fatalf("Save guidance: %v", err)
+	}
+	got, err := store.Get(s.ID)
+	if err != nil || got.Guidance != s.Guidance {
+		t.Fatalf("reloaded guidance = %q, %v", got.Guidance, err)
+	}
+	infos, err := store.List()
+	if err != nil || len(infos) != 1 {
+		t.Fatalf("List = %+v, %v", infos, err)
+	}
+	if infos[0].GuidanceChars != guidance.CharCount(s.Guidance) {
+		t.Fatalf("guidance metadata = %d, want %d", infos[0].GuidanceChars, guidance.CharCount(s.Guidance))
+	}
+
+	s.Guidance = strings.Repeat("🐻", guidance.MaxChars+1)
+	if err := store.Save(s); err == nil || !strings.Contains(err.Error(), "4001") {
+		t.Fatalf("oversized session guidance Save = %v, want 4001-character error", err)
+	}
+	still, err := store.Get(s.ID)
+	if err != nil || still.Guidance != got.Guidance {
+		t.Fatalf("rejected Save changed stored guidance to %q, %v", still.Guidance, err)
 	}
 }
 

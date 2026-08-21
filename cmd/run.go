@@ -82,6 +82,10 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		workspaceGuidance, err := workspaceGuidanceStore(workDir, nil).Get()
+		if err != nil {
+			return fmt.Errorf("load workspace guidance: %w", err)
+		}
 
 		// Live audit log (per run) + persistent tool catalog, threaded into the
 		// executor so authored tools run brokered and audited.
@@ -129,7 +133,7 @@ var runCmd = &cobra.Command{
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 			Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: central,
-			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+			SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, "", ""),
 			AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 			StatusDirs: agentStateDirs(workDir), Limits: resolveAgentLimits(cfg),
 			ContextLimit: resolveContextLimit(model, cfg),

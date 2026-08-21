@@ -49,6 +49,10 @@ var promptsShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		workspaceGuidance, err := workspaceGuidanceStore(workDir, nil).Get()
+		if err != nil {
+			return fmt.Errorf("load workspace guidance: %w", err)
+		}
 		catalog, err := loadAgentCatalog(workDir, tier)
 		if err != nil {
 			return err
@@ -73,7 +77,7 @@ var promptsShowCmd = &cobra.Command{
 			Provider: prov, WorkDir: workDir, Model: model, Tier: tier,
 			Registry: registry, Memory: mem, Docs: selfDocs,
 			AgentCatalog: catalog, SpawnDepth: defaultSpawnDepth,
-			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
+			SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, "", ""),
 			Space:      tools.SpaceContext{Store: space.NewStore(spacesDir(workDir))},
 			StatusDirs: agentStateDirs(workDir), Sessions: sessReader,
 			// The secret store shapes the roster this command exists to report: it decides

@@ -729,7 +729,14 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// Spaces: switchable data contexts (list/create/switch, notes). Trusted, not
 	// sandbox-exposed; omitted when no space store is wired (spaces.md §6).
 	if cfg.Space.Store != nil {
-		builtins = append(builtins, tools.NewSpaceTools(cfg.Space)...)
+		spaceCtx := cfg.Space
+		if spaceCtx.Audit == nil {
+			spaceCtx.Audit = rec
+		}
+		if spaceCtx.RunID == "" {
+			spaceCtx.RunID = runID
+		}
+		builtins = append(builtins, tools.NewSpaceTools(spaceCtx)...)
 	}
 	a := newAgent(p, model, prompt, builtins, obs)
 	self = a

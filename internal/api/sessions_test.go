@@ -105,6 +105,34 @@ func TestEngine_SessionStickyModelTier(t *testing.T) {
 	}
 }
 
+func TestEngine_SessionGuidanceReachesTurnInternally(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	rec := &recordingTurns{}
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, rec)
+
+	sid, err := e.StartSession(RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Get(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Guidance = "answer in Polish"
+	if err := store.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := e.PostTurn(sid, "hello", RunOptions{Guidance: "caller must not win"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRunState(t, e, runID, StateDone)
+	if got := rec.last().Guidance; got != sess.Guidance {
+		t.Fatalf("turn guidance = %q, want persisted %q", got, sess.Guidance)
+	}
+}
+
 // TestHTTP_SessionStickyOverrides drives the sticky model/tier through the real HTTP
 // transport + client: POST /sessions with initial stickies, PATCH to change one, and the
 // boundary rejections (bad tier ⇒ 400, unknown session ⇒ 404).

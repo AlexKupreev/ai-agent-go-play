@@ -106,6 +106,11 @@ type RunOptions struct {
 	Model string `json:"model,omitempty"` // model for this run's agents; "" ⇒ engine default
 	Tier  string `json:"tier,omitempty"`  // requested tier, clamped to ≤ the serve tier; "" ⇒ engine default
 	Space string `json:"space,omitempty"` // active space id for this turn's memory scope + notes; "" ⇒ global
+
+	// Guidance is copied from the persisted session by PostTurn. It is deliberately not
+	// accepted on the wire: management endpoints mutate durable guidance; turn requests do
+	// not gain a hidden, non-persistent prompt-override channel.
+	Guidance string `json:"-"`
 }
 
 // RunInfo is the metadata + status of a run, serializable for the management
@@ -506,6 +511,7 @@ func (e *Engine) PostTurn(sessionID, text string, opts RunOptions) (string, erro
 		if turnOpts.Space == "" {
 			turnOpts.Space = sess.Space
 		}
+		turnOpts.Guidance = sess.Guidance
 		answer, updated, err := e.turns.RunTurn(ctx, runID, sessionID, sess.Messages, text, turnOpts, obs)
 		if err != nil {
 			return "", err

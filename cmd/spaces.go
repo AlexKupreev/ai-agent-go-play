@@ -73,17 +73,6 @@ func spacePromptNote(sp space.Space) string {
 	return b.String()
 }
 
-// withSpaceNote returns appends plus the space note, without mutating the (shared)
-// input slice. A "" note returns appends unchanged.
-func withSpaceNote(appends []string, note string) []string {
-	if note == "" {
-		return appends
-	}
-	out := make([]string, 0, len(appends)+1)
-	out = append(out, appends...)
-	return append(out, note)
-}
-
 // spaceMemCache hands out one memory store per space id, so every session/turn writing
 // to a space in one serve process shares a store (writes serialize through its lock
 // instead of racing whole-file rewrites from independent instances).

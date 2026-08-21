@@ -16,6 +16,7 @@ import (
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/frontend/telegram"
+	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
 	"ai-agent-go-play/internal/provider"
@@ -130,24 +131,25 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		deps := serveDeps{
-			prov:          newProvider(cfg),
-			workDir:       workDir,
-			defaults:      newServeDefaults(resolveModel(modelFlag, cfg), tier),
-			gate:          approvals,
-			registry:      registry,
-			mem:           mem,
-			central:       rec,
-			ledger:        usage.NewLedger(rec), // rec is the process-wide log (a Reader)
-			reader:        rec,                  // same log, read side, for recent_activity
-			prompts:       promptSrc,
-			limits:        resolveAgentLimits(cfg),
-			spawnDepth:    resolveSpawnDepth(cfg),
-			contextLimits: cfg.ContextLimits,
-			sessions:      sessions,
-			secrets:       secretsResolver(cfg),
-			secretNames:   secretNames(cfg),
-			spaces:        spaces,
-			spaceMems:     newSpaceMemCache(spaces),
+			prov:              newProvider(cfg),
+			workDir:           workDir,
+			defaults:          newServeDefaults(resolveModel(modelFlag, cfg), tier),
+			gate:              approvals,
+			registry:          registry,
+			mem:               mem,
+			central:           rec,
+			ledger:            usage.NewLedger(rec), // rec is the process-wide log (a Reader)
+			reader:            rec,                  // same log, read side, for recent_activity
+			prompts:           promptSrc,
+			limits:            resolveAgentLimits(cfg),
+			spawnDepth:        resolveSpawnDepth(cfg),
+			contextLimits:     cfg.ContextLimits,
+			sessions:          sessions,
+			secrets:           secretsResolver(cfg),
+			secretNames:       secretNames(cfg),
+			spaces:            spaces,
+			spaceMems:         newSpaceMemCache(spaces),
+			workspaceGuidance: workspaceGuidanceStore(workDir, rec),
 		}
 
 		// Session turns are deliberate (planner + critique) by default; --no-plan / --no-critique
@@ -348,6 +350,9 @@ type serveDeps struct {
 	// concurrent sessions so writes serialize instead of racing whole-file rewrites.
 	spaces    *space.Store
 	spaceMems *spaceMemCache
+	// workspaceGuidance is the workspace-local, user-managed global prompt layer.
+	// It is read for each new executor so a management update applies next turn.
+	workspaceGuidance guidance.Store
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -439,7 +444,7 @@ func (d serveDeps) resolveOpts(opts api.RunOptions) (model string, tier capabili
 // space's memory shard (cached process-wide), so it is safe to call repeatedly within one
 // turn (the deliberate pipeline does). An unknown spaceID is an error — failing the turn
 // loudly beats silently writing memory into the wrong scope.
-func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.Tier, spaceID string, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) (*agent.Agent, error) {
+func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.Tier, spaceID, sessionGuidance string, manifest *artifact.Manifest, scratchDir string, rec audit.Recorder, obs agent.Observer) (*agent.Agent, error) {
 	usageCtx := tools.UsageContext{SessionID: sessionID, Ledger: d.ledger}
 	// Snapshot the current prompts + catalog once, so a concurrent /reload can't change the
 	// executor's prompt mid-run (prompts.md §0).
@@ -447,6 +452,13 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 	mem, spaceNote, err := spaceScope(d.spaces, spaceID, d.mem, d.spaceMems)
 	if err != nil {
 		return nil, err
+	}
+	workspaceGuidance := ""
+	if d.workspaceGuidance != nil {
+		workspaceGuidance, err = d.workspaceGuidance.Get()
+		if err != nil {
+			return nil, fmt.Errorf("load workspace guidance: %w", err)
+		}
 	}
 	spaceCtx := tools.SpaceContext{Store: d.spaces, ActiveID: spaceID}
 	if sessionID != "" {
@@ -467,7 +479,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		Observer: obs, Registry: d.registry, Memory: mem, Docs: selfDocs,
 		Audit: rec, Tier: tier, Gate: d.gate,
 		Usage: usageCtx, AuditReader: d.reader,
-		SystemPromptOverride: prompts.Override, PromptAppends: withSpaceNote(prompts.Appends, spaceNote),
+		SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceNote, sessionGuidance),
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
 		Space:      spaceCtx,
 		StatusDirs: agentStateDirs(d.workDir), Limits: d.limits,
@@ -483,12 +495,12 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 // (so the transcript, audit Run field, and parked approvals share one id) and using the
 // resolved model + tier + active space. It returns a cleanup to defer. Shared by the plain
 // runner and the non-deliberate session turn runner.
-func (d serveDeps) buildExecutor(runID, sessionID, model string, tier capability.Tier, spaceID string, obs agent.Observer) (*agent.Agent, func(), error) {
+func (d serveDeps) buildExecutor(runID, sessionID, model string, tier capability.Tier, spaceID, sessionGuidance string, obs agent.Observer) (*agent.Agent, func(), error) {
 	io, err := d.openTurnIO(runID, obs)
 	if err != nil {
 		return nil, nil, err
 	}
-	ex, err := d.newExecutor(runID, sessionID, model, tier, spaceID, nil, "", io.rec, io.obsAll)
+	ex, err := d.newExecutor(runID, sessionID, model, tier, spaceID, sessionGuidance, nil, "", io.rec, io.obsAll)
 	if err != nil {
 		io.cleanup()
 		return nil, nil, err
@@ -503,7 +515,7 @@ func (d serveDeps) runner() api.Runner {
 		if err != nil {
 			return "", err
 		}
-		ex, cleanup, err := d.buildExecutor(runID, "", model, tier, opts.Space, obs)
+		ex, cleanup, err := d.buildExecutor(runID, "", model, tier, opts.Space, "", obs)
 		if err != nil {
 			return "", err
 		}
@@ -520,7 +532,7 @@ func (d serveDeps) turnRunner() api.TurnRunner {
 		if err != nil {
 			return "", nil, err
 		}
-		ex, cleanup, err := d.buildExecutor(runID, sessionID, model, tier, opts.Space, obs)
+		ex, cleanup, err := d.buildExecutor(runID, sessionID, model, tier, opts.Space, opts.Guidance, obs)
 		if err != nil {
 			return "", nil, err
 		}
@@ -576,7 +588,7 @@ func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish
 		internal := agent.Internalized(io.obsAll)
 		deps := deliberateDeps{
 			buildExecutor: func() (*agent.Agent, error) {
-				return d.newExecutor(runID, sessionID, model, tier, opts.Space, manifest, scratchDir, io.rec, io.obsAll)
+				return d.newExecutor(runID, sessionID, model, tier, opts.Space, opts.Guidance, manifest, scratchDir, io.rec, io.obsAll)
 			},
 			buildPlanner: func(environment, manifestView string) (*agent.Agent, error) {
 				prompts, _ := d.prompts.snapshot()

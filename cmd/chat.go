@@ -183,6 +183,10 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return nil, err
 			}
+			workspaceGuidance, err := workspaceGuidanceStore(workDir, nil).Get()
+			if err != nil {
+				return nil, fmt.Errorf("load workspace guidance: %w", err)
+			}
 			catalog, err := loadAgentCatalog(workDir, tier)
 			if err != nil {
 				return nil, err
@@ -198,7 +202,7 @@ var chatCmd = &cobra.Command{
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
 				Usage: tools.UsageContext{}, AuditReader: centralReader,
-				SystemPromptOverride: prompts.Override, PromptAppends: withSpaceNote(prompts.Appends, spaceNote),
+				SystemPromptOverride: prompts.Override, PromptAppends: withGuidance(prompts.Appends, workspaceGuidance, spaceNote, ""),
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				Space: tools.SpaceContext{Store: spaces, ActiveID: activeSpace, Switch: func(id string) error {
 					activeSpace, spaceDirty = id, true

@@ -432,6 +432,10 @@ func agentDataDir(workDir string) string { return filepath.Join(workDir, ".agent
 // dir; move an old <config-dir>/memory.json here to keep its entries.)
 func memoryPath(workDir string) string { return filepath.Join(agentDataDir(workDir), "memory.json") }
 
+// guidancePath returns the workspace's user-managed global guidance file. It is
+// separate from operator-owned SYSTEM.md/AGENTS.md and loaded at every trust tier.
+func guidancePath(workDir string) string { return filepath.Join(agentDataDir(workDir), "guidance.md") }
+
 // spacesDir returns the workspace's spaces root, e.g. <workspace>/.agent/spaces —
 // one subdirectory per space with its metadata + memory shard (spaces.md §3).
 func spacesDir(workDir string) string { return filepath.Join(agentDataDir(workDir), "spaces") }
