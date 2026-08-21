@@ -128,7 +128,7 @@ var runCmd = &cobra.Command{
 			Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 			Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 			Audit: rec, Tier: tier, Gate: tools.StdinGate{},
-			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: rec,
+			Usage: tools.UsageContext{Ledger: ledger}, AuditReader: central,
 			SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 			AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 			StatusDirs: agentStateDirs(workDir), Limits: resolveAgentLimits(cfg),

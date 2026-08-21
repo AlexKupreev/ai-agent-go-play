@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/audit"
 
 	"github.com/spf13/cobra"
 )
@@ -18,14 +19,13 @@ var (
 
 var auditCmd = &cobra.Command{
 	Use:   "audit",
-	Short: "Browse the engine's audit log (capability use, tool authoring/revocation, memory writes)",
-	Long: "Query the process-wide audit log of a running engine started with `agent serve`. " +
-		"The log is the single review surface for everything effectful. Filter with --run and " +
-		"--type; --limit caps to the last N matches.",
+	Short: "Browse the audit log (capability use, tool authoring/revocation, memory writes)",
+	Long: "Query the local process-wide audit log under --config-dir. When --addr is explicitly " +
+		"supplied, query that running engine instead. The log is the single review surface for " +
+		"everything effectful. Filter with --run and --type; --limit caps to the last N matches.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := api.NewClient("http://" + resolveAddr(auditAddrFlag))
-		events, err := c.Audit(context.Background(), auditRunFlag, auditTypeFlag, auditLimitFlag)
+		events, err := loadAuditEvents(cmd, auditAddrFlag, auditRunFlag, auditTypeFlag, auditLimitFlag)
 		if err != nil {
 			return err
 		}
@@ -44,8 +44,23 @@ var auditCmd = &cobra.Command{
 	},
 }
 
+// loadAuditEvents selects local or remote audit history. Merely having the
+// default address value is not enough to select remote mode: the caller must
+// have explicitly supplied --addr.
+func loadAuditEvents(cmd *cobra.Command, addr, run, typ string, limit int) ([]audit.Event, error) {
+	if cmd.Flags().Changed("addr") {
+		c := api.NewClient("http://" + resolveAddr(addr))
+		return c.Audit(context.Background(), run, typ, limit)
+	}
+	reader, err := openCentralAuditReader()
+	if err != nil {
+		return nil, err
+	}
+	return reader.Tail(limit, audit.Filter{Run: run, Type: typ})
+}
+
 func init() {
-	auditCmd.Flags().StringVar(&auditAddrFlag, "addr", "127.0.0.1:8080", "engine address")
+	auditCmd.Flags().StringVar(&auditAddrFlag, "addr", "127.0.0.1:8080", "query this engine instead of the local log")
 	auditCmd.Flags().StringVar(&auditRunFlag, "run", "", "filter by run id")
 	auditCmd.Flags().StringVar(&auditTypeFlag, "type", "", "filter by event type (e.g. tool_revoked)")
 	auditCmd.Flags().IntVar(&auditLimitFlag, "limit", 0, "return only the last N matching events (0 = all)")

@@ -10,10 +10,9 @@ must not be treated as a capability list.
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
 credential rotation. R1 is in progress: chunked Telegram delivery, the Telegram session-command
 repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation), and session-space
-validation and truthful capability-failure auditing are shipped. Next up is R1's fifth bullet —
-giving every frontend the central audit reader and making `agent audit` work locally like
-`agent usage`. See [Hand-off](#hand-off--next-step) at the end of this file for the trace that is
-already done on it.
+validation, truthful capability-failure auditing, and durable audit-history access are shipped.
+Next up is refreshing or replacing the model context-window registry. See
+[Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on it.
 
 ## How the planning set fits together
 
@@ -115,8 +114,13 @@ This is the fix-first slice. Keep changes small and independently shippable.
       Failed scrapes retain their run id, host, `[secret:scrapingant]`, and `[browser]` cost marker
       while never logging the full URL, raw error, or key. The API/CLI/activity readers already
       filter arbitrary event-type strings, and their documented type lists now include the new one.
-- [ ] Pass the central audit reader to every frontend and add local `agent audit` behavior consistent
-      with local `agent usage`.
+- [x] Pass the central audit reader to every applicable frontend and add local `agent audit`
+      behavior consistent with local `agent usage`. **Done 2026-08-21** — `run`, local `chat`, and
+      `serve` now give `recent_activity` the process-wide reader; eval deliberately remains
+      variant-local for reproducibility. A read-only JSONL reader lets `agent audit` default to the
+      local `<config-dir>/audit.jsonl` without creating a missing file, while an explicitly supplied
+      `--addr` preserves API/alias behavior. Command tests cover selection, filters, limits, and a
+      missing log.
 - [ ] Update the model context-window registry or replace the hard-coded table with provider/config
       metadata plus a conservative fallback.
 - [ ] Add a hard per-run/per-day paid-tool call ceiling before expanding unattended behavior.
@@ -250,32 +254,28 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after capability-failure auditing shipped. Replace this section when the next
+*Written 2026-08-21, after durable audit-history access shipped. Replace this section when the next
 slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's fifth bullet — pass the central audit reader to every frontend and make local
-`agent audit` behave like local `agent usage`.** Today the reader differs by front door even though
-the central log already exists. What a first look at the code shows:
+**Next slice: R1's sixth bullet — refresh the model context-window registry or replace it with
+provider/config metadata plus a conservative fallback.** The current gauge is useful but its
+built-in knowledge stops at the `o4-mini` generation. What a first look at the code shows:
 
-- `serveDeps.reader` is the process-wide `audit.JSONLRecorder`, and `serveDeps.newExecutor` passes
-  it as `ExecutorConfig.AuditReader`; this is the correct durable behavior.
-- `agent run` already calls `openCentralLedger()` for day-wide token totals, but passes its per-run
-  transcript recorder as `AuditReader`. It can pass the returned central recorder instead without
-  changing where broker events are written. Local `agent chat` passes its per-run recorder too and
-  does not open the central ledger at all; it needs a central reader with a session-long lifetime.
-  `eval` also passes a per-variant recorder, so decide explicitly whether "every frontend" includes
-  model-facing `recent_activity` during eval (consistency argues yes; reproducibility may argue no).
-- `openCentralLedger` (`cmd/usage.go`) opens the central JSONL path read/write and returns both the
-  recorder and `usage.Ledger`; a small central-audit opener can avoid making callers construct the
-  path differently. Keep one open handle per command, not one per turn/executor rebuild.
-- `agent audit` (`cmd/audit.go`) always constructs an API client from the defaulted `--addr`, so it
-  cannot tell whether the user explicitly requested remote mode. Cobra exposes
-  `cmd.Flags().Changed("addr")`: when false, read the local central log under `--config-dir`; when
-  true, retain the existing API behavior. `agent usage` is the local precedent, though audit needs
-  a read-only open path (the current `NewJSONLRecorder` opens append/create).
-- `GET /audit?type=` and `audit.Reader.Tail` already accept arbitrary event-type strings; there is
-  no validation list to keep in sync. Add command tests for local default, explicit remote, filters,
-  limits, and a missing log returning the same empty result as an empty remote response.
+- `internal/agent/context.go` owns a small static `contextWindows` map. `ContextWindow` checks an
+  exact id, then the longest matching prefix so dated snapshots and sub-variants inherit a family
+  size. Unknown ids return zero, which truthfully renders "window size unknown" rather than an
+  invented percentage.
+- The built-in default is `gpt-4o-mini`; it currently inherits 128k from the `gpt-4o` prefix.
+  `internal/agent/context_test.go` pins exact, snapshot, longest-prefix, default-family, and unknown
+  behavior. Any refresh should add current model families and prefix-collision cases using current
+  official provider documentation as the source of truth.
+- `config.json`'s `context_limits` remains the operator escape hatch and wins on an exact model id
+  in `cmd.contextLimitFor`. It covers private, renamed, and OpenAI-compatible endpoints and should
+  keep precedence over any built-in/provider metadata.
+- Every executor frontend already receives the resolved limit (`run`, local `chat`, `serve`, and
+  eval), while local and remote chat render the same last-input/window gauge. The provider port
+  currently exposes only `Step`; adding metadata there would be a real interface expansion, so
+  compare that cost with a focused table refresh before choosing the design.
 
 Also worth knowing before continuing in R1:
 

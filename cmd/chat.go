@@ -100,6 +100,13 @@ var chatCmd = &cobra.Command{
 		}
 		defer rec.Close()
 
+		// recent_activity reads durable, process-wide history. The per-run recorder
+		// above remains the write sink for this local chat's brokered effects.
+		centralReader, err := openCentralAuditReader()
+		if err != nil {
+			return fmt.Errorf("failed to open central audit reader: %w", err)
+		}
+
 		catPath, err := catalogPath()
 		if err != nil {
 			return err
@@ -190,7 +197,7 @@ var chatCmd = &cobra.Command{
 				Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 				Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 				Audit: rec, Tier: tier, Gate: tools.StdinGate{},
-				Usage: tools.UsageContext{}, AuditReader: rec,
+				Usage: tools.UsageContext{}, AuditReader: centralReader,
 				SystemPromptOverride: prompts.Override, PromptAppends: withSpaceNote(prompts.Appends, spaceNote),
 				AgentCatalog: catalog, SpawnDepth: resolveSpawnDepth(cfg),
 				Space: tools.SpaceContext{Store: spaces, ActiveID: activeSpace, Switch: func(id string) error {

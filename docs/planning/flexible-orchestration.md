@@ -884,8 +884,8 @@ delivery failure is discoverable rather than silent.
 ### Phase G — budgets, local consistency, and rollout
 
 - [ ] Per-run/per-day paid-tool budgets and token soft/hard limits.
-- [ ] Central `recent_activity` reader in every frontend.
-- [ ] Local `agent audit` mode.
+- [x] Central `recent_activity` reader in run/local chat/serve (eval deliberately stays variant-local).
+- [x] Local `agent audit` mode, with explicit `--addr` retaining remote behavior.
 - [ ] Compare `quick`/`adaptive`/`thorough` with representative eval tasks and repeat runs.
 - [ ] Choose whether `adaptive` becomes the default for new sessions; never silently rewrite old
       session settings.

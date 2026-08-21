@@ -151,6 +151,17 @@ type JSONLRecorder struct {
 	path string
 }
 
+// JSONLReader reads an audit log without opening it for writing or creating it.
+// Keeping the path (rather than an open descriptor) also lets a long-lived reader
+// observe a log that is created after the reader itself.
+type JSONLReader struct {
+	path string
+}
+
+// NewJSONLReader returns a read-only view of the JSONL audit log at path. A
+// missing file is an empty log.
+func NewJSONLReader(path string) *JSONLReader { return &JSONLReader{path: path} }
+
 // NewJSONLRecorder opens (creating if needed) an append-only JSONL file.
 func NewJSONLRecorder(path string) (*JSONLRecorder, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
@@ -167,8 +178,17 @@ func NewJSONLRecorder(path string) (*JSONLRecorder, error) {
 func (r *JSONLRecorder) Tail(n int, filter Filter) ([]Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return tailJSONL(r.path, n, filter)
+}
 
-	f, err := os.Open(r.path)
+// Tail returns up to the last n matching events without creating or modifying
+// the audit file.
+func (r *JSONLReader) Tail(n int, filter Filter) ([]Event, error) {
+	return tailJSONL(r.path, n, filter)
+}
+
+func tailJSONL(path string, n int, filter Filter) ([]Event, error) {
+	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}

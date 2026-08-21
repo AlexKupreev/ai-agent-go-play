@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -77,14 +78,39 @@ func TestJSONLRecorder_Tail(t *testing.T) {
 	})
 }
 
-func TestJSONLRecorder_TailMissingFileIsEmpty(t *testing.T) {
-	r := &JSONLRecorder{path: filepath.Join(t.TempDir(), "does-not-exist.jsonl")}
+func TestJSONLReader_Tail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	w, err := NewJSONLRecorder(path)
+	if err != nil {
+		t.Fatalf("NewJSONLRecorder: %v", err)
+	}
+	seed(w)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r := NewJSONLReader(path)
+	tailCases(t, func(n int, f Filter) []Event {
+		ev, err := r.Tail(n, f)
+		if err != nil {
+			t.Fatalf("Tail: %v", err)
+		}
+		return ev
+	})
+}
+
+func TestJSONLReader_TailMissingFileIsEmptyAndDoesNotCreateIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "does-not-exist.jsonl")
+	r := NewJSONLReader(path)
 	ev, err := r.Tail(0, Filter{})
 	if err != nil {
 		t.Fatalf("Tail on missing file: %v", err)
 	}
 	if len(ev) != 0 {
 		t.Fatalf("missing file = %d events, want 0", len(ev))
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only Tail created the audit file: stat error = %v", err)
 	}
 }
 

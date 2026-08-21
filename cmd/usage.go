@@ -71,6 +71,17 @@ func openCentralLedger() (*audit.JSONLRecorder, *usage.Ledger, error) {
 	return rec, usage.NewLedger(rec), nil
 }
 
+// openCentralAuditReader returns a read-only view of the process-wide audit log.
+// It deliberately does not create the file: commands that only inspect history
+// should treat a missing log as empty and leave the config directory untouched.
+func openCentralAuditReader() (audit.Reader, error) {
+	path, err := auditPath()
+	if err != nil {
+		return nil, err
+	}
+	return audit.NewJSONLReader(path), nil
+}
+
 // recordRunUsage appends a run_usage event (wraps usage.Record so run.go needn't import
 // the usage package, whose name would clash with its local accumulator variable).
 func recordRunUsage(rec audit.Recorder, runID, sessionID string, u provider.Usage, steps int) {

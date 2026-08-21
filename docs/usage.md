@@ -123,7 +123,7 @@ Run `./agent <command> --help` for the authoritative flag list. Summary:
 | `agent prompts show` | Print the composed effective prompt (executor by default; `--planner`/`--critic`/`--all`) without a run — honors `--workspace`/`--tier`/`--context-file`/`--no-context-files`. |
 | `agent reload` | Tell a running engine to re-read its prompt + agent-type files and `config.json` defaults (model, tier) — no restart. |
 | `agent stop <run-id>` | Cancel a run on a running engine (kill switch). |
-| `agent audit` | Browse the engine's audit log. |
+| `agent audit` | Browse the local audit log; add `--addr` to query a running engine. |
 | `agent session list\|purge\|restore` | Manage a running engine's persistent conversations: list resumable ones, purge one irreversibly (`-y` skips the confirm), or restore a closed (archived) one. |
 | `agent usage` | Show token totals — today, or `--session <id>` — from the audit log. |
 | `agent tool list` | List persisted, agent-authored tools. |
@@ -719,11 +719,12 @@ tools authored/revoked, memory saved, token usage — "what have I done recently
 `tool_catalog` lists the tools it has authored with their capabilities, so it reuses an existing
 one instead of writing a duplicate.
 
-**`recent_activity`'s reach depends on the front door.** Under `agent serve` it reads the
-process-wide `audit.jsonl`, so it genuinely spans past runs and sessions. Under `agent run` and
-local `agent chat` it reads only *that run's* transcript audit file
-(`<runs-dir>/<run-id>/audit.jsonl`), so it sees the current run and nothing else — usually
-empty. Ask a `serve` engine, or read the central log with `agent audit --addr`, for history.
+Under `agent run`, local `agent chat`, and `agent serve`, `recent_activity` reads the same
+process-wide `audit.jsonl`, so it can review durable history from earlier runs and sessions.
+`agent eval` is intentionally different: each variant reads only its own per-run audit transcript,
+keeping comparisons independent of ambient history. Local `run` and `chat` still write brokered
+effects to their per-run transcripts (and `run` appends its `run_usage` to the process-wide log);
+`serve` writes all of its audited effects to both.
 
 ---
 
@@ -734,27 +735,21 @@ Everything effectful is recorded to an append-only audit log: capability use
 (`tool_authored` / `tool_revoked`), memory writes (`memory_write`), and per-run token
 usage (`run_usage` — see [Token usage](#token-usage)).
 
-Under `agent serve` there is **one process-wide log** at
-`~/.config/ai-agent/audit.jsonl`, browsable over the API:
+There is **one process-wide log** at `~/.config/ai-agent/audit.jsonl` (or the selected
+`--config-dir`). `agent audit` reads that file directly by default, with no running engine needed:
 
 ```bash
-./agent audit --addr 127.0.0.1:8080                       # all events, oldest first
-./agent audit --addr home --type tool_revoked             # filter by event type
-./agent audit --addr home --run <run-id> --limit 50       # last 50 events for one run
+./agent audit                                      # local log, all events, oldest first
+./agent audit --type tool_revoked                  # filter the local log by event type
+./agent audit --run <run-id> --limit 50            # last 50 local matches for one run
+./agent audit --addr home --type tool_revoked      # explicitly query a running engine
 ```
 
-Flags: `--addr`, `--run`, `--type`, `--limit` (0 = all). Each `agent run` / `serve` run
-also keeps its own transcript under `<config-dir>/runs/<run-id>/`.
-
-**`agent audit` always reads over the API** — it has no local-file mode, so it needs a running
-engine (`--addr` defaults to `127.0.0.1:8080`; without one you get a connection error). To read
-the log after a `serve` has stopped, read the file directly:
-
-```bash
-jq -c 'select(.type == "tool_revoked")' ~/.config/ai-agent/audit.jsonl
-```
-
-(`agent usage`, by contrast, reads that same file locally and needs no engine.)
+Flags: `--addr`, `--run`, `--type`, `--limit` (0 = all). Supplying `--addr` explicitly preserves
+the API behavior and accepts an engine alias; omitting it selects the local file, just like
+`agent usage`. A missing local file is an empty log (`no matching audit events`) and is not created
+by the read. Each `agent run` / `serve` run also keeps its own transcript under
+`<config-dir>/runs/<run-id>/`.
 
 ---
 

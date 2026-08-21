@@ -125,9 +125,10 @@ Every capability a tool exercises, fails to execute, **or is denied** is recorde
 self-extension reviewable. `capability_denied` means policy refused the operation;
 `capability_failed` means policy allowed it but execution failed.
 
-- `Recorder` interface; `MemoryRecorder` (tests/inspection) and `JSONLRecorder` (one JSON object
-  per line, append-only, mode `0600`). `Recorders` fans one event to several sinks. A richer store
-  (SQLite) can implement `Recorder`/`Reader` later without touching callers.
+- `Recorder`/`Reader` interfaces; `MemoryRecorder` (tests/inspection), `JSONLRecorder` (one JSON
+  object per line, append-only, mode `0600`), and a read-only `JSONLReader` that treats a missing
+  file as empty without creating it. `Recorders` fans one event to several sinks. A richer store
+  (SQLite) can implement the interfaces later without touching callers.
 - Event types: `capability_exercised`, `capability_failed`, `capability_denied`, `tool_authored`,
   `tool_revoked`, `memory_write`, `run_usage` (per-run token spend —
   [`usage.md`](usage.md#token-usage)), and `session_purged` (irreversible session deletion —
@@ -136,16 +137,19 @@ self-extension reviewable. `capability_denied` means policy refused the operatio
   error text that could include a URL or secret.
 - **Audit-write failures are surfaced** to stderr, never dropped silently — an unserializable or
   unwritable audit record is treated as a bug, because the log *is* the security record.
-- **Reviewable over the API (Phase 4e-4):** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
+- **Reviewable locally and over the API:** `audit.Reader.Tail(n, Filter{Run,Type})` reads the log
   back; `serve` keeps one **process-wide** `~/.config/ai-agent/audit.jsonl` shared across all runs
-  (each run also keeps its own session transcript), browsable via `GET /audit?run=&type=&limit=` and
-  `agent audit --addr`. This is the single review surface for everything effectful.
+  (each run also keeps its own session transcript). `agent audit` reads that file locally by
+  default; an explicitly supplied `--addr` uses `GET /audit?run=&type=&limit=` on a running engine.
+  `recent_activity` uses the process-wide reader in `run`, local `chat`, and `serve`; eval remains
+  variant-local so ambient history cannot change a comparison. This is the single review surface
+  for everything effectful.
 
 **Defends against:** undetectable misbehavior — provides the after-the-fact review/revoke backstop
 that works even unattended.
 
 **Status:** built, unit-tested, and live-wired — the run loop records through the `Broker` (Phase 3b)
-and `serve` exposes the process-wide log for browsing (4e-4).
+and the process-wide log is exposed both locally and by `serve` over the API.
 
 ---
 

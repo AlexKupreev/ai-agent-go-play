@@ -245,6 +245,8 @@ func runEvalVariant(ctx context.Context, v evalVariant, task string, cfg Config,
 		Provider: prov, WorkDir: workDir, Model: model, RunID: log.RunID,
 		Observer: obs, Registry: registry, Memory: mem, Docs: selfDocs,
 		Audit: rec, Tier: tier, Gate: tools.StdinGate{},
+		// Keep eval history variant-local so comparisons are reproducible and do
+		// not depend on ambient process-wide activity.
 		Usage: tools.UsageContext{}, AuditReader: rec,
 		SystemPromptOverride: prompts.Override, PromptAppends: prompts.Appends,
 		AgentCatalog: catalog, SpawnDepth: spawnDepth,
