@@ -174,6 +174,33 @@ func TestClient_StartRunErrorsOnBadStatus(t *testing.T) {
 	}
 }
 
+func TestClientStreamEventsRejectsCleanEOFWithoutTerminalFrame(t *testing.T) {
+	c := NewClient("http://engine")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := "data: {\"kind\":\"response\",\"text\":\"partial\"}\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	var seen []Event
+	err := c.StreamEvents(context.Background(), "run1", func(e Event) { seen = append(seen, e) })
+	if err == nil || !strings.Contains(err.Error(), "before a terminal") {
+		t.Fatalf("StreamEvents error = %v", err)
+	}
+	if len(seen) != 1 || seen[0].Text != "partial" {
+		t.Fatalf("seen events = %+v", seen)
+	}
+}
+
+func TestClientStreamEventsAcceptsErrorTerminalFrame(t *testing.T) {
+	c := NewClient("http://engine")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := "data: {\"kind\":\"error\",\"text\":\"failed\"}\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	if err := c.StreamEvents(context.Background(), "run1", func(Event) {}); err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+}
+
 func TestClientDeadEngineErrorIncludesRecovery(t *testing.T) {
 	c := NewClient("http://127.0.0.1:65534")
 	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

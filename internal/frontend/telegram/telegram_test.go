@@ -164,6 +164,8 @@ type fakeClient struct {
 	statusErr    error
 	statusCalls  int
 	statusSessID *string
+	streamErr    error
+	doneOnly     string
 }
 
 func newFakeClient() *fakeClient {
@@ -279,6 +281,13 @@ func (c *fakeClient) Reload(context.Context) (api.ReloadDiff, error) {
 // StreamEvents scripts a run that parks an approval, waits for the decision (via
 // Resolve), then finishes — mirroring the real engine's approval flow.
 func (c *fakeClient) StreamEvents(ctx context.Context, _ string, onEvent func(api.Event)) error {
+	if c.streamErr != nil {
+		return c.streamErr
+	}
+	if c.doneOnly != "" {
+		onEvent(api.Event{Kind: api.KindDone, Text: c.doneOnly})
+		return nil
+	}
 	if c.question {
 		return c.streamQuestion(ctx, onEvent)
 	}
@@ -301,6 +310,58 @@ func (c *fakeClient) StreamEvents(ctx context.Context, _ string, onEvent func(ap
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func TestBotStreamReportsInterruptedStream(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.streamErr = errors.New("event stream ended before a terminal done/error frame")
+	bot := NewBot(tr, cl, []int64{42})
+
+	bot.stream(context.Background(), 7, "run1")
+	tr.waitForSend(t, func(m sentMessage) bool {
+		return strings.Contains(m.text, "stream ended:") && strings.Contains(m.text, "terminal")
+	})
+}
+
+func TestBotStreamDeliversDoneTextWhenFinalResponseWasMissing(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.doneOnly = "recovered final answer"
+	bot := NewBot(tr, cl, []int64{42})
+
+	bot.stream(context.Background(), 7, "run1")
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	count := 0
+	for _, msg := range tr.sent {
+		if msg.text == "recovered final answer" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("done answer delivered %d times; messages=%+v", count, tr.sent)
+	}
+}
+
+func TestBotStreamDeliversNormalFinalAnswerExactlyOnce(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.resolved <- true
+	bot := NewBot(tr, cl, []int64{42})
+
+	bot.stream(context.Background(), 7, "run1")
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	count := 0
+	for _, msg := range tr.sent {
+		if msg.text == "did it" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("normal final answer delivered %d times; messages=%+v", count, tr.sent)
 	}
 }
 

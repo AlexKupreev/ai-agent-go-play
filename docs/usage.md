@@ -337,7 +337,9 @@ pipeline rather than a single executor call:
 2. **Executor** — runs the brief in a fresh executor (no accumulated tool-call cruft in the
    conversation), streaming its activity and producing the answer.
 3. **Critic** (unless `--no-critique`) — judges the answer against the brief's success
-   criteria. If it falls short, the planner re-plans with the critic's gaps as added context
+   criteria and bounded, redacted runtime evidence from that executor attempt. It receives source
+   metadata and tool outcomes, never raw tool results or network access. If the answer falls short,
+   the planner re-plans with the critic's gaps as added context
    and the executor runs the revised brief — up to `--max-revisions` cycles (default 1), after
    which the best answer is delivered with a note. Tune it with `CRITIC.md`.
 

@@ -102,6 +102,16 @@ func TestNewExecutor_PromptOverrideAndAppends(t *testing.T) {
 	}
 }
 
+func TestPlannerPromptRequiresObservableSuccessCriteria(t *testing.T) {
+	planner := NewPlanner(&systemCapture{}, "", "", "", "", nil, "", nil)
+	prompt := planner.SystemPrompt()
+	for _, want := range []string{"user-visible done-condition", "never require proof that a named internal tool was called"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("planner prompt missing %q", want)
+		}
+	}
+}
+
 // TestKernelPromptBlocks checks that the containment blocks an operator prompt must not drop
 // are re-attached, and are not duplicated when the operator copied them across by hand.
 func TestKernelPromptBlocks(t *testing.T) {

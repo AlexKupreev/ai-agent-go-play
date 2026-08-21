@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/commandhelp"
 	"ai-agent-go-play/internal/guidance"
@@ -778,6 +779,7 @@ func (b *Bot) confirmPurge(ctx context.Context, c Callback, nonce string, confir
 // job (docs/planning/roadmap.md); this slice keeps it in the operator log and the chat.
 func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 	var undelivered error
+	seenResponses := make(map[string]struct{})
 	deliver := func(text string, buttons []Button) {
 		if err := b.send(ctx, chatID, text, buttons); err != nil && undelivered == nil {
 			undelivered = err
@@ -798,8 +800,13 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 			// Answered (here or elsewhere) — drop any lingering pending marker for this chat.
 			b.clearPendingQuestion(chatID, e.ApprovalID)
 		case api.KindDone:
-			// Terminal marker only: its Text duplicates the final EvResponse
-			// (already forwarded by the default branch), so don't send it again.
+			// Usually a terminal marker whose text duplicates the final EvResponse. If an
+			// interrupted/replayed stream omitted that response, deliver the terminal copy.
+			if e.Text != "" {
+				if _, seen := seenResponses[e.Text]; !seen {
+					deliver(e.Text, nil)
+				}
+			}
 		case api.KindBrief:
 			// The deliberate turn's plan/critique surface (serve --plan): one summary line,
 			// distinct from the answer, so the deliberation is legible without drowning the
@@ -814,6 +821,9 @@ func (b *Bot) stream(ctx context.Context, chatID int64, runID string) {
 			// visible text, skip the noisier structured events.
 			if e.Text != "" {
 				deliver(e.Text, nil)
+				if e.Kind == string(agent.EvResponse) {
+					seenResponses[e.Text] = struct{}{}
+				}
 			}
 		}
 	})

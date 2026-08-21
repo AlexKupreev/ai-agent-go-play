@@ -97,6 +97,7 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, onEvent func(Ev
 	sc := bufio.NewScanner(resp.Body)
 	// Tool results can be large; lift the line cap well above the 64 KiB default.
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	terminal := false
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data: ")
 		if !ok {
@@ -106,9 +107,18 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, onEvent func(Ev
 		if err := json.Unmarshal([]byte(data), &e); err != nil {
 			continue // skip malformed frame rather than abort the stream
 		}
+		if e.Kind == KindDone || e.Kind == KindError {
+			terminal = true
+		}
 		onEvent(e)
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if !terminal {
+		return fmt.Errorf("event stream ended before a terminal done/error frame")
+	}
+	return nil
 }
 
 // Pending lists the approvals parked on the engine for this client's session.

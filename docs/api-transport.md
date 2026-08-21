@@ -164,7 +164,9 @@ not a rewrite. The event/approval **semantics** live in the core; only framing d
 ## The CLI as a client
 
 `internal/api/client.go` (`Client`) is the peer side of the SSE adapter:
-`StartRun`/`StreamEvents`/`Pending`/`Resolve`. `cmd/client.go` (`agent client <task> --addr`)
+`StartRun`/`StreamEvents`/`Pending`/`Resolve`. `StreamEvents` requires a terminal `done` or `error`
+frame; a clean EOF before either is reported as an interrupted stream, not success. `cmd/client.go`
+(`agent client <task> --addr`)
 uses it to drive a run on a running `agent serve` engine — streaming events to the terminal
 (same trace as the in-process `CLIObserver`) and, since SSE has no server push, **polling**
 `GET /approvals` to prompt the operator and `POST` the decision. This makes the CLI one client

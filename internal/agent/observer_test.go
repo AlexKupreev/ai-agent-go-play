@@ -166,3 +166,22 @@ func TestRun_EmitsEventSequence(t *testing.T) {
 		}
 	}
 }
+
+func TestRunRejectsWhitespaceOnlyFinalAnswer(t *testing.T) {
+	prov := &scriptedProvider{steps: []provider.StepResponse{textStep(" \n\t ")}}
+	exec := NewExecutor(ExecutorConfig{Provider: prov, WorkDir: t.TempDir(), Tier: capability.TierBalanced})
+	if out, err := exec.Run(context.Background(), "answer"); err == nil || out != "" {
+		t.Fatalf("Run = %q, %v; want empty-final error", out, err)
+	}
+}
+
+func TestRunRejectsEmptyFinalAnswerAfterSuccessfulTool(t *testing.T) {
+	prov := &scriptedProvider{steps: []provider.StepResponse{
+		toolCallStep("c1", "run_code", map[string]any{"code": "return 1"}),
+		textStep(""),
+	}}
+	exec := NewExecutor(ExecutorConfig{Provider: prov, WorkDir: t.TempDir(), Tier: capability.TierBalanced})
+	if out, err := exec.Run(context.Background(), "compute"); err == nil || out != "" {
+		t.Fatalf("Run = %q, %v; want empty-final error", out, err)
+	}
+}
