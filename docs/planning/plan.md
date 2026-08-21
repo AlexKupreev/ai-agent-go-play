@@ -1,5 +1,10 @@
 # Implementation Plan
 
+> **Role: historical implementation log.** This was the status-of-record while the original kernel
+> and management plane were built. Use [`roadmap.md`](roadmap.md) for current priority and ordering;
+> retained unchecked items here are optional or deferred unless the roadmap explicitly carries
+> them forward.
+
 The actionable, phased plan for evolving this repo from a ReAct CLI into the self-extending
 agent described in [`design.md`](../design.md). Each phase is shippable on its own and leaves the
 agent working. Do them in order — the build-ordering rule in Phase 2 is hard.
@@ -696,14 +701,10 @@ system-prompt self-summary drift from the docs — generate it or keep it a poin
 the project shipped **spaces** (with the workspace-local move of memory), **file upload**, and the
 **`scrape`** tool.
 
-**Next candidates** — the ranked list now lives in
-[`review-2026-08.md`](review-2026-08.md) §Suggested order, which supersedes this paragraph. In
-short: the reference-doc currency fixes (done), then capping/sectioning `read_self_docs`, the
-user-facing guidance channel (`/notes`), prompt sectioning so a `SYSTEM.md` stops dropping the
-injection rule, and **Phase 6d**'s budget dial — which now has a concrete driver in `scrape`,
-the first built-in whose blast radius is financial. Also still open: the **Projects** track
-(*built then reverted — deferred*, [`../deferred/projects.md`](../deferred/projects.md)) and
-**scheduling** ([`scheduling.md`](scheduling.md)).
+**Next candidates** — this historical list has been consolidated into
+[`roadmap.md`](roadmap.md), which now owns current priority and dependencies. The August review's
+findings remain available in [`review-2026-08.md`](review-2026-08.md), but its suggested order is a
+dated input rather than a second backlog.
 
 **Phase 6d is deferred** — budget + context-window awareness (soft warning at ~80%, optional hard
 stop, context-window trimming) is a self-contained dial that reads 6a/`usage` totals; pull it in

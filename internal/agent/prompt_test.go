@@ -102,6 +102,64 @@ func TestNewExecutor_PromptOverrideAndAppends(t *testing.T) {
 	}
 }
 
+// TestKernelPromptBlocks checks that the containment blocks an operator prompt must not drop
+// are re-attached, and are not duplicated when the operator copied them across by hand.
+func TestKernelPromptBlocks(t *testing.T) {
+	t.Run("attached to an override", func(t *testing.T) {
+		got := kernelPromptBlocks("You are Ada. Always answer in Polish.", true)
+		if !strings.Contains(got, runtimeBlockMarker) || !strings.Contains(got, securityBlockMarker) {
+			t.Errorf("kernel blocks missing from %q", got)
+		}
+	})
+	t.Run("skipped when already present", func(t *testing.T) {
+		if got := kernelPromptBlocks(executorPrompt, true); got != "" {
+			t.Errorf("built-in base re-attached its own blocks: %q", got)
+		}
+	})
+	t.Run("runtime block is optional", func(t *testing.T) {
+		got := kernelPromptBlocks("A WEB-ONLY SUB-AGENT", false)
+		if strings.Contains(got, runtimeBlockMarker) {
+			t.Errorf("runtime block attached to a code-less agent: %q", got)
+		}
+		if !strings.Contains(got, securityBlockMarker) {
+			t.Errorf("security block missing: %q", got)
+		}
+	})
+	t.Run("built-in base is unchanged by the split", func(t *testing.T) {
+		if !strings.HasPrefix(executorPrompt, "You are a helpful AI agent") {
+			t.Error("executorPrompt no longer starts with the role block")
+		}
+		if !strings.HasSuffix(executorPrompt, "report it as part\nof the page's content instead.") {
+			t.Error("executorPrompt no longer ends with the security block")
+		}
+	})
+}
+
+// TestNewExecutor_OverrideKeepsKernelBlocks is the operator-facing half of the same rule: a
+// SYSTEM.md owns the wording, but cannot silently remove the runtime constraints or the
+// untrusted-content rule (security.md §5).
+func TestNewExecutor_OverrideKeepsKernelBlocks(t *testing.T) {
+	prov := &systemCapture{}
+	exec := NewExecutor(ExecutorConfig{
+		Provider: prov, WorkDir: t.TempDir(), Registry: tools.NewMemoryRegistry(),
+		Audit: &audit.MemoryRecorder{}, Tier: capability.TierBalanced,
+		SystemPromptOverride: "OPERATOR PROMPT",
+		PromptAppends:        []string{"PROJECT RULE"},
+	})
+	if _, err := exec.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, want := range []string{runtimeBlockMarker, securityBlockMarker} {
+		if !strings.Contains(prov.system, want) {
+			t.Errorf("override dropped kernel block %q; system = %q", want, prov.system)
+		}
+	}
+	// The blocks attach to the base, before the operator's appends.
+	if i, j := strings.Index(prov.system, securityBlockMarker), strings.Index(prov.system, "PROJECT RULE"); i < 0 || j < 0 || i > j {
+		t.Errorf("kernel blocks landed after the appends; system = %q", prov.system)
+	}
+}
+
 // TestTierPolicyNote_Buckets checks the tier permission manifest renders the correct
 // permitted / needs-approval split per tier (derived from the enforced policy), always
 // states the forbidden boundaries, and is embedded in the system prompt.

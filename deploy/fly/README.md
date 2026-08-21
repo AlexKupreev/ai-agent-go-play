@@ -155,9 +155,11 @@ agent client --addr 127.0.0.1:8080 "some task"
 ```
 
 Prefer this to exposing the port. If you truly need remote API access, bind `serve`
-to the machine's private 6PN address and `fly proxy` over WireGuard — but that trades
-the localhost boundary for "trust Fly's private network", and the engine still has no
-auth, so only do it in a single-user org.
+to the machine's private 6PN address and `fly proxy` over WireGuard — that needs
+**`--unsafe-public`** as well, since `serve` refuses any non-loopback `--addr` without it
+(`docs/security.md` §7). The flag is the acknowledgement, not a control: it trades the
+localhost boundary for "trust Fly's private network", and the engine still has no auth,
+so only do it in a single-user org.
 
 **Reloading prompts without SSH.** After editing the prompt/agent-type files on the
 volume, you no longer need to SSH in to run `agent reload`: send **`/reload`** to the

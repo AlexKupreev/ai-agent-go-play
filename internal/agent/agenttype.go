@@ -206,7 +206,8 @@ func newSubAgent(parent *Agent, t AgentType, obs Observer) *Agent {
 	if model == "" {
 		model = parent.model
 	}
-	child := newAgent(parent.provider, model, subAgentPrompt(parent, t), parent.selectSubAgentTools(t.Tools), obs)
+	childTools := parent.selectSubAgentTools(t.Tools)
+	child := newAgent(parent.provider, model, subAgentPrompt(parent, t, childTools), childTools, obs)
 	// Decrement the delegation budget as we descend. In v1 the child carries no spawn
 	// tool, so this only matters if nesting is enabled later (subagents.md §3), but the
 	// budget is threaded down now so that path needs no reshape.
@@ -281,11 +282,28 @@ func spawnToolDescription(catalog *AgentCatalog) string {
 // prompt stands alone; append ⇒ it is added after the parent's prompt (so the child inherits the
 // parent's base + any operator/project AGENTS.md already folded into parent.systemPrompt — the
 // resolution of prompts.md §3's open question).
-func subAgentPrompt(parent *Agent, t AgentType) string {
+//
+// A replace-mode prompt is an operator file with the same hazard as a SYSTEM.md — it can drop
+// the untrusted-content rule from a child that still holds web tools — so the kernel blocks are
+// re-attached to it (kernelPromptBlocks). The runtime constraints come along only when the
+// child can actually run code (shell/run_code in its tool subset); append mode inherits both
+// from the parent's prompt already.
+func subAgentPrompt(parent *Agent, t AgentType, childTools []tools.Tool) string {
 	if t.promptMode() == PromptAppend {
 		return composeSystemPrompt(parent.systemPrompt, "", t.Prompt)
 	}
-	return composeSystemPrompt(t.Prompt, "")
+	return composeSystemPrompt(t.Prompt+kernelPromptBlocks(t.Prompt, runsCode(childTools)), "")
+}
+
+// runsCode reports whether a tool subset can execute code on the box (and so is subject to the
+// runtime-constraints kernel block).
+func runsCode(ts []tools.Tool) bool {
+	for _, t := range ts {
+		if t.Name == "shell" || t.Name == "run_code" {
+			return true
+		}
+	}
+	return false
 }
 
 // selectSubAgentTools resolves a type's Tools against the parent's built-ins (see the Tools

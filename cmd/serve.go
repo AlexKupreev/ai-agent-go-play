@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 
 var (
 	addrFlag              string
+	serveUnsafePublicFlag bool
 	serveNoPlanFlag       bool
 	serveNoCritiqueFlag   bool
 	serveMaxRevisionsFlag int
@@ -48,6 +50,12 @@ var serveCmd = &cobra.Command{
 		"one-shot /runs.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Refuse a bind that would put an unauthenticated engine on the network. Checked
+		// before anything is opened or the Telegram bot starts, so a misconfigured deploy
+		// fails immediately instead of serving for the moment it takes to notice.
+		if err := checkBindAddr(addrFlag, serveUnsafePublicFlag); err != nil {
+			return err
+		}
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
@@ -238,12 +246,70 @@ var serveCmd = &cobra.Command{
 		} else {
 			fmt.Fprintln(os.Stderr, "session turns: bare executor (--no-plan)")
 		}
+		if serveUnsafePublicFlag && !loopbackHost(hostOf(addrFlag)) {
+			fmt.Fprintf(os.Stderr, "WARNING: --unsafe-public: %s is reachable beyond this machine and the engine has NO authentication.\n", addrFlag)
+			fmt.Fprintln(os.Stderr, "         Anyone who can reach this port can run shell commands, read memory, and read the audit log.")
+		}
 		fmt.Fprintf(os.Stderr, "engine listening on %s\n", addrFlag)
 		fmt.Fprintf(os.Stderr, "  start:  curl -XPOST %s/runs -d '{\"task\":\"...\"}'\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  stream: curl -N %s/runs/<id>/events\n", "http://"+addrFlag)
 		fmt.Fprintf(os.Stderr, "  reload: curl -XPOST %s/reload\n", "http://"+addrFlag)
 		return http.ListenAndServe(addrFlag, mux)
 	},
+}
+
+// checkBindAddr refuses to listen anywhere but loopback unless the operator says otherwise.
+// The engine's HTTP surface has no authentication of any kind (api-transport.md): every
+// caller who can open the port can start runs, resolve approvals, read the audit log, and
+// reach the shell through a run. That is a sound design for a loopback socket fronted by a
+// frontend that does authenticate (the Telegram allowlist, SSH), and an open door on any
+// other interface — so exposure has to be a deliberate, visible choice rather than a typo in
+// --addr. It stays a flag rather than a capability check because there is no API auth to
+// detect yet; when one exists, this is where it earns the exemption.
+func checkBindAddr(addr string, allowPublic bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("--addr %q is not a valid host:port: %w", addr, err)
+	}
+	if loopbackHost(host) || allowPublic {
+		return nil
+	}
+	shown := host
+	if shown == "" {
+		shown = "every interface"
+	}
+	return fmt.Errorf("refusing to listen on %s (%s): the engine has no authentication, so a "+
+		"non-loopback bind gives anyone who can reach the port a shell on this box, plus its "+
+		"memory and audit log.\n"+
+		"Bind 127.0.0.1:<port> and reach it over SSH or a tunnel (deploy/fly/README.md), or pass "+
+		"--unsafe-public if this port is already fronted by a firewall or a private network you trust",
+		addr, shown)
+}
+
+// loopbackHost reports whether a bind host reaches only this machine. An empty host (":8080")
+// means every interface, so it is not loopback. A literal IP is judged directly; "localhost"
+// is loopback by definition; any other name is treated as public rather than resolved, so the
+// check stays deterministic, offline, and fail-closed.
+func loopbackHost(host string) bool {
+	switch host {
+	case "":
+		return false
+	case "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// hostOf returns the host part of a host:port, or "" if it cannot be split.
+func hostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 // serveDeps holds everything needed to build a per-run executor. The shared
@@ -595,7 +661,11 @@ func startTelegramIfConfigured(cfg Config) {
 }
 
 func init() {
-	serveCmd.Flags().StringVar(&addrFlag, "addr", "127.0.0.1:8080", "address to listen on")
+	serveCmd.Flags().StringVar(&addrFlag, "addr", "127.0.0.1:8080", "address to listen on (loopback only unless --unsafe-public)")
+	serveCmd.Flags().BoolVar(&serveUnsafePublicFlag, "unsafe-public", false,
+		"allow a non-loopback --addr. The HTTP API has NO authentication, so this exposes "+
+			"shell, tools, memory, and the audit log to everyone who can reach the port — "+
+			"only use it behind a firewall or a private network you trust.")
 	serveCmd.Flags().StringVar(&modelFlag, "model", "", modelFlagUsage)
 	serveCmd.Flags().StringVar(&tierFlag, "tier", "", "trust tier: safe|balanced|permissive (overrides config; default: balanced)")
 	serveCmd.Flags().BoolVar(&serveNoPlanFlag, "no-plan", false, "disable deliberate session turns (planning is ON by default): run the bare executor seeded with prior history instead")

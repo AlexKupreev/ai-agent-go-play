@@ -85,7 +85,10 @@ at `balanced`. `agent chat --addr`'s `/model` and `/tier` commands (and `--model
 launch) drive this through the `PATCH`.
 
 **No owner scoping — single-user engine (design §1).** Requests carry no identity; runs and
-approvals are visible to any caller of the localhost engine. An earlier Phase 4e draft added an
+approvals are visible to any caller of the localhost engine. Because there is no request-level
+identity at all, `agent serve` binds loopback-only and refuses a public `--addr` without an
+explicit `--unsafe-public` (`security.md` §7) — the transport's "trusted caller" assumption is
+enforced at the socket, not merely documented. An earlier Phase 4e draft added an
 `X-Agent-Owner` header + owner-scoped runs/approvals; it was **removed** — the trusted users share
 one engine and one data domain. Network-facing auth (who may reach the engine) lives in the
 frontend, not in a per-request owner label.

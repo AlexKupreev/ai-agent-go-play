@@ -357,13 +357,15 @@ var configDirFlag string
 // envConfigDir overrides the config directory when --config-dir is not given.
 const envConfigDir = "AI_AGENT_CONFIG_DIR"
 
-// configDir returns the base directory holding this agent's stored state — config,
-// tool catalog, memory, and the process-wide audit log. Precedence: --config-dir flag
-// > AI_AGENT_CONFIG_DIR env > the default ~/.config/ai-agent.
+// configDir returns the base directory holding this agent's identity-scoped state — config,
+// tool catalog, the process-wide audit log, the session store, and the global prompt tier.
+// Precedence: --config-dir flag > AI_AGENT_CONFIG_DIR env > the default ~/.config/ai-agent.
 //
-// Pointing two `agent serve` processes at different config dirs is how you run two
-// fully independent agents (separate tools + memory + audit) on one box — no shared
-// state between them.
+// Memory and spaces are the deliberate exception: they are workspace-local, under
+// <workspace>/.agent (adr/spaces.md §Governing decision). So two `agent serve` processes on
+// separate config dirs have separate tools, audit, and sessions, but still SHARE memory and
+// spaces if they run in the same workspace — give each its own --workspace as well to make
+// them fully independent (environment.md §Two scopes).
 func configDir() (string, error) {
 	if configDirFlag != "" {
 		return configDirFlag, nil

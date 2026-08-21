@@ -142,8 +142,17 @@ func TestNewSubAgent_ReplaceModeAndModelInherit(t *testing.T) {
 
 	child := newSubAgent(parent, rt, nil)
 
-	if child.systemPrompt != "RESEARCH PROMPT" {
-		t.Errorf("replace prompt = %q, want the type body alone", child.systemPrompt)
+	// Replace mode = the type body, plus the kernel blocks that an operator prompt must not
+	// drop. This child has web tools and no shell/run_code, so the untrusted-content rule is
+	// re-attached and the runtime constraints are not.
+	if !strings.HasPrefix(child.systemPrompt, "RESEARCH PROMPT") {
+		t.Errorf("replace prompt = %q, want it to start with the type body", child.systemPrompt)
+	}
+	if !strings.Contains(child.systemPrompt, securityBlockMarker) {
+		t.Error("replace mode dropped the untrusted-content rule")
+	}
+	if strings.Contains(child.systemPrompt, runtimeBlockMarker) {
+		t.Error("runtime constraints attached to a child that cannot run code")
 	}
 	if strings.Contains(child.systemPrompt, "PARENT PROMPT") {
 		t.Error("replace mode leaked the parent prompt")

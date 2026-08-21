@@ -108,9 +108,10 @@ boundary around machine-authored code.
 
 ## 4. Current state (what exists today)
 
-**Phases 0–4f and 6a–6c of the plan are complete.** Per-phase detail, acceptance criteria, and
-what remains live in [`planning/plan.md`](planning/plan.md) — that file is the status of record;
-this section is the one-screen shape of the system so §5–§8 have something concrete to point at.
+**Phases 0–4f and 6a–6c of the original plan are complete.** Their implementation history lives in
+[`planning/plan.md`](planning/plan.md); current priority and dependency order live in
+[`planning/roadmap.md`](planning/roadmap.md). This section is the one-screen shape of the system so
+§5–§8 have something concrete to point at.
 
 | Area | Today | Where |
 |---|---|---|

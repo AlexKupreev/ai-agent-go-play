@@ -28,10 +28,11 @@ also the agent's own self-knowledge via its `read_self_docs` tool. Keep them tru
 **Decision records — why a shipped thing is the way it is.** [`docs/adr/`](docs/adr) — prompts,
 chat planner, workspace, spaces, sub-agents, external APIs. Not embedded.
 
-**Planning — not built yet, or deliberately shelved.** [`docs/planning/`](docs/planning)
-(incl. [`plan.md`](docs/planning/plan.md), the phase status of record, and the periodic
-`review-*.md` passes) and [`docs/deferred/`](docs/deferred). Not embedded, **on purpose**: the
-agent must never read a roadmap and report it as something it can do.
+**Planning — not built yet, or deliberately shelved.** Start with
+[`docs/planning/roadmap.md`](docs/planning/roadmap.md), the current priority and dependency order.
+The rest of [`docs/planning/`](docs/planning) contains detailed feature specs, dated reviews, and
+historical implementation logs; [`docs/deferred/`](docs/deferred) holds shelved designs. None is
+embedded, **on purpose**: the agent must never read a roadmap and report it as something it can do.
 
 ## Requirements
 

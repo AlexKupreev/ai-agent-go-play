@@ -1,6 +1,7 @@
 # Resume notes — pick up here
 
-Working scratchpad for "where we stopped." Delete or fold into `plan.md` once acted on.
+> **Role: historical hand-off log.** This scratchpad ends on 2026-07-05 and contains reverted or
+> completed work. It has no current action items; use [`roadmap.md`](roadmap.md) to pick up work.
 
 _Last session: 2026-07-05._
 

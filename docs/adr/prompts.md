@@ -70,6 +70,17 @@ Full assembly order: `SYSTEM.md` override (or `executorPrompt`) → `selfDocsPro
 config-dir `AGENTS.md` → workspace `AGENTS.md`. A `--no-context-files` flag disables **all** file
 loading (parity with pi's `-nc`), useful for reproducible runs and debugging.
 
+> **Superseded in part, 2026-08-21 — "replaces entirely" is no longer true.** A `SYSTEM.md` owns
+> the *wording*, not the containment rules. The built-in base is now four named blocks, and
+> `kernelPromptBlocks` re-attaches two of them — the ~2 GB runtime constraints and the
+> untrusted-content rule — after an override, the way the tier-policy note and tool roster were
+> always re-attached. The original decision stands for everything else, and an override that
+> restates a block is detected by marker so it is not duplicated. Rationale: an all-or-nothing
+> replace silently deleted half the prompt-injection defence (`review-2026-08.md` §2.2), which was
+> a surprising outcome for what reads like a cosmetic knob. Current behaviour:
+> [`../environment.md`](../environment.md#what-a-systemmd-override-does-and-does-not-remove) and
+> [`../security.md`](../security.md) §5/§7.
+
 **Trust.** The config-dir tier is always trusted (the agent's own state — no new trust surface). The
 **workspace tier is tier-gated** (`workspace.md` §5): `safe` does not auto-load workspace files, so an
 untrusted checkout's `AGENTS.md` can't inject into a `safe` agent; `balanced`/`permissive` load them
@@ -85,7 +96,10 @@ untrusted file it wasn't handed.
 plus a `PromptMode`:
 
 - `replace` (default for specialists like `researcher`) — the body **is** the whole prompt
-  (`composeSystemPrompt(base=body, "")`); a clean, standalone prompt.
+  (`composeSystemPrompt(base=body, "")`); a clean, standalone prompt. *(Amended 2026-08-21: the
+  same kernel blocks as §2 are re-attached — the untrusted-content rule always, the runtime
+  constraints only when the child's tool subset includes `shell`/`run_code`. A replace-mode
+  `agents/*.md` is an operator file with the same hazard as a `SYSTEM.md`.)*
 - `append` — the body is appended to the parent/base prompt (for a `general-purpose` type that
   inherits the executor's behavior): `composeSystemPrompt(base=parent.systemPrompt, "", body)`.
 

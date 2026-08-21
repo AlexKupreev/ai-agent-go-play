@@ -234,7 +234,9 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 ./agent serve --no-critique        # planner on, critic re-plan loop off
 ```
 
-Flags: `--addr` (listen address; keep it on `127.0.0.1`), `--model`, `--tier`, and the
+Flags: `--addr` (listen address — **loopback only**: the engine has no authentication, so a
+non-loopback address is refused unless you also pass `--unsafe-public`, which prints a warning
+naming what that exposes; see [`security.md`](security.md) §7), `--model`, `--tier`, and the
 deliberate-turn dials `--no-plan` / `--no-critique` / `--max-revisions` (default 1). Prints a
 couple of `curl` snippets on startup. Shares one tool catalog, one memory store, and one
 process-wide audit log across all runs it serves.
@@ -1033,7 +1035,9 @@ writes on disk — lives in **[`environment.md`](environment.md)**. In brief:
 - Config lives in `<config-dir>/config.json` (created by `config set-*`; default config dir
   `~/.config/ai-agent`, set by `--config-dir` / `AI_AGENT_CONFIG_DIR`).
 - Per-run transcripts default to `<config-dir>/runs/<run-id>/` (`--sessions-dir`
-  / `AI_AGENT_SESSIONS_DIR`), so separate `--config-dir` agents share nothing.
+  / `AI_AGENT_SESSIONS_DIR`), so separate `--config-dir` agents share no transcripts. (Memory
+  and spaces are workspace-local, so they are shared unless the agents also differ by
+  `--workspace` — see `environment.md` §Two scopes.)
 - Precedence everywhere: **flag > env > config value > built-in default**.
 
 See [`environment.md`](environment.md#configuration--environment-reference) for the tables.

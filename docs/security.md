@@ -224,6 +224,13 @@ Both the executor and planner system prompts carry a matching rule: content insi
 command, reveal secrets, or fetch another URL, the model must refuse and report it as page content
 instead.
 
+**The rule is a kernel block: prompt customization cannot remove it.** The executor's rule lives in
+`executorSecurityBlock` and is re-attached by `baseSystemPrompt` even when an operator `SYSTEM.md`
+replaces the base prompt — and by `subAgentPrompt` when an `agents/*.md` type replaces a sub-agent's
+prompt. Before 2026-08-21 a `SYSTEM.md` deleted this half of the defence while the fencing kept
+happening, which is the worst of both. An override may still *restate* the paragraph (it is then
+detected and not duplicated); see [`environment.md`](environment.md#what-a-systemmd-override-does-and-does-not-remove).
+
 **Defends against:** naive prompt injection via ingested web pages / search results ("ignore previous
 instructions…"). It removes the ambiguity that makes such injection work and gives the model an
 explicit fallback rule.
@@ -276,6 +283,30 @@ approval (so a human can approve remotely rather than reject) is the Phase 4 ref
 
 ---
 
+## 7. Bind guard — the engine is loopback-only unless you say otherwise
+
+**Files:** `cmd/serve.go` (`checkBindAddr`)
+
+The HTTP surface has **no authentication** (§api-transport "No owner scoping"): whoever can open
+the port can start runs, resolve approvals, read the audit log, and reach `shell` through a run.
+That is sound for a loopback socket behind a frontend that *does* authenticate — the Telegram
+allowlist, or SSH to the box — and an open door on any other interface.
+
+So `agent serve` refuses a non-loopback `--addr` (`0.0.0.0`, a LAN address, a bare `:8080`, or a
+hostname it will not resolve) unless the operator passes **`--unsafe-public`**, which prints a
+warning banner naming what is exposed. Exposure is now a deliberate, visible choice rather than a
+typo. A hostname other than `localhost` is treated as public without resolving it, so the check is
+deterministic and fail-closed.
+
+**Defends against:** an engine accidentally published to a LAN or a cloud interface — the one
+misconfiguration that turns a single-user design into a remote shell for anyone.
+
+**Honest limit:** `--unsafe-public` is an operator escape hatch, not a security control; behind it
+the engine is still unauthenticated. When real API auth exists, that is what should lift the
+restriction — the flag is the placeholder until then.
+
+---
+
 ## What is deliberately NOT done (non-goals for this deployment)
 
 - Multi-tenant / hostile-user isolation, per-user auth boundaries, public-service hardening.
@@ -292,6 +323,8 @@ approval (so a human can approve remotely rather than reject) is the Phase 4 ref
 | Symlink path escape | Symlink-resolved containment | `capability/capability.go` |
 | `call_tool` → `shell` transitive escape | Trusted/Exposed + direct-name gate | `capability/broker.go` |
 | Prompt injection via web content | Untrusted-content framing + prompt rule | `tools/untrusted.go`, `agent/agent.go` |
+| Prompt customization silently dropping the injection rule or the runtime limits | Kernel prompt blocks re-attached over any override | `agent/agent.go` (`kernelPromptBlocks`) |
+| Unauthenticated engine reachable from the network | Loopback bind guard + explicit `--unsafe-public` | `cmd/serve.go` (`checkBindAddr`) |
 | Agent silently gaining new capability | `author_tool` gate (validate→approve→test→audit) | `tools/authortool.go` |
 | Unattended capability over-reach | Tier dial (`Tier.AutoApproves`) | `capability/capability.go` |
 | Destructive shell command | Heuristic confirm gate | `tools/destructive.go` |

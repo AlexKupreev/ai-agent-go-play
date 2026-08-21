@@ -67,3 +67,30 @@ func TestServeDefaultsReload(t *testing.T) {
 		t.Fatalf("post-reload tier = %q, want permissive (ceiling raised)", tier)
 	}
 }
+
+// TestCheckBindAddr checks the exposure guard: loopback binds are free, anything else needs
+// --unsafe-public, and an unresolvable name is refused rather than assumed private.
+func TestCheckBindAddr(t *testing.T) {
+	allowed := []string{"127.0.0.1:8080", "127.0.0.53:8080", "localhost:8080", "[::1]:8080"}
+	for _, addr := range allowed {
+		if err := checkBindAddr(addr, false); err != nil {
+			t.Errorf("checkBindAddr(%q, false) = %v, want nil (loopback)", addr, err)
+		}
+	}
+	refused := []string{":8080", "0.0.0.0:8080", "[::]:8080", "192.168.1.10:8080", "fly-app.internal:8080"}
+	for _, addr := range refused {
+		if err := checkBindAddr(addr, false); err == nil {
+			t.Errorf("checkBindAddr(%q, false) = nil, want a refusal", addr)
+		}
+		if err := checkBindAddr(addr, true); err != nil {
+			t.Errorf("checkBindAddr(%q, true) = %v, want nil (--unsafe-public)", addr, err)
+		}
+	}
+	// A malformed address is an error either way — --unsafe-public waives the exposure
+	// judgement, not the parse.
+	for _, allow := range []bool{false, true} {
+		if err := checkBindAddr("not-an-address", allow); err == nil {
+			t.Errorf("checkBindAddr(malformed, %v) = nil, want a parse error", allow)
+		}
+	}
+}
