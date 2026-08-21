@@ -189,6 +189,12 @@ single space's size bites. Not one growing file, and not SQLite pre-emptively.)*
 `POST /sessions` and `PATCH /sessions/{id}`, merged per turn. Several sessions can share a space (the
 data is the space's, not the session's).
 
+**Validated where it is set** (2026-08-21): unlike the tier, which is stored as a request and clamped
+per turn, a sticky space is resolved against the store by `POST`/`PATCH` and stored as its canonical
+id — an unknown one is a 400 naming the available spaces, not a broken next turn. The engine core
+keeps knowing nothing of the spaces directory: `cmd/serve.go` injects a resolver (`SetSpaceResolver`)
+the way it injects the run store and the session-close hook.
+
 **Switching mid-session is explicit** (no intent-guessing in v1):
 
 - **`/space <name>`** REPL command — re-points the active space **from that message forward**.

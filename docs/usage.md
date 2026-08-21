@@ -636,9 +636,12 @@ does **not** change the working directory or trust tier. Design: `docs/adr/space
 - **Commands:** local chat `/space` (show), `/space list`, `/space <name>`, `/space -`
   (back to global), and `agent chat --space <name>`; remote chat and Telegram `/space
   <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`.
-- **API:** `POST /sessions` and `PATCH /sessions/{id}` accept `"space"`; `POST /runs` and
-  turns accept a per-request `"space"` override. The session carries the active space
-  (sticky, like model/tier); an unknown space id fails the turn with a clear error.
+- **API:** `POST /sessions` and `PATCH /sessions/{id}` accept `"space"` (an id or a name,
+  stored as the canonical id); `POST /runs` and turns accept a per-request `"space"`
+  override. The session carries the active space (sticky, like model/tier). Setting an
+  unknown space is refused there and then — 400, with the available spaces named — so a
+  typo cannot stick and break the next turn; a per-request override is still resolved at
+  turn time and fails that turn with the same error.
 
 ---
 

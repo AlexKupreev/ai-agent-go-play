@@ -23,7 +23,6 @@ import (
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/session"
-	"ai-agent-go-play/internal/space"
 )
 
 // modelLabel renders a session's model for display. An empty stored model means the
@@ -385,8 +384,9 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 	case "/space":
 		// Switch this chat's session to a space (a scoped memory context, spaces.md §5),
 		// mirroring the CLI REPL's /space: `/space <name>` switches, `/space -` returns to
-		// the global scope, bare `/space` explains. The engine resolves the id at turn
-		// time, so an unknown space fails that turn with a clear error.
+		// the global scope, bare `/space` explains. The argument goes to the engine as
+		// typed — it resolves a name or an id against the space store and answers with the
+		// canonical id, or with an error naming the spaces that do exist.
 		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/space"))
 		if arg == "" {
 			b.notify(ctx, m.ChatID, "usage: /space <name-or-id> (switch), /space - (back to the global scope)")
@@ -397,18 +397,19 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 			b.notify(ctx, m.ChatID, "could not start a session: "+err.Error())
 			return
 		}
-		val := space.Slug(arg)
+		val := arg
 		if arg == "-" {
 			val = ""
 		}
-		if _, err := b.client.UpdateSession(ctx, sessionID, nil, nil, &val); err != nil {
+		info, err := b.client.UpdateSession(ctx, sessionID, nil, nil, &val)
+		if err != nil {
 			b.notify(ctx, m.ChatID, "set space failed: "+err.Error())
 			return
 		}
-		if val == "" {
+		if info.Space == "" {
 			b.notify(ctx, m.ChatID, "space cleared — back to the global scope from your next message")
 		} else {
-			b.notify(ctx, m.ChatID, "space set to "+val+" — effective from your next message")
+			b.notify(ctx, m.ChatID, "space set to "+info.Space+" — effective from your next message")
 		}
 	case "/model":
 		// Switch this chat's session to another model, mirroring the CLI REPL's /model:

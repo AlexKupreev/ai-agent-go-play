@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -509,5 +512,104 @@ func TestEngine_MidTurnSessionEditSurvivesPersist(t *testing.T) {
 	}
 	if len(got.Messages) != 1 {
 		t.Fatalf("session has %d messages, want 1 (history still persisted)", len(got.Messages))
+	}
+}
+
+// TestEngine_SessionSpaceValidated proves the space seam: with a resolver wired, a session's
+// space is checked and canonicalized where it is SET (create/update) instead of failing the
+// next turn, and a rejected value changes nothing.
+func TestEngine_SessionSpaceValidated(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, echoTurns())
+	// Stands in for the cmd layer's space store: "Polish lessons" resolves to its id.
+	e.SetSpaceResolver(func(nameOrID string) (string, error) {
+		if nameOrID == "polish" || nameOrID == "Polish lessons" {
+			return "polish", nil
+		}
+		return "", errors.New(`no space "` + nameOrID + `"; available: polish, tax`)
+	})
+
+	if _, err := e.StartSession(RunOptions{Space: "polsih"}); !errors.Is(err, ErrUnknownSpace) {
+		t.Fatalf("StartSession with an unknown space = %v, want ErrUnknownSpace", err)
+	} else if !strings.Contains(err.Error(), "available: polish, tax") {
+		t.Fatalf("StartSession error %q does not name the available spaces", err)
+	}
+	// Rejected at the door: no half-created session is left behind.
+	if infos, err := e.ListSessions(); err != nil || len(infos) != 0 {
+		t.Fatalf("ListSessions after a rejected StartSession = %+v, %v; want none", infos, err)
+	}
+
+	// A display name is stored as the canonical id.
+	sid, err := e.StartSession(RunOptions{Space: "Polish lessons"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if got, _ := store.Get(sid); got.Space != "polish" {
+		t.Fatalf("StartSession stored space %q, want the canonical id polish", got.Space)
+	}
+
+	if _, err := e.UpdateSession(sid, nil, nil, strptr("tux")); !errors.Is(err, ErrUnknownSpace) {
+		t.Fatalf("UpdateSession with an unknown space = %v, want ErrUnknownSpace", err)
+	}
+	if got, _ := store.Get(sid); got.Space != "polish" {
+		t.Fatalf("a rejected update changed the space to %q, want polish untouched", got.Space)
+	}
+	// Clearing to the global scope never consults the resolver.
+	if info, err := e.UpdateSession(sid, nil, nil, strptr("")); err != nil || info.Space != "" {
+		t.Fatalf("UpdateSession clear = %+v, %v; want empty", info, err)
+	}
+}
+
+// TestEngine_SessionSpaceUncheckedWithoutResolver proves the seam is optional: with no
+// resolver (tests, an embedder with no space store) the value is stored verbatim, as before.
+func TestEngine_SessionSpaceUncheckedWithoutResolver(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(store, echoTurns())
+
+	sid, err := e.StartSession(RunOptions{Space: "whatever"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if got, _ := store.Get(sid); got.Space != "whatever" {
+		t.Fatalf("stored space %q, want it verbatim", got.Space)
+	}
+}
+
+// TestHTTP_SessionSpaceRejected proves the transport mapping: an unknown space is a caller
+// error (400, like a malformed tier), not a 500, on both entry points.
+func TestHTTP_SessionSpaceRejected(t *testing.T) {
+	e := NewEngine(RunnerFunc(fakeRunner))
+	e.EnableSessions(session.NewFileStore(t.TempDir()), echoTurns())
+	e.SetSpaceResolver(func(string) (string, error) { return "", errors.New(`no space "x"; available: polish`) })
+	srv := httptest.NewServer(NewServer(e, nil, nil, nil, nil))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/sessions", "application/json", strings.NewReader(`{"space":"x"}`))
+	if err != nil {
+		t.Fatalf("POST /sessions: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST /sessions with a bad space = %d, want 400", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "available: polish") {
+		t.Fatalf("400 body %q does not name the available spaces", body)
+	}
+
+	sid, err := NewClient(srv.URL).StartSession(context.Background(), RunOptions{})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/sessions/"+sid, strings.NewReader(`{"space":"x"}`))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /sessions/{id}: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PATCH with a bad space = %d, want 400", resp.StatusCode)
 	}
 }

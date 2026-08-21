@@ -88,7 +88,10 @@ func (s *Store) Get(id string) (Space, error) {
 }
 
 // Resolve finds a space by id or, failing that, by case-insensitive name — so
-// `switch_space("Polish lessons")` works as well as the slug.
+// `switch_space("Polish lessons")` works as well as the slug. A miss names the spaces
+// that would have worked: every caller of Resolve (the switch_space tool, the CLI
+// /space, the engine's session validation) reports the error straight to a human, and
+// "no space \"polsih\"" without the list makes them go look it up.
 func (s *Store) Resolve(nameOrID string) (Space, error) {
 	if sp, err := s.Get(Slug(nameOrID)); err == nil {
 		return sp, nil
@@ -103,7 +106,28 @@ func (s *Store) Resolve(nameOrID string) (Space, error) {
 			return sp, nil
 		}
 	}
-	return Space{}, fmt.Errorf("no space %q (use list_spaces, or create_space to make it)", nameOrID)
+	return Space{}, fmt.Errorf("no space %q; %s", nameOrID, available(all))
+}
+
+// maxListedSpaces bounds how many ids a not-found error names. Spaces are few and
+// human-named by design, so the cap only guards against an error message growing
+// unbounded with a runaway directory.
+const maxListedSpaces = 20
+
+// available renders the "what would have worked" half of a not-found error.
+func available(all []Space) string {
+	if len(all) == 0 {
+		return "there are no spaces yet (create_space makes one)"
+	}
+	ids := make([]string, 0, len(all))
+	for _, sp := range all {
+		if len(ids) == maxListedSpaces {
+			ids = append(ids, fmt.Sprintf("… and %d more", len(all)-maxListedSpaces))
+			break
+		}
+		ids = append(ids, sp.ID)
+	}
+	return "available: " + strings.Join(ids, ", ")
 }
 
 // Save persists metadata changes (rename, notes). The notes cap is enforced here so no

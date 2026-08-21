@@ -27,6 +27,10 @@ func TestStore_CreateGetListResolve(t *testing.T) {
 	if all, err := s.List(); err != nil || len(all) != 0 {
 		t.Fatalf("empty List = %v, %v; want empty, nil", all, err)
 	}
+	// ...and Resolve against it says so rather than listing nothing.
+	if _, err := s.Resolve("anything"); err == nil || !strings.Contains(err.Error(), "no spaces yet") {
+		t.Fatalf("Resolve on an empty store = %v, want a 'no spaces yet' error", err)
+	}
 
 	sp, err := s.Create("Polish Lessons")
 	if err != nil {
@@ -62,8 +66,13 @@ func TestStore_CreateGetListResolve(t *testing.T) {
 			t.Fatalf("Resolve(%q) = %+v, %v", q, got, err)
 		}
 	}
-	if _, err := s.Resolve("nope"); err == nil {
+	// A miss names what would have worked — the message goes straight to a human.
+	_, err = s.Resolve("nope")
+	if err == nil {
 		t.Fatal("Resolve of a missing space returned nil error")
+	}
+	if !strings.Contains(err.Error(), "polish-lessons") || !strings.Contains(err.Error(), "tax") {
+		t.Fatalf("Resolve miss = %q, want it to list the available spaces", err)
 	}
 
 	// Ids never escape the spaces dir: path-ish ids fail closed.

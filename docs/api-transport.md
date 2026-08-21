@@ -34,12 +34,16 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   revoke it (404 if absent, audited as `tool_revoked`)
 - `GET /audit?run=&type=&limit=` → browse the process-wide audit log (capability use, tool
   authoring/revocation, memory writes); oldest first, `limit` keeps the last N matches
-- `POST /sessions` `{model?, tier?, space?}` → `{session_id}` (optional initial sticky model/tier/space);
+- `POST /sessions` `{model?, tier?, space?}` → `{session_id}` (optional initial sticky model/tier/space;
+  400 on a malformed tier or an unknown space);
   `GET /sessions` → list (each Info carries the session's sticky `model`/`tier`/`space`);
   `PATCH /sessions/{id}` `{model?, tier?, space?}` → updated Info (per-field: an omitted field is left
   unchanged, a present field is set — an empty string clears it back to the default; 400 on a
-  malformed tier, 404 on an unknown session); `DELETE /sessions/{id}` → close (archives the
-  conversation under `sessions/archive/`, recoverable; reaps its scratch cache);
+  malformed tier or an unknown space, 404 on an unknown session). `space` may be a space id or its
+  display name and is stored canonicalized; an unknown one is rejected where it is set, with the
+  available spaces named in the error, rather than failing the session's next turn;
+  `DELETE /sessions/{id}` → close (archives the conversation under `sessions/archive/`,
+  recoverable; reaps its scratch cache);
   `POST /sessions/{id}/turns` `{text, model?, tier?, space?}` → `{run_id}` (optional per-turn override,
   same clamp; stream the reply via `GET /runs/{run_id}/events`);
   `POST /sessions/{id}/files` (multipart: `file`, optional `source`) → `{path, name, bytes}` — store a

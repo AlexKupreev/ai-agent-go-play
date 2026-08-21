@@ -15,6 +15,21 @@ import (
 // composition; internal/agent only sees a memory.Store, a prompt append, and the
 // SpaceContext for the management tools.
 
+// spaceResolver is the engine's SpaceResolver over a space store: it accepts an id or a
+// display name and returns the canonical id to store on the session. It is what makes
+// `POST /sessions` / `PATCH /sessions/{id}` reject an unknown space up front — the store's
+// Resolve error already names the spaces that would have worked — instead of letting a typo
+// stick and fail the session's next turn.
+func spaceResolver(spaces *space.Store) func(string) (string, error) {
+	return func(nameOrID string) (string, error) {
+		sp, err := spaces.Resolve(nameOrID)
+		if err != nil {
+			return "", err
+		}
+		return sp.ID, nil
+	}
+}
+
 // spaceScope resolves the active space to the memory view + prompt append a turn should
 // run with. activeID "" means the global scope: the global store as-is, no append.
 // shards caches one store per space so concurrent turns in the same space share a

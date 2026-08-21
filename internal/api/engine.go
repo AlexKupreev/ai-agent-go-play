@@ -24,6 +24,32 @@ var ErrUnknownRun = errors.New("unknown run")
 // wired (e.g. tests, or a serve without persistence).
 var ErrSessionsDisabled = errors.New("sessions are not enabled")
 
+// ErrUnknownSpace classifies a rejected space on StartSession/UpdateSession so the transport
+// can answer 400 rather than 500. Match it with errors.Is; the message itself comes from the
+// SpaceResolver (it names the available spaces), so it is not this sentinel's text.
+var ErrUnknownSpace = errors.New("unknown space")
+
+// unknownSpace tags a resolver error as ErrUnknownSpace while keeping the resolver's wording
+// as the whole message — wrapping with fmt.Errorf would prefix a redundant "unknown space:".
+type unknownSpace struct{ err error }
+
+func (u unknownSpace) Error() string        { return u.err.Error() }
+func (u unknownSpace) Unwrap() error        { return u.err }
+func (u unknownSpace) Is(target error) bool { return target == ErrUnknownSpace }
+
+// checkSpace validates a requested space and returns the id to store. "" is the global scope
+// and always valid; with no resolver wired the value is stored verbatim.
+func (e *Engine) checkSpace(requested string) (string, error) {
+	if requested == "" || e.resolveSpace == nil {
+		return requested, nil
+	}
+	id, err := e.resolveSpace(requested)
+	if err != nil {
+		return "", unknownSpace{err}
+	}
+	return id, nil
+}
+
 // Run states.
 const (
 	StateRunning = "running"
@@ -156,7 +182,20 @@ type Engine struct {
 	// counterpart to onSessionClose's reap, and the core's other seam to disk. Optional; with
 	// no store, POST /sessions/{id}/files is not served (see uploads.go).
 	files FileStore
+
+	// resolveSpace, when set, validates a session's requested space at create/update time
+	// and returns the canonical id to store. The space registry is a directory on disk, which
+	// the core knows nothing about, so this is a seam like onSessionClose/runStore fed from
+	// cmd. Nil (tests, an embedder with no space store) skips validation and stores the
+	// requested value verbatim, as before. Optional.
+	resolveSpace SpaceResolver
 }
+
+// SpaceResolver maps a requested space — an id or a display name — to the canonical space
+// id to store, or reports why it is unusable. The error is shown to whoever set the space
+// (a /space command, an API caller), so it should name the spaces that would have worked.
+// The empty string (the global scope) is always valid and never reaches a resolver.
+type SpaceResolver func(nameOrID string) (string, error)
 
 // RunStore persists finished-run metadata so it survives eviction (maxFinishedRuns) and a
 // process restart. The cmd layer supplies one that writes info.json next to the run's
@@ -195,6 +234,11 @@ func (e *Engine) SetSessionCloseHook(fn func(sessionID string, purge bool)) { e.
 // SetRunStore installs a store that persists a run's final RunInfo on completion and serves
 // it back as a RunStatus fallback once the run is evicted. Optional. See RunStore.
 func (e *Engine) SetRunStore(rs RunStore) { e.runStore = rs }
+
+// SetSpaceResolver installs the validator for a session's sticky space, so an unknown space
+// is rejected by StartSession/UpdateSession instead of failing the next turn. Optional; see
+// SpaceResolver.
+func (e *Engine) SetSpaceResolver(fn SpaceResolver) { e.resolveSpace = fn }
 
 // SetMaxFinishedRuns tunes how many finished runs the engine retains in memory (a positive n;
 // non-positive is ignored, keeping the default). Lets a small box run a tighter cap without a
@@ -288,22 +332,28 @@ func (e *Engine) launch(task, sessionID string, work func(ctx context.Context, r
 }
 
 // StartSession creates a new persistent conversation and returns its id. opts carries an
-// optional sticky model/tier for the session (empty fields inherit the engine default); a
-// turn may still override them per-request. The stored tier is a request, clamped to the
+// optional sticky model/tier/space for the session (empty fields inherit the engine default);
+// a turn may still override them per-request. The stored tier is a request, clamped to the
 // serve ceiling per turn (cmd resolveOpts), so validation of its syntax is the transport
-// boundary's job — the engine core stores what it is given.
+// boundary's job — the engine core stores what it is given. The space is different: it is
+// checked here against the wired SpaceResolver and stored canonicalized, so a typo is
+// rejected at the door (ErrUnknownSpace) instead of failing the session's first turn.
 func (e *Engine) StartSession(opts RunOptions) (string, error) {
 	if !e.SessionsEnabled() {
 		return "", ErrSessionsDisabled
+	}
+	spaceID, err := e.checkSpace(opts.Space)
+	if err != nil {
+		return "", err
 	}
 	s, err := e.sessions.Create()
 	if err != nil {
 		return "", err
 	}
-	if opts.Model != "" || opts.Tier != "" || opts.Space != "" {
+	if opts.Model != "" || opts.Tier != "" || spaceID != "" {
 		s.Model = opts.Model
 		s.Tier = opts.Tier
-		s.Space = opts.Space
+		s.Space = spaceID
 		if err := e.sessions.Save(s); err != nil {
 			return "", err
 		}
@@ -315,11 +365,19 @@ func (e *Engine) StartSession(opts RunOptions) (string, error) {
 // field unchanged; a non-nil pointer sets it (an empty string clears it back to the engine
 // default). It returns the updated session Info. session.ErrNotFound if the id is unknown.
 // Like StartSession, the engine stores the tier verbatim — clamping to the serve ceiling
-// happens per turn — and stores the space id verbatim too: resolving it against the space
-// store is the turn runner's job (an unknown space fails the turn with a clear error).
+// happens per turn — while the space is resolved through the wired SpaceResolver and stored
+// as its canonical id, so `/space polsih` fails here (ErrUnknownSpace, naming the spaces that
+// exist) rather than sticking and breaking every later turn.
 func (e *Engine) UpdateSession(id string, model, tier, space *string) (session.Info, error) {
 	if !e.SessionsEnabled() {
 		return session.Info{}, ErrSessionsDisabled
+	}
+	spaceID := ""
+	if space != nil {
+		var err error
+		if spaceID, err = e.checkSpace(*space); err != nil {
+			return session.Info{}, err
+		}
 	}
 	sess, err := e.sessions.Get(id)
 	if err != nil {
@@ -332,7 +390,7 @@ func (e *Engine) UpdateSession(id string, model, tier, space *string) (session.I
 		sess.Tier = *tier
 	}
 	if space != nil {
-		sess.Space = *space
+		sess.Space = spaceID
 	}
 	if err := e.sessions.Save(sess); err != nil {
 		return session.Info{}, err

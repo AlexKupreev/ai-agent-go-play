@@ -11,7 +11,6 @@ import (
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
-	"ai-agent-go-play/internal/space"
 )
 
 // runRemoteChat is `agent chat --addr`: a REPL that drives a running engine's
@@ -27,12 +26,13 @@ func runRemoteChat(addr string) error {
 		return listRemoteSessions(ctx, c, addr)
 	}
 
-	// --model / --tier / --space seed a freshly-created session's sticky overrides (validated
-	// here so a bad tier fails before we open a session). They do not disturb a resumed
-	// session, which keeps its stored stickies. /model, /tier, and /space change them live via
-	// PATCH mid-REPL. The space value is slugged to its id form; the engine validates it
-	// against the store at turn time (spaces live workspace-side).
-	initialOpts := api.RunOptions{Model: modelFlag, Tier: tierFlag, Space: space.Slug(chatSpaceFlag)}
+	// --model / --tier / --space seed a freshly-created session's sticky overrides (the tier is
+	// validated here so a bad one fails before we open a session). They do not disturb a
+	// resumed session, which keeps its stored stickies. /model, /tier, and /space change them
+	// live via PATCH mid-REPL. The space goes over as typed — spaces live workspace-side, so
+	// the engine resolves the name or id and refuses an unknown one when the session is
+	// created, naming the spaces that exist.
+	initialOpts := api.RunOptions{Model: modelFlag, Tier: tierFlag, Space: chatSpaceFlag}
 	if err := validateTierFlag(tierFlag); err != nil {
 		return err
 	}
@@ -105,17 +105,18 @@ func runRemoteChat(addr string) error {
 			fmt.Fprintf(os.Stderr, "(tier set to %s — effective next turn; clamped to the serve ceiling)\n", tierLabel(curTier))
 			continue
 		}
-		// /space [name] switches the session's active space (spaces.md §5): the value is
-		// slugged to its id and stored as the session sticky; `-` returns to the global
-		// scope. The engine resolves it against the workspace's space store at turn time,
-		// so an unknown space fails that turn with a clear error (switch back or create it).
+		// /space [name] switches the session's active space (spaces.md §5): the name or id
+		// is sent as typed and the engine stores the canonical id as the session sticky;
+		// `-` returns to the global scope. The engine resolves it against the workspace's
+		// space store as it is set, so an unknown space is refused here — with the
+		// available spaces named — instead of breaking the next turn.
 		if arg, ok := strings.CutPrefix(line, "/space"); ok {
 			arg = strings.TrimSpace(arg)
 			if arg == "" {
 				fmt.Fprintf(os.Stderr, "(space: %s; usage: /space <name-or-id>, /space - for global)\n", spaceLabel(curSpace))
 				continue
 			}
-			val := space.Slug(arg)
+			val := arg
 			if arg == "-" {
 				val = ""
 			}

@@ -8,11 +8,11 @@ close the item here if reality has changed. Reference docs describe shipped beha
 must not be treated as a capability list.
 
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
-credential rotation. R1 is in progress: chunked Telegram delivery and the Telegram session-command
-repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation) are shipped. Next up is
-R1's third bullet — validating a session's space on create/update. See
-[Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on
-it.
+credential rotation. R1 is in progress: chunked Telegram delivery, the Telegram session-command
+repairs (`/start`, `/stop`, close/purge bindings, `/purge` confirmation), and session-space
+validation are shipped. Next up is R1's fourth bullet — recording scrape/service failures as failed
+capability use rather than security denial. See [Hand-off](#hand-off--next-step) at the end of this
+file for the trace that is already done on it.
 
 ## How the planning set fits together
 
@@ -96,7 +96,15 @@ This is the fix-first slice. Keep changes small and independently shippable.
       single-use 12-byte nonce (never the session id) that expires after 2 minutes; an expired,
       replayed, or superseded confirmation deletes nothing. Documented in `usage.md`
       §"Ending a conversation".
-- [ ] Validate a session's space on create/update and include available spaces in the error.
+- [x] Validate a session's space on create/update and include available spaces in the error.
+      **Done 2026-08-21** — `Engine.StartSession`/`UpdateSession` run the requested space through an
+      injected `SpaceResolver` (`SetSpaceResolver`, wired in `cmd/serve.go` over the workspace's
+      `space.Store`, like `SetRunStore`/`SetSessionCloseHook`), store the canonical id, and reject an
+      unknown one with `ErrUnknownSpace` → HTTP 400. `space.Store.Resolve`'s miss now names the
+      available spaces, so every entry point that already used it — the `switch_space` tool, local
+      chat's `/space` and `--space` — gained the same error for free. The remote REPL and Telegram
+      send the argument as typed (the engine resolves a name or an id) and report the id it stored.
+      A nil resolver keeps the old store-verbatim behavior for embedders with no space store.
 - [ ] Record scrape/service failures as failed capability use, not security denial; preserve paid
       call attribution on failure.
 - [ ] Pass the central audit reader to every frontend and add local `agent audit` behavior consistent
@@ -234,42 +242,46 @@ Keep these out of the active queue until their trigger appears:
 
 ## Hand-off — next step
 
-*Written 2026-08-21, after the Telegram session commands were repaired. Replace this section when
-the next slice starts; it is a pointer, not a log.*
+*Written 2026-08-21, after session-space validation shipped. Replace this section when the next
+slice starts; it is a pointer, not a log.*
 
-**Next slice: R1's third bullet — validate a session's space on create/update and name the
-available spaces in the error.** Today a space id is stored verbatim and only resolved at turn
-time, so a typo is accepted silently by `POST /sessions` and `PATCH /sessions/{id}` and fails the
-*next turn* instead — the wrong place, with no list of what would have worked. What a trace of the
-current code shows:
+**Next slice: R1's fourth bullet — record scrape/service failures as failed capability use, not
+security denial, and preserve paid-call attribution on failure.** Today both audit writers have
+exactly two outcomes, `capability_exercised` and `capability_denied`, so a paid call that the policy
+allowed and the *network* or the upstream service failed is logged as if the agent had been refused.
+That misreads the security surface (a denial should mean the grant said no) and muddies spend
+review. What a first look at the code shows:
 
-- `Engine.StartSession` and `Engine.UpdateSession` (`internal/api/engine.go`) write
-  `sess.Space` with no check; `UpdateSession`'s doc comment states the deferral explicitly ("the
-  engine stores the space id verbatim ... resolving it is the turn runner's job") and must change
-  with the behavior.
-- The engine core deliberately knows nothing about disk paths, and the space store is built in
-  `cmd/serve.go` (`space.NewStore(spacesDir(workDir))`, ~line 92). So this is an injected seam like
-  `onSessionClose`/`runStore`/`auditRec` on the `Engine` struct, not a new import: a resolver the
-  cmd layer supplies, with validation skipped when it is nil (tests and any embedder that has no
-  space store).
-- `space.Store` already has both halves the error needs — `Resolve(nameOrID)` and `List()`
-  (`internal/space/space.go`). An empty string means the global scope and must stay valid.
-- The frontends that set a space are Telegram's `/space` (`telegram.go`) and the CLI REPL's
-  `/space` (`cmd/chat.go`, which already lists spaces for `/space list`); both surface the
-  `UpdateSession` error verbatim, so a good error message here is the whole user-visible fix.
-- `switch_space` (the agent-facing tool) writes `Space` through the store mid-turn on its own path
-  — check whether it validates, so the two entry points agree.
+- `Broker.record(g, kind, summary, allowed bool)` (`internal/capability/broker.go`, ~line 70) picks
+  `audit.EventCapabilityExercised` / `audit.EventCapabilityDenied` off one bool; `scraper.record`
+  (`internal/tools/scrape.go`, ~line 178) is a second copy of the same two-outcome shape for the
+  paid scrape path. Both need a third outcome, and the `ok bool` parameters should become something
+  with three states rather than growing a second bool.
+- The event type would be new in `internal/audit/audit.go` (beside `EventCapabilityExercised` /
+  `EventCapabilityDenied`). Anything that filters the log by type must learn it: `GET /audit?type=`,
+  the `agent audit` command, and the usage/spend readers.
+- "Preserve paid call attribution on failure" is the scrape half: a failed ScrapingAnt call still
+  costs money, so it must stay in the log with its host + `[browser]` summary (the cost driver) and
+  keep its `Run` id — the record already carries these; what changes is the type it is filed under.
+- Do not put the API key or the full URL in the summary; both writers deliberately record only the
+  host and the secret's *name*.
 
 Also worth knowing before continuing in R1:
 
+- Injected seams are how the API core reaches disk-backed policy: `SetRunStore`,
+  `SetSessionCloseHook`, `SetFileStore`, and now `SetSpaceResolver`, all wired in one block of
+  `cmd/serve.go`. A nil seam must keep the previous behavior so tests and embedders still work.
+- Space validation lives in `Engine.checkSpace`; `ErrUnknownSpace` is a classification sentinel
+  matched with `errors.Is` (the message belongs to the resolver, so nothing prefixes it). A session
+  error's HTTP status is decided in one place, `sessionErrStatus` (`internal/api/sessions.go`).
 - All outgoing Telegram text goes through `Bot.send`/`Bot.notify` (`render.go`); `b.transport.Send`
   has exactly one caller and new code must not add another. A message that is part of a run's
   result must propagate its error the way `stream` does — `notify` is for acknowledgements only.
 - Ending a chat's session goes through `Bot.endChat`: engine first, binding dropped only on
   success. Any new session-ending path must use it rather than deleting from `b.sessions` directly.
-- A destructive Telegram command now has a pattern to copy: `askPurge` + `confirmPurge` +
-  a `purge`/`keep` action in `parseCallback`, with a single-use nonce in the callback data
-  (Telegram echoes that data back, so it can never carry an id that means something on the engine).
+- A destructive Telegram command has a pattern to copy: `askPurge` + `confirmPurge` + a
+  `purge`/`keep` action in `parseCallback`, with a single-use nonce in the callback data (Telegram
+  echoes that data back, so it can never carry an id that means something on the engine).
 - The fake transport in `telegram_test.go` can fail selected sends (`sendFail`), and `fakeClient`
   can fail close/purge (`closeErr`, `purgeErr`) — that is how the remaining false-success paths
   should be tested.

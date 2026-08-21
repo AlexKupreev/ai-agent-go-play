@@ -170,6 +170,11 @@ var serveCmd = &cobra.Command{
 		// Record a run_usage event per completed run/turn into the process-wide log,
 		// so token spend is browsable over GET /audit alongside every other effect.
 		engine.SetAuditRecorder(rec)
+		// Validate a session's sticky space where it is set (POST /sessions, PATCH
+		// /sessions/{id}) rather than on the turn that would trip over it: the engine core
+		// has no notion of the spaces directory, so it takes this resolver as a seam over
+		// the store built above.
+		engine.SetSpaceResolver(spaceResolver(spaces))
 		// Persist each finished run's metadata as info.json next to its transcript, so a run's
 		// status survives eviction (maxFinishedRuns) and a restart (GET /runs/{id} then reads
 		// it back). Best-effort — skipped if the runs dir can't be resolved.

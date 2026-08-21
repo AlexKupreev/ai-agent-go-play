@@ -46,7 +46,7 @@ func handleStartSession(e *Engine) http.HandlerFunc {
 		}
 		id, err := e.StartSession(req.RunOptions)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			sessionErrStatus(w, err)
 			return
 		}
 		writeJSON(w, startSessionResponse{SessionID: id})
@@ -184,12 +184,16 @@ func handlePostTurn(e *Engine) http.HandlerFunc {
 	}
 }
 
-// sessionErrStatus maps a session error to an HTTP status: unknown session ⇒ 404,
-// anything else ⇒ 500.
+// sessionErrStatus maps a session error to an HTTP status: unknown session ⇒ 404, a space
+// that does not exist ⇒ 400 (a caller error, like a malformed tier — and the message names
+// the spaces that do exist), anything else ⇒ 500.
 func sessionErrStatus(w http.ResponseWriter, err error) {
-	if errors.Is(err, session.ErrNotFound) {
+	switch {
+	case errors.Is(err, session.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-		return
+	case errors.Is(err, ErrUnknownSpace):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
