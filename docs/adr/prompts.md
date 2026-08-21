@@ -55,7 +55,7 @@ Two file mechanisms, each resolved at **both** tiers — global `<config-dir>/` 
 
 | File | Effect | Maps to |
 |---|---|---|
-| `SYSTEM.md` | **replaces** the base prompt entirely (operator owns the whole prompt) | `replaceWith` |
+| `SYSTEM.md` | substitutes the built-in base at `{{base}}`, or uses legacy replace semantics when absent (kernel blocks always retained) | `SystemPromptOverride` composition |
 | `AGENTS.md` (alias `CLAUDE.md`) | **appended** as operator/workspace instructions | `appends` |
 
 **Precedence — workspace over global** (pi's rule):
@@ -66,7 +66,7 @@ Two file mechanisms, each resolved at **both** tiers — global `<config-dir>/` 
 - If both `AGENTS.md` and `CLAUDE.md` exist *in the same directory*, load one (prefer `AGENTS.md`) —
   don't silently concatenate two files that likely duplicate.
 
-Full assembly order: `SYSTEM.md` override (or `executorPrompt`) → `selfDocsPromptNote` (if docs) →
+Full assembly order: composed `SYSTEM.md`/`executorPrompt` base → `selfDocsPromptNote` (if docs) →
 config-dir `AGENTS.md` → workspace `AGENTS.md`. A `--no-context-files` flag disables **all** file
 loading (parity with pi's `-nc`), useful for reproducible runs and debugging.
 

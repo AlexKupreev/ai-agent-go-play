@@ -68,6 +68,9 @@ func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec 
 		mux.HandleFunc("GET /sessions/{id}/guidance", guidanceHandler(e, guidance.ScopeSession, pathTarget, false))
 		mux.HandleFunc("PUT /sessions/{id}/guidance", guidanceHandler(e, guidance.ScopeSession, pathTarget, true))
 	}
+	if e.effectiveConfig != nil {
+		mux.HandleFunc("GET /config/effective", handleEffectiveConfig(e.effectiveConfig))
+	}
 	return mux
 }
 

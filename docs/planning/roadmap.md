@@ -10,7 +10,8 @@ must not be treated as a capability list.
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
 credential rotation. R1 is shipped: the Telegram delivery/session repairs, session-space
 validation, truthful capability-failure auditing, durable audit-history access, and the GPT-5.1
-default/context refresh are complete. Next up is R2's durable guidance control plane. See
+default/context refresh are complete. R2's durable guidance and effective-state slices are shipped;
+status enrichment and space-management parity remain. See
 [Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on it.
 
 ## How the planning set fits together
@@ -137,10 +138,10 @@ Give users a coherent way to steer the existing system before adding a smarter l
       redacted audit metadata.
 - [ ] Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote
       chat, and Telegram; add the matching space-management CLI/API surface.
-- [ ] Support `{{base}}` composition and report prompt/guidance provenance.
+- [x] Support `{{base}}` composition and report prompt/guidance provenance.
 - [ ] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits.
-- [ ] Add a read-only effective-config endpoint and make reload return a meaningful diff.
-- [ ] Make unknown model/space and dead-engine errors say how to recover.
+- [x] Add a read-only effective-config endpoint and make reload return a meaningful diff.
+- [x] Make unknown model/space and dead-engine errors say how to recover.
 
 **Exit:** a Telegram-only user can inspect and change standing guidance, restart, and see the same
 effective state; CLI/API users get the same semantics.

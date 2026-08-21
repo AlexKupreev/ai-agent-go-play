@@ -3,8 +3,10 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
 )
 
@@ -47,6 +49,31 @@ func TestPromptState_ReloadPicksUpEdits(t *testing.T) {
 	}
 	if _, ok := cat.Get("critic"); !ok {
 		t.Errorf("after reload catalog missing newly added agent type 'critic'")
+	}
+}
+
+func TestReloadDiffReportsPromptDefaultsAndAgentTypes(t *testing.T) {
+	before := api.EffectiveConfig{
+		Model:       api.ConfigValue{Value: "old", Source: "config"},
+		TierCeiling: api.ConfigValue{Value: "balanced", Source: "config"},
+		Prompts:     api.PromptConfig{Sources: []api.PromptSource{{Name: "AGENTS.md", Layer: "config", Digest: "aaa", Active: true}}},
+		AgentTypes:  api.AgentTypeConfig{Count: 1, Sources: []api.AgentTypeSource{{Name: "researcher", Layer: "built-in"}}},
+	}
+	after := api.EffectiveConfig{
+		Model:       api.ConfigValue{Value: "new", Source: "config"},
+		TierCeiling: before.TierCeiling,
+		Prompts:     api.PromptConfig{Sources: []api.PromptSource{{Name: "AGENTS.md", Layer: "config", Digest: "bbb", Active: true}}},
+		AgentTypes:  api.AgentTypeConfig{Count: 2, Sources: []api.AgentTypeSource{{Name: "researcher", Layer: "built-in"}, {Name: "worker", Layer: "workspace", Digest: "ccc"}}},
+	}
+	diff := reloadDiff(before, after)
+	if got := strings.Join(diff.Changed, ","); got != "agent_types,config/AGENTS.md,model" {
+		t.Fatalf("changed = %q", got)
+	}
+	if len(diff.AgentTypes.Added) != 1 || diff.AgentTypes.Added[0] != "worker" {
+		t.Fatalf("agent type diff = %+v", diff.AgentTypes)
+	}
+	if diff.Defaults.Model.Before != "old" || diff.Defaults.Model.After != "new" {
+		t.Fatalf("model diff = %+v", diff.Defaults.Model)
 	}
 }
 

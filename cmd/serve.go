@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -156,8 +157,17 @@ var serveCmd = &cobra.Command{
 		// turn them off. Critique needs the deliberate pipeline, so --no-plan implies no critique.
 		plan := !serveNoPlanFlag
 		critique := plan && !serveNoCritiqueFlag
+		deps.defaults.setWithSources(resolveModel(modelFlag, cfg), tier, modelConfigSource(modelFlag, cfg), tierConfigSource(tierFlag, cfg))
+		effective := &effectiveConfigService{
+			workspace: workDir, prompts: promptSrc, defaults: deps.defaults,
+			limits: deps.limits, configLimits: cfg.Limits, spawnDepth: deps.spawnDepth,
+			secretNames: deps.secretNames, guidancePath: guidancePath(workDir),
+			telegram: resolveTelegramToken(cfg) != "", plan: plan, critique: critique,
+			maxRevisions: serveMaxRevisionsFlag,
+		}
 
 		engine := api.NewEngine(deps.runner())
+		engine.SetEffectiveConfigService(effective)
 		// Session turns run the deliberate planner→executor pipeline (chat-planner.md) unless
 		// --no-plan drops back to the bare executor; one-shot /runs are unaffected either way.
 		turns := deps.turnRunner()
@@ -222,6 +232,7 @@ var serveCmd = &cobra.Command{
 		// the tier gate. A method+path pattern outranks the "/" catch-all, so /reload wins.
 		mux := http.NewServeMux()
 		mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
+			before := effective.EffectiveConfig()
 			// Re-read config defaults first (cheap, validated) so a malformed config.json or a
 			// bad tier aborts the whole reload before anything is applied — no partial reload.
 			cfg2, err := loadConfig()
@@ -243,9 +254,11 @@ var serveCmd = &cobra.Command{
 			// config-sourced default moves. Per-session/per-turn overrides are unaffected and
 			// still clamp to this (possibly new) ceiling. The prompt tier gate stays at the
 			// startup tier (which workspace-tier prompt files loaded is fixed for the process).
-			deps.defaults.set(resolveModel(modelFlag, cfg2), tier2)
+			deps.defaults.setWithSources(resolveModel(modelFlag, cfg2), tier2, modelConfigSource(modelFlag, cfg2), tierConfigSource(tierFlag, cfg2))
+			diff := reloadDiff(before, effective.EffectiveConfig())
 			fmt.Fprintln(os.Stderr, "reloaded prompts, agent types, and config defaults (model, tier)")
-			w.WriteHeader(http.StatusNoContent)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(diff)
 		})
 		mux.Handle("/", srv)
 
@@ -401,9 +414,11 @@ func (d serveDeps) openTurnIO(runID string, obs agent.Observer) (turnIO, error) 
 // re-applied on each reload (via resolveModel/resolveTier), so an engine launched with an
 // explicit --model/--tier keeps that choice — only a config-sourced default moves.
 type serveDefaults struct {
-	mu    sync.RWMutex
-	model string
-	tier  capability.Tier
+	mu          sync.RWMutex
+	model       string
+	tier        capability.Tier
+	modelSource string
+	tierSource  string
 }
 
 func newServeDefaults(model string, tier capability.Tier) *serveDefaults {
@@ -420,6 +435,22 @@ func (s *serveDefaults) set(model string, tier capability.Tier) {
 	s.mu.Lock()
 	s.model, s.tier = model, tier
 	s.mu.Unlock()
+}
+
+func (s *serveDefaults) setWithSources(model string, tier capability.Tier, modelSource, tierSource string) {
+	s.mu.Lock()
+	s.model, s.tier, s.modelSource, s.tierSource = model, tier, modelSource, tierSource
+	s.mu.Unlock()
+}
+
+func (s *serveDefaults) effectiveSnapshot() (string, capability.Tier, string, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	model := s.model
+	if model == "" {
+		model = agent.DefaultModel
+	}
+	return model, s.tier, s.modelSource, s.tierSource
 }
 
 // resolveOpts applies a request's per-run overrides over the serve defaults: model falls back

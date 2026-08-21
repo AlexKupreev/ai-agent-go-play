@@ -234,11 +234,11 @@ func (c *fakeClient) UploadFile(_ context.Context, sessionID, name, source strin
 	return api.UploadInfo{Path: "/scratch/" + sessionID + "/" + name, Name: name, Bytes: int64(len(body))}, nil
 }
 
-func (c *fakeClient) Reload(context.Context) error {
+func (c *fakeClient) Reload(context.Context) (api.ReloadDiff, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reloadCalls++
-	return c.reloadErr
+	return api.ReloadDiff{Changed: []string{"config/AGENTS.md"}, AgentTypes: api.AgentTypeDiff{Count: 2}}, c.reloadErr
 }
 
 // StreamEvents scripts a run that parks an approval, waits for the decision (via
@@ -803,7 +803,7 @@ func TestBot_ReloadCommand(t *testing.T) {
 
 	// Success: the engine reload is invoked and the chat is told it took effect.
 	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/reload"}}
-	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "reloaded prompts") })
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "changed config/AGENTS.md") })
 	cl.mu.Lock()
 	if cl.reloadCalls != 1 {
 		cl.mu.Unlock()

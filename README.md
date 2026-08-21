@@ -94,8 +94,9 @@ set-engine home 127.0.0.1:8081` → `agent client --addr home "…"`).
 **Customize & experiment.** Shape the agent with `SYSTEM.md` / `AGENTS.md` prompt files and
 `agents/*.md` sub-agent types, read from the config-dir (global) and workspace — see
 [`docs/environment.md`](docs/environment.md). Edit them and reload in place (`/reload` in `agent
-chat`, `agent reload --addr` against a running engine), and compare configurations with `agent
-eval <task> --models …` / `--variants file.yaml`.
+chat`, `agent reload --addr` against a running engine); reload reports what changed, and
+`GET /config/effective` shows the secret-safe effective defaults and prompt/agent provenance.
+Compare configurations with `agent eval <task> --models …` / `--variants file.yaml`.
 
 For user-owned standing instructions, use **guidance** instead of operator prompt files. Guidance
 layers from workspace → active space → persistent session; each scope is capped at 4,000 Unicode

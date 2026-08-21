@@ -213,3 +213,33 @@ func TestLoadPrompts_ContextFileMissingErrors(t *testing.T) {
 		t.Error("loadPrompts with a missing --context-file should error")
 	}
 }
+
+func TestLoadPrompts_ReportsCompositionProvenance(t *testing.T) {
+	resetPromptFlags(t)
+	cfg := t.TempDir()
+	writeFile(t, cfg, systemPromptFile, "global persona")
+	writeFile(t, cfg, agentsFile, "global rules")
+	t.Setenv(envConfigDir, cfg)
+	ws := t.TempDir()
+	writeFile(t, ws, systemPromptFile, "Ada wraps {{base}} in Polish")
+	workspaceFlag = ws
+
+	pf, err := loadPrompts(ws, capability.TierBalanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pf.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want none for {{base}} composition", pf.Warnings)
+	}
+	if len(pf.Sources) != 3 {
+		t.Fatalf("sources = %+v, want global SYSTEM/AGENTS + workspace SYSTEM", pf.Sources)
+	}
+	if pf.Sources[0].Active || !pf.Sources[1].Active || !pf.Sources[2].Active {
+		t.Fatalf("winning provenance wrong: %+v", pf.Sources)
+	}
+	for _, source := range pf.Sources {
+		if source.Path == "" || source.Bytes == 0 || len(source.Digest) != 12 {
+			t.Errorf("incomplete source: %+v", source)
+		}
+	}
+}

@@ -23,10 +23,11 @@ var reloadCmd = &cobra.Command{
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c := api.NewClient("http://" + resolveAddr(reloadAddrFlag))
-		if err := c.Reload(context.Background()); err != nil {
+		diff, err := c.Reload(context.Background())
+		if err != nil {
 			return err
 		}
-		fmt.Println("reloaded prompts and agent types")
+		fmt.Println(diff.Summary())
 		return nil
 	},
 }

@@ -41,6 +41,10 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
 - matching `PUT` endpoints with `{guidance}` → atomically replace that scope and return the updated
   document. An empty string is an idempotent clear; over 4,000 Unicode characters is 400; an
   unknown space/session is 404. Changed writes emit body-redacted `guidance_updated` audit metadata
+- `GET /config/effective` → the engine's secret-safe next-run snapshot: effective model and tier
+  ceiling with precedence sources, workspace, prompt-file provenance and composition mode,
+  global-guidance provenance, winning agent-type sources, actual limits, configured secret names
+  (never values), deliberate frontend modes, and whether Telegram is configured
 - `POST /sessions` `{model?, tier?, space?}` → `{session_id}` (optional initial sticky model/tier/space;
   400 on a malformed tier or an unknown space);
   `GET /sessions` → list (each Info carries the session's sticky `model`/`tier`/`space` and a
@@ -67,6 +71,13 @@ Events** (a long-lived `GET` with `Content-Type: text/event-stream`).
   re-applied, so an engine launched with an explicit `--model`/`--tier` keeps that choice — only a
   config-sourced default moves. Per-session/per-turn overrides still clamp to the (possibly new)
   ceiling. The prompt *tier gate* (which workspace-tier prompt files loaded) stays at the startup tier.
+  Success is JSON, not an empty 204: `changed` names the effective fields/files that moved;
+  `prompts` returns the current loaded provenance and warnings; `agent_types` returns count plus
+  added/removed/changed names and winning sources; `defaults` shows model/tier before and after.
+
+Client transport failures name the dead engine address and tell the caller to check `--addr` or
+start `agent serve`. A provider model-not-found failure tells chat users to use `/model -` (or clear
+the model override) to recover; unknown-space errors name the available spaces at set time.
 
 A deliberate session turn also emits a `brief` event on the run's stream (the clean, rendered
 plan the executor was seeded with, plus any critique-loop notes), published out-of-band like the

@@ -110,7 +110,7 @@ type Client interface {
 	StreamEvents(ctx context.Context, runID string, onEvent func(api.Event)) error
 	Resolve(ctx context.Context, id string, approved bool) error
 	Answer(ctx context.Context, id, text string) error
-	Reload(ctx context.Context) error
+	Reload(ctx context.Context) (api.ReloadDiff, error)
 }
 
 // Bot wires a chat Transport to the engine Client, gating access by an allowlist of
@@ -381,11 +381,12 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		// malformed file leaves the running config intact and returns an error. The
 		// swapped snapshot lands on the next turn of every session, including this
 		// chat's live one (each turn builds a fresh executor from the current snapshot).
-		if err := b.client.Reload(ctx); err != nil {
+		diff, err := b.client.Reload(ctx)
+		if err != nil {
 			b.notify(ctx, m.ChatID, "reload failed: "+err.Error())
 			return
 		}
-		b.notify(ctx, m.ChatID, "reloaded prompts and agent types — effective from your next message")
+		b.notify(ctx, m.ChatID, diff.Summary()+" — effective from your next message")
 	case "/space":
 		// Switch this chat's session to a space (a scoped memory context, spaces.md §5),
 		// mirroring the CLI REPL's /space: `/space <name>` switches, `/space -` returns to

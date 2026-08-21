@@ -38,6 +38,17 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+// do adds the recovery path that raw net/http connection errors omit. Context cancellation
+// is left untouched because it means the caller stopped the operation, not that the engine
+// needs starting or its address repairing.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.httpClient().Do(req)
+	if err == nil || req.Context().Err() != nil {
+		return resp, err
+	}
+	return nil, fmt.Errorf("engine at %s is unavailable: %w; check --addr (or its configured alias) and start it with `agent serve --addr <host:port>`", c.BaseURL, err)
+}
+
 // newRequest builds a request against the engine.
 func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	return http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
@@ -52,7 +63,7 @@ func (c *Client) StartRun(ctx context.Context, task string, opts RunOptions) (st
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return "", err
 	}
@@ -74,7 +85,7 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, onEvent func(Ev
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -106,7 +117,7 @@ func (c *Client) Pending(ctx context.Context) ([]PendingApproval, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +156,7 @@ func (c *Client) postResolve(ctx context.Context, id string, body resolveApprova
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -162,7 +173,7 @@ func (c *Client) ToolDetail(ctx context.Context, name string) (ToolDetailView, e
 	if err != nil {
 		return ToolDetailView{}, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return ToolDetailView{}, err
 	}
@@ -183,7 +194,7 @@ func (c *Client) RevokeTool(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -215,7 +226,7 @@ func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -234,25 +245,50 @@ func (c *Client) Audit(ctx context.Context, run, typ string, limit int) ([]audit
 // PLANNER.md/CRITIC.md), agent-type catalog (agents/*.md), and config.json defaults (the
 // default model + tier ceiling), so edits take effect on subsequent runs without restarting
 // the engine. A malformed file or config leaves the current state intact and returns an error.
-func (c *Client) Reload(ctx context.Context) error {
+func (c *Client) Reload(ctx context.Context) (ReloadDiff, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, "/reload", nil)
 	if err != nil {
-		return err
+		return ReloadDiff{}, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
-		return err
+		return ReloadDiff{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		msg := strings.TrimSpace(string(body))
 		if msg == "" {
 			msg = resp.Status
 		}
-		return fmt.Errorf("reload: %s", msg)
+		return ReloadDiff{}, fmt.Errorf("reload: %s", msg)
 	}
-	return nil
+	var out ReloadDiff
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ReloadDiff{}, fmt.Errorf("reload response: %w", err)
+	}
+	return out, nil
+}
+
+// EffectiveConfig returns the secret-safe configuration snapshot used by the next run.
+func (c *Client) EffectiveConfig(ctx context.Context) (EffectiveConfig, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/config/effective", nil)
+	if err != nil {
+		return EffectiveConfig{}, err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return EffectiveConfig{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return EffectiveConfig{}, fmt.Errorf("effective config: %s", resp.Status)
+	}
+	var out EffectiveConfig
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return EffectiveConfig{}, err
+	}
+	return out, nil
 }
 
 // StartSession creates a persistent conversation on the engine and returns its id. opts
@@ -265,7 +301,7 @@ func (c *Client) StartSession(ctx context.Context, opts RunOptions) (string, err
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return "", err
 	}
@@ -291,7 +327,7 @@ func (c *Client) UpdateSession(ctx context.Context, sessionID string, model, tie
 		return session.Info{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return session.Info{}, err
 	}
@@ -328,7 +364,7 @@ func (c *Client) SetGuidance(ctx context.Context, scope guidance.Scope, target, 
 }
 
 func (c *Client) doGuidance(req *http.Request, scope guidance.Scope, target string) (GuidanceDocument, error) {
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return GuidanceDocument{}, err
 	}
@@ -380,7 +416,7 @@ func (c *Client) UploadFile(ctx context.Context, sessionID, name, source string,
 		return UploadInfo{}, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return UploadInfo{}, err
 	}
@@ -404,7 +440,7 @@ func (c *Client) ListSessions(ctx context.Context) ([]session.Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +461,7 @@ func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -443,7 +479,7 @@ func (c *Client) PurgeSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -460,7 +496,7 @@ func (c *Client) RestoreSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -481,7 +517,7 @@ func (c *Client) PostTurn(ctx context.Context, sessionID, text string, opts RunO
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return "", err
 	}
@@ -502,7 +538,7 @@ func (c *Client) ListRuns(ctx context.Context) ([]RunInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +559,7 @@ func (c *Client) RunStatus(ctx context.Context, runID string) (RunInfo, error) {
 	if err != nil {
 		return RunInfo{}, err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return RunInfo{}, err
 	}
@@ -544,7 +580,7 @@ func (c *Client) StopRun(ctx context.Context, runID string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}

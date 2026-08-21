@@ -377,8 +377,10 @@ You can shape the agent's behaviour with files, read from **two directories**: t
 acting on — per-run, trusted only above `safe`). The full model, precedence rules, and the
 tier gate live in [`environment.md`](environment.md); the operational summary:
 
-- **System prompt / operator instructions.** `SYSTEM.md` **replaces** the built-in base prompt;
-  `AGENTS.md` (alias `CLAUDE.md`) is **appended** as instructions. `PLANNER.md` **replaces** the
+- **System prompt / operator instructions.** `SYSTEM.md` wraps the complete built-in base when it
+  contains `{{base}}`; without the placeholder it keeps legacy **replace** semantics (immutable
+  runtime/security blocks are retained either way). `AGENTS.md` (alias `CLAUDE.md`) is
+  **appended** as instructions. `PLANNER.md` **replaces** the
   built-in planner prompt (the clarify/refine pass — `agent run`, and every deliberate `agent
   chat` / session turn). `CRITIC.md` **replaces** the built-in critic prompt (the critique loop's
   verdict pass in a deliberate `agent chat` / session turn). Drop any in the config-dir (global)
@@ -424,11 +426,17 @@ After editing any of these files, pick up the changes in place:
   config (or a bad tier) is rejected (HTTP 400) and the engine keeps its current configuration
   entirely (no partial reload); in-flight runs are unaffected. Flag/env precedence is re-applied,
   so an engine launched with an explicit `--model`/`--tier` keeps that choice — only a
-  config-sourced default moves.
+  config-sourced default moves. The command and Telegram `/reload` print the structured diff's
+  changed fields; a no-op says there were no effective changes.
 
 ```bash
 ./agent reload --addr 127.0.0.1:8080     # or --addr <alias>
+curl http://127.0.0.1:8080/config/effective | jq  # provenance + effective defaults/limits
 ```
+
+`GET /config/effective` never returns prompt/guidance bodies, tokens, API keys, or secret values.
+It reports prompt paths, layers, modes, byte counts, short digests and precedence winners; agent-type
+sources; the global-guidance path and character count; and configured secret names only.
 
 ## Comparing configurations — `agent eval`
 

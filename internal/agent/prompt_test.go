@@ -135,6 +135,17 @@ func TestKernelPromptBlocks(t *testing.T) {
 	})
 }
 
+func TestBaseSystemPromptPlaceholderWrapsBuiltInBase(t *testing.T) {
+	got := baseSystemPrompt("You are Ada.\n\n{{base}}\n\nAlways answer in Polish.", "", "", "", "")
+	if !strings.HasPrefix(got, "You are Ada.") || !strings.Contains(got, executorRoleBlock) ||
+		!strings.HasSuffix(got, "Always answer in Polish.") {
+		t.Fatalf("placeholder did not wrap the built-in base: %q", got)
+	}
+	if strings.Count(got, runtimeBlockMarker) != 1 || strings.Count(got, securityBlockMarker) != 1 {
+		t.Fatalf("placeholder duplicated kernel blocks: %q", got)
+	}
+}
+
 // TestNewExecutor_OverrideKeepsKernelBlocks is the operator-facing half of the same rule: a
 // SYSTEM.md owns the wording, but cannot silently remove the runtime constraints or the
 // untrusted-content rule (security.md §5).

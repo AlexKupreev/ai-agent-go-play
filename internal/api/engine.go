@@ -66,6 +66,9 @@ const (
 // are never evicted.
 const maxFinishedRuns = 100
 
+// DefaultMaxFinishedRuns is the effective retention bound when config leaves it unset.
+const DefaultMaxFinishedRuns = maxFinishedRuns
+
 // Runner executes a task to completion, emitting run events to obs. It abstracts
 // the agent wiring (provider, registry, broker, executor) so the API core stays
 // independent of how a run is assembled — cmd injects the real wiring, tests inject
@@ -199,6 +202,14 @@ type Engine struct {
 	// guidance, when set, exposes explicit global/space/session guidance management.
 	// It is independent from ordinary turn requests, which never accept guidance text.
 	guidance GuidanceService
+
+	// effectiveConfig is the read-only, secret-safe engine configuration snapshot.
+	effectiveConfig EffectiveConfigService
+}
+
+// SetEffectiveConfigService enables GET /config/effective.
+func (e *Engine) SetEffectiveConfigService(service EffectiveConfigService) {
+	e.effectiveConfig = service
 }
 
 // SpaceResolver maps a requested space — an id or a display name — to the canonical space

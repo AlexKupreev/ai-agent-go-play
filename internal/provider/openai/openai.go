@@ -5,6 +5,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -51,6 +52,9 @@ func (c *Client) Step(ctx context.Context, req provider.StepRequest) (provider.S
 
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
+		if isUnknownModel(err) {
+			return provider.StepResponse{}, &provider.UnknownModelError{Model: req.Model, Err: err}
+		}
 		return provider.StepResponse{}, err
 	}
 	if len(resp.Choices) == 0 {
@@ -67,6 +71,22 @@ func (c *Client) Step(ctx context.Context, req provider.StepRequest) (provider.S
 			CachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
 		},
 	}, nil
+}
+
+func isUnknownModel(err error) bool {
+	var apiErr *oai.Error
+	if errors.As(err, &apiErr) {
+		code := strings.ToLower(apiErr.Code)
+		if code == "model_not_found" || code == "unknown_model" ||
+			(apiErr.StatusCode == 404 && strings.EqualFold(apiErr.Param, "model")) {
+			return true
+		}
+		text := strings.ToLower(apiErr.Message)
+		return strings.Contains(text, "model") && (strings.Contains(text, "not found") || strings.Contains(text, "does not exist"))
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "model") && (strings.Contains(text, "model_not_found") ||
+		strings.Contains(text, "unknown model") || strings.Contains(text, "model does not exist"))
 }
 
 // toMessages maps neutral messages to OpenAI message params.

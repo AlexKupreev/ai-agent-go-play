@@ -2,7 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +14,10 @@ import (
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/tools"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // TestClient_DrivesRunWithApproval exercises the Client end-to-end against a real
 // server: start a run that parks an approval, resolve it via the client while
@@ -163,5 +171,33 @@ func TestClient_StartRunErrorsOnBadStatus(t *testing.T) {
 	// Empty task is rejected with 400 by the server.
 	if _, err := c.StartRun(context.Background(), "", RunOptions{}); err == nil {
 		t.Fatal("expected error for empty task, got nil")
+	}
+}
+
+func TestClientDeadEngineErrorIncludesRecovery(t *testing.T) {
+	c := NewClient("http://127.0.0.1:65534")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}
+	_, err := c.EffectiveConfig(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "check --addr") || !strings.Contains(err.Error(), "agent serve") {
+		t.Fatalf("dead-engine error lacks recovery: %v", err)
+	}
+}
+
+func TestClientReloadDecodesStructuredDiff(t *testing.T) {
+	c := NewClient("http://engine")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/reload" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"changed":["config/AGENTS.md"],"prompts":{"composition":"built-in base","sources":[],"warnings":[]},"agent_types":{"count":2,"added":[],"removed":[],"changed":[],"sources":[]},"defaults":{"model":{"before":"gpt-5.1","after":"gpt-5.1"},"tier":{"before":"balanced","after":"balanced"}}}`)), Header: make(http.Header)}, nil
+	})}
+	diff, err := c.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.Changed) != 1 || diff.AgentTypes.Count != 2 {
+		t.Fatalf("diff = %+v", diff)
 	}
 }

@@ -94,7 +94,7 @@ the built-in base plus operator/project files, read from **both anchors**:
 
 | File | Effect | Combined across tiers |
 | --- | --- | --- |
-| `SYSTEM.md` | **Replaces** the built-in base prompt (executor) | workspace wins outright over config-dir (replace ⇒ last writer) |
+| `SYSTEM.md` | **Wraps** the built-in base when it contains `{{base}}`; otherwise uses legacy replace semantics (executor) | workspace wins outright over config-dir (replace ⇒ last writer) |
 | `AGENTS.md` (alias `CLAUDE.md`) | **Appended** as operator instructions (executor) | config-dir first, then workspace, concatenated (workspace has the last word) |
 | `PLANNER.md` | **Replaces** the built-in planner prompt (the clarify/refine pass) | workspace wins outright over config-dir |
 | `CRITIC.md` | **Replaces** the built-in critic prompt (the deliberate critique loop's verdict pass) | workspace wins outright over config-dir |
@@ -112,9 +112,11 @@ untrusted checkout's `AGENTS.md` lands *in the system prompt*, so it is a prompt
 
 ### What a `SYSTEM.md` override does and does not remove
 
-`SYSTEM.md` **replaces the built-in executor prompt**, so prefer `AGENTS.md` (which appends)
-unless you really mean to own the base. Some of the prompt survives an override and some does
-not, and the difference matters:
+Put `{{base}}` in `SYSTEM.md` to wrap the complete built-in executor prompt, for example
+`You are Ada.\n\n{{base}}\n\nAlways answer in Polish.` Every occurrence is substituted. Without
+the placeholder, `SYSTEM.md` keeps the legacy behavior and **replaces** the customizable built-in
+base, so prefer `AGENTS.md` (which appends) unless you really mean to own it. Some of the prompt
+survives a legacy replacement and some does not, and the difference matters:
 
 | Part of the prompt | Survives a `SYSTEM.md`? |
 | --- | --- |
@@ -197,6 +199,13 @@ After editing prompt or agent-type files, pick them up without a restart: **`/re
 `agent chat`, or **`agent reload --addr`** (⇢ `POST /reload`) against a running `agent serve` (see
 [`usage.md`](usage.md#customizing-the-agent--prompts--agent-types)). Try variants side by side with
 **`agent eval`** (see [`usage.md`](usage.md#comparing-configurations--agent-eval)).
+
+A running engine exposes its secret-safe effective state at **`GET /config/effective`**. Prompt
+provenance includes each loaded file's layer, path, append/replace role, byte count, short SHA-256
+digest, and whether it won precedence; prompt bodies are not returned. Agent types likewise report
+their winning built-in/config/workspace source. The snapshot also reports the effective model and
+tier with their precedence source, workspace, actual limits, global-guidance path/size, configured
+secret names (never values), deliberate frontend modes, and whether Telegram is configured.
 
 ---
 

@@ -17,6 +17,14 @@ import (
 // maxHTTPBytes caps a single brokered HTTP response to keep memory bounded.
 const maxHTTPBytes = 1 << 20 // 1 MiB
 
+// EffectiveMaxHTTPBytes returns the broker response cap after applying its built-in default.
+func EffectiveMaxHTTPBytes(configured int64) int64 {
+	if configured > 0 {
+		return configured
+	}
+	return maxHTTPBytes
+}
+
 // ToolCaller invokes another registered tool by name. Injected by the host so
 // the broker need not depend on the tool registry (avoids an import cycle).
 type ToolCaller func(ctx context.Context, name string, input map[string]any) (string, error)

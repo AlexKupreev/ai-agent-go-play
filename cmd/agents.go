@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -33,30 +35,51 @@ const defaultSpawnDepth = 1
 // the workspace explicitly (--workspace). --no-context-files disables both file tiers,
 // leaving only the built-in types.
 func loadAgentCatalog(workspace string, tier capability.Tier) (*agent.AgentCatalog, error) {
+	cat, _, err := loadAgentCatalogState(workspace, tier)
+	return cat, err
+}
+
+func loadAgentCatalogState(workspace string, tier capability.Tier) (*agent.AgentCatalog, []api.AgentTypeSource, error) {
 	cat := agent.NewAgentCatalog()
+	sources := make(map[string]api.AgentTypeSource)
+	for _, typ := range cat.List() {
+		sources[typ.Name] = api.AgentTypeSource{Name: typ.Name, Layer: "built-in"}
+	}
 	if noContextFilesFlag {
-		return cat, nil
+		return cat, orderedAgentSources(cat, sources), nil
 	}
 
 	cfgDir, err := configDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := loadAgentDir(cat, filepath.Join(cfgDir, agentsDir)); err != nil {
-		return nil, err
+	if err := loadAgentDirState(cat, filepath.Join(cfgDir, agentsDir), "config", sources); err != nil {
+		return nil, nil, err
 	}
 	if loadWorkspaceTier(workspace, cfgDir, tier) {
-		if err := loadAgentDir(cat, filepath.Join(workspace, agentsDir)); err != nil {
-			return nil, err
+		if err := loadAgentDirState(cat, filepath.Join(workspace, agentsDir), "workspace", sources); err != nil {
+			return nil, nil, err
 		}
 	}
-	return cat, nil
+	return cat, orderedAgentSources(cat, sources), nil
+}
+
+func orderedAgentSources(cat *agent.AgentCatalog, byName map[string]api.AgentTypeSource) []api.AgentTypeSource {
+	out := make([]api.AgentTypeSource, 0, len(byName))
+	for _, typ := range cat.List() {
+		out = append(out, byName[typ.Name])
+	}
+	return out
 }
 
 // loadAgentDir registers every <name>.md in dir into cat. A missing directory is a no-op
 // (most installs have none). A malformed or invalid file is a hard error — a typo in an
 // agent definition should surface, not be silently skipped.
 func loadAgentDir(cat *agent.AgentCatalog, dir string) error {
+	return loadAgentDirState(cat, dir, "unknown", nil)
+}
+
+func loadAgentDirState(cat *agent.AgentCatalog, dir, layer string, sources map[string]api.AgentTypeSource) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -75,6 +98,14 @@ func loadAgentDir(cat *agent.AgentCatalog, dir string) error {
 		}
 		if err := cat.Register(at); err != nil {
 			return fmt.Errorf("agent file %s: %w", path, err)
+		}
+		if sources != nil {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			digest := fmt.Sprintf("%x", sha256.Sum256(b))
+			sources[at.Name] = api.AgentTypeSource{Name: at.Name, Layer: layer, Path: path, Digest: digest[:12]}
 		}
 	}
 	return nil

@@ -62,6 +62,10 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
+// Effective returns the actual bounds after built-in defaults are applied. It is exported
+// for the read-only effective-config surface; executor construction uses the same values.
+func (l Limits) Effective() Limits { return l.withDefaults() }
+
 // exposedBuiltins are the only trusted built-ins reachable from sandboxed code
 // via call_tool. Both are read-only and confirm-free, so design §5 rule (b) is
 // moot for v1; shell stays unexposed and thus unreachable from authored tools.
@@ -158,9 +162,16 @@ do not present it as a current capability.`
 func baseSystemPrompt(override, docsNote, policyNote, rosterNote, scratchNote string) string {
 	base := executorPrompt
 	if override != "" {
-		// The override owns the wording, not the containment rules: the kernel blocks are
-		// re-attached after it (unless it carried them across itself).
-		base = override + kernelPromptBlocks(override, true)
+		if strings.Contains(override, "{{base}}") {
+			// A placeholder lets an operator wrap or annotate the complete built-in base.
+			// Replace every occurrence so the result is deterministic and unsurprising.
+			base = strings.ReplaceAll(override, "{{base}}", executorPrompt)
+		} else {
+			// Legacy compatibility: without the placeholder SYSTEM.md replaces the
+			// customizable base. Containment blocks are still force-attached.
+			base = override
+		}
+		base += kernelPromptBlocks(base, true)
 	}
 	// policyNote (tier permissions), rosterNote (the live tool inventory), and scratchNote
 	// (the scratch dir + record_artifact protocol) are the agent's factual self-knowledge; they
@@ -582,8 +593,9 @@ type ExecutorConfig struct {
 
 	// Prompt composition (prompts.md §2). The cmd layer resolves and reads the operator's
 	// context files and passes their contents here; internal/agent never touches the disk.
-	// SystemPromptOverride (a SYSTEM.md) replaces the base executorPrompt entirely; empty ⇒
-	// the built-in base. PromptAppends (AGENTS.md/CLAUDE.md bodies) are concatenated after
+	// SystemPromptOverride (a SYSTEM.md) substitutes executorPrompt at each {{base}}, uses
+	// legacy replace semantics when the placeholder is absent, and is empty for the built-in
+	// base. PromptAppends (AGENTS.md/CLAUDE.md bodies) are concatenated after
 	// the base, in order. Both fold in at construction so the cached prefix stays stable.
 	SystemPromptOverride string
 	PromptAppends        []string

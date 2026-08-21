@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"sync"
 
 	"ai-agent-go-play/internal/agent"
+	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
 )
 
@@ -23,6 +25,7 @@ type promptState struct {
 	mu      sync.RWMutex
 	prompts promptFiles
 	catalog *agent.AgentCatalog
+	agents  []api.AgentTypeSource
 }
 
 // newPromptState reads the files once; a load error (e.g. a malformed agents/*.md) fails
@@ -42,12 +45,12 @@ func (s *promptState) reload() error {
 	if err != nil {
 		return err
 	}
-	catalog, err := loadAgentCatalog(s.workDir, s.tier)
+	catalog, agents, err := loadAgentCatalogState(s.workDir, s.tier)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.prompts, s.catalog = prompts, catalog
+	s.prompts, s.catalog, s.agents = prompts, catalog, agents
 	s.mu.Unlock()
 	return nil
 }
@@ -57,6 +60,15 @@ func (s *promptState) snapshot() (promptFiles, *agent.AgentCatalog) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.prompts, s.catalog
+}
+
+func (s *promptState) effectiveSnapshot() (promptFiles, []api.AgentTypeSource) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pf := s.prompts
+	pf.Sources = append([]api.PromptSource(nil), pf.Sources...)
+	pf.Warnings = append([]string(nil), pf.Warnings...)
+	return pf, append([]api.AgentTypeSource(nil), s.agents...)
 }
 
 // noContextFilesFlag is bound to the persistent --no-context-files flag (see cmd/root.go).
@@ -98,6 +110,10 @@ type promptFiles struct {
 	// CriticOverride is the operator's CRITIC.md (empty ⇒ built-in critic prompt), for the
 	// chat --critique loop. Same tier gate + project-wins precedence as PlannerOverride.
 	CriticOverride string
+	// Sources and Warnings are the secret-safe provenance view served by
+	// GET /config/effective and returned after reload. Prompt bodies never leave cmd.
+	Sources  []api.PromptSource
+	Warnings []string
 }
 
 // loadPrompts assembles the two-tier prompt customization (prompts.md §2, workspace.md §3/§5):
@@ -121,7 +137,7 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 	if err != nil {
 		return promptFiles{}, err
 	}
-	pf, err := loadPromptTier(cfgDir) // config-dir (global) tier — always trusted
+	pf, err := loadPromptTierFrom(cfgDir, "config") // config-dir (global) tier — always trusted
 	if err != nil {
 		return promptFiles{}, err
 	}
@@ -129,20 +145,24 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 	// Workspace (project) tier — tier-gated (workspace.md §5). Skipped when it would just
 	// re-read the config dir (e.g. --workspace pointed at it).
 	if loadWorkspaceTier(workspace, cfgDir, tier) {
-		ws, err := loadPromptTier(workspace)
+		ws, err := loadPromptTierFrom(workspace, "workspace")
 		if err != nil {
 			return promptFiles{}, err
 		}
 		if ws.Override != "" {
+			deactivatePromptMode(pf.Sources, "replace")
 			pf.Override = ws.Override // project SYSTEM.md wins outright
 		}
 		if ws.PlannerOverride != "" {
+			deactivatePromptName(pf.Sources, plannerPromptFile)
 			pf.PlannerOverride = ws.PlannerOverride // project PLANNER.md wins outright
 		}
 		if ws.CriticOverride != "" {
+			deactivatePromptName(pf.Sources, criticPromptFile)
 			pf.CriticOverride = ws.CriticOverride // project CRITIC.md wins outright
 		}
 		pf.Appends = append(pf.Appends, ws.Appends...) // project appended after global
+		pf.Sources = append(pf.Sources, ws.Sources...)
 	}
 
 	// Explicit --context-file(s): the user named them, so always honored (workspace.md §5).
@@ -154,10 +174,35 @@ func loadPrompts(workspace string, tier capability.Tier) (promptFiles, error) {
 		}
 		if body := strings.TrimSpace(string(b)); body != "" {
 			pf.Appends = append(pf.Appends, body)
+			pf.Sources = append(pf.Sources, promptSource(path, "explicit", "append", b, true))
 		}
 	}
+	pf.Warnings = promptWarnings(pf)
 
 	return pf, nil
+}
+
+func deactivatePromptMode(sources []api.PromptSource, mode string) {
+	for i := range sources {
+		if sources[i].Mode == mode {
+			sources[i].Active = false
+		}
+	}
+}
+
+func deactivatePromptName(sources []api.PromptSource, name string) {
+	for i := range sources {
+		if sources[i].Name == name {
+			sources[i].Active = false
+		}
+	}
+}
+
+func promptWarnings(pf promptFiles) []string {
+	if pf.Override != "" && !strings.Contains(pf.Override, "{{base}}") {
+		return []string{"SYSTEM.md uses legacy replace semantics; add {{base}} to wrap the built-in base"}
+	}
+	return []string{}
 }
 
 // loadWorkspaceTier reports whether the workspace prompt tier should be auto-loaded. It is
@@ -191,50 +236,75 @@ func sameDir(a, b string) bool {
 // directory only one is loaded (AGENTS.md preferred), rather than silently concatenating two
 // files that likely duplicate.
 func loadPromptTier(dir string) (promptFiles, error) {
+	return loadPromptTierFrom(dir, "unknown")
+}
+
+func loadPromptTierFrom(dir, layer string) (promptFiles, error) {
 	var pf promptFiles
 
-	override, err := readOptionalFile(filepath.Join(dir, systemPromptFile))
+	override, source, err := readOptionalPrompt(filepath.Join(dir, systemPromptFile), layer, "replace")
 	if err != nil {
 		return promptFiles{}, err
 	}
 	pf.Override = override
+	if source != nil {
+		pf.Sources = append(pf.Sources, *source)
+	}
 
-	plannerOverride, err := readOptionalFile(filepath.Join(dir, plannerPromptFile))
+	plannerOverride, source, err := readOptionalPrompt(filepath.Join(dir, plannerPromptFile), layer, "planner_override")
 	if err != nil {
 		return promptFiles{}, err
 	}
 	pf.PlannerOverride = plannerOverride
+	if source != nil {
+		pf.Sources = append(pf.Sources, *source)
+	}
 
-	criticOverride, err := readOptionalFile(filepath.Join(dir, criticPromptFile))
+	criticOverride, source, err := readOptionalPrompt(filepath.Join(dir, criticPromptFile), layer, "critic_override")
 	if err != nil {
 		return promptFiles{}, err
 	}
 	pf.CriticOverride = criticOverride
+	if source != nil {
+		pf.Sources = append(pf.Sources, *source)
+	}
 
-	agents, err := readOptionalFile(filepath.Join(dir, agentsFile))
+	agents, source, err := readOptionalPrompt(filepath.Join(dir, agentsFile), layer, "append")
 	if err != nil {
 		return promptFiles{}, err
 	}
 	if agents == "" {
-		if agents, err = readOptionalFile(filepath.Join(dir, agentsAliasFile)); err != nil {
+		if agents, source, err = readOptionalPrompt(filepath.Join(dir, agentsAliasFile), layer, "append"); err != nil {
 			return promptFiles{}, err
 		}
 	}
 	if agents != "" {
 		pf.Appends = append(pf.Appends, agents)
+		pf.Sources = append(pf.Sources, *source)
 	}
 	return pf, nil
 }
 
-// readOptionalFile returns the trimmed contents of path, or "" if it does not exist. A
-// non-not-exist error (e.g. a permission problem) is returned so it is not silently ignored.
-func readOptionalFile(path string) (string, error) {
+func readOptionalPrompt(path, layer, mode string) (string, *api.PromptSource, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return "", nil, nil
 		}
-		return "", err
+		return "", nil, err
 	}
-	return strings.TrimSpace(string(b)), nil
+	body := strings.TrimSpace(string(b))
+	if body == "" {
+		return "", nil, nil
+	}
+	source := promptSource(path, layer, mode, b, true)
+	return body, &source, nil
+}
+
+func promptSource(path, layer, mode string, b []byte, active bool) api.PromptSource {
+	digest := fmt.Sprintf("%x", sha256.Sum256(b))
+	return api.PromptSource{
+		Name: filepath.Base(path), Path: path, Layer: layer, Mode: mode,
+		Bytes: int64(len(b)), Digest: digest[:12], Active: active,
+	}
 }
