@@ -87,8 +87,9 @@ This is the fix-first slice. Keep changes small and independently shippable.
       `retry_after` up to 30s over 3 attempts. Documented in `usage.md` §"Long answers and delivery
       failures". Persisting delivery status in the run trace remains R6.
 - [x] Make `/start` onboarding-only; define or remove `/stop`; update close/purge bindings only after
-      API success; confirm `/purge`. **Done 2026-08-21** — `/start` prints the shared `helpText`
-      plus whether a session is running and touches nothing (it no longer shares `/new`'s case);
+      API success; confirm `/purge`. **Done 2026-08-21** — `/start` prints the shared command
+      registry's help list plus whether a session is running and touches nothing (it no longer
+      shares `/new`'s case);
       `/stop` is removed as an `/end` alias and now explains itself, since real cancellation needs
       the chat → active-run binding R6 owns. `closeChat`/`purgeChat` both go through `endChat`,
       which calls the engine first and drops the chat → session binding only on success, so a
@@ -202,14 +203,24 @@ and concurrent workers cannot mutate shared state.
 
 ### R6 — complete the interactive flow
 
+- [x] Add shared interactive command metadata/help across Telegram and both chat REPLs.
+      **Done 2026-08-21** — `internal/commandhelp` owns the stable, frontend-filtered registry;
+      `/help`, `/commands`, command/subcommand detail, and explicit `help`/`--help` forms are
+      read-only. Telegram derives its native command menu from the same registry, treats menu setup
+      failure as non-fatal, normalizes `/command@this_bot`, ignores another bot's commands, and now
+      supports `/space list` without creating a session. Remote chat gained `/space list`, `/reload`,
+      and model-default reset parity in the same slice. A shortened `/status` view is also shipped
+      across local chat, remote chat, and Telegram; remote frontends use the existing structured
+      endpoint and Telegram does not create a session for an engine-only inspection.
 - [ ] Persist Telegram chat/topic/user to session bindings and migrate ephemeral bindings.
 - [ ] Adopt the shared command service across Telegram and both chat REPLs (`/sessions`, `/resume`,
-      `/cancel`, `/tier`, `/space`, `/status`, `/usage`, and reload diff).
-- [ ] Model queue state and cancellation explicitly; normalize group/topic and `@botname` commands.
+      `/cancel`, `/tier`, `/space`, `/usage`, and reload diff; `/status` is implemented but its
+      execution still lives in frontend adapters).
+- [ ] Model queue state and cancellation explicitly; normalize group/topic behavior.
 - [ ] Add low-noise progress rendering and persist final delivery status in the run trace.
 
-**Exit:** restart resumes the right conversation, commands mean the same thing everywhere, queued
-work is visible/cancellable, and delivery success is observable.
+**Exit:** restart resumes the right conversation, commands mean the same thing everywhere and remain
+discoverable in-band, queued work is visible/cancellable, and delivery success is observable.
 
 ### R7 — budgets, rollout, and documentation
 

@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"ai-agent-go-play/internal/api"
+	"ai-agent-go-play/internal/commandhelp"
 	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/session"
+	"ai-agent-go-play/internal/statusview"
 )
 
 // modelLabel renders a session's model for display. An empty stored model means the
@@ -81,6 +83,13 @@ type Update struct {
 // Telegram Bot API (transport_http.go); tests use a fake. Keeping the bot logic
 // behind this seam is what lets the whole frontend be exercised without a live bot.
 type Transport interface {
+	// Username is the bot's Telegram username without '@'. It lets the neutral
+	// command parser accept /help@this_bot and ignore commands for another bot.
+	Username() string
+	// SetCommands registers the top-level commands Telegram shows in its native /
+	// menu. It is a convenience surface: Bot.Run logs a failure but still starts
+	// polling because in-band /help remains available.
+	SetCommands(ctx context.Context, commands []MenuCommand) error
 	// Updates returns a channel of inbound updates. It closes when ctx is done or the
 	// transport stops.
 	Updates(ctx context.Context) (<-chan Update, error)
@@ -94,6 +103,12 @@ type Transport interface {
 	Download(ctx context.Context, fileID string) (io.ReadCloser, error)
 }
 
+// MenuCommand is the transport-neutral Telegram command-menu representation.
+type MenuCommand struct {
+	Command     string
+	Description string
+}
+
 // Client is the slice of api.Client the bot needs. Declaring it here (rather than
 // depending on the concrete type) keeps the bot testable and documents the exact
 // surface the frontend uses. *api.Client satisfies it. The bot talks to the engine in
@@ -104,6 +119,8 @@ type Client interface {
 	CloseSession(ctx context.Context, sessionID string) error
 	PurgeSession(ctx context.Context, sessionID string) error
 	UpdateSession(ctx context.Context, sessionID string, model, tier, space *string) (session.Info, error)
+	ListSpaces(ctx context.Context) ([]api.SpaceView, error)
+	Status(ctx context.Context, sessionID *string) (api.StatusResponse, error)
 	GetGuidance(ctx context.Context, scope guidance.Scope, target string) (api.GuidanceDocument, error)
 	SetGuidance(ctx context.Context, scope guidance.Scope, target, text string) (api.GuidanceDocument, error)
 	UploadFile(ctx context.Context, sessionID, name, source string, r io.Reader) (api.UploadInfo, error)
@@ -161,6 +178,9 @@ func NewBot(transport Transport, client Client, allowed []int64) *Bot {
 // Run reads updates and dispatches them until ctx is cancelled or the update stream
 // closes.
 func (b *Bot) Run(ctx context.Context) error {
+	if err := b.transport.SetCommands(ctx, telegramMenuCommands()); err != nil {
+		fmt.Fprintf(os.Stderr, "telegram: register command menu: %v — /help remains available\n", err)
+	}
 	updates, err := b.transport.Updates(ctx)
 	if err != nil {
 		return err
@@ -191,6 +211,13 @@ func (b *Bot) dispatch(ctx context.Context, up Update) {
 func (b *Bot) allow(userID int64) bool { return b.allowed[userID] }
 
 func (b *Bot) handleMessage(ctx context.Context, m Message) {
+	if strings.HasPrefix(m.Text, "/") {
+		text, addressed := normalizeTelegramCommand(m.Text, b.transport.Username())
+		if !addressed {
+			return
+		}
+		m.Text = text
+	}
 	if !b.allow(m.UserID) {
 		b.notify(ctx, m.ChatID, "not authorized")
 		return
@@ -236,6 +263,23 @@ func (b *Bot) handleMessage(ctx context.Context, m Message) {
 	// Stream the turn's events back to the chat. It outlives this update, so give the
 	// stream its own goroutine.
 	go b.stream(ctx, m.ChatID, runID)
+}
+
+// normalizeTelegramCommand removes Telegram's @botname suffix only when the
+// command is addressed to this bot. Text after the command token is preserved.
+func normalizeTelegramCommand(text, username string) (string, bool) {
+	token, rest := text, ""
+	if end := strings.IndexAny(text, " \t\r\n"); end >= 0 {
+		token, rest = text[:end], text[end:]
+	}
+	at := strings.IndexByte(token, '@')
+	if at < 0 {
+		return text, true
+	}
+	if username == "" || !strings.EqualFold(token[at+1:], username) {
+		return "", false
+	}
+	return token[:at] + rest, true
 }
 
 // maxUploadBytes mirrors the engine's upload cap, which is itself the Telegram Bot API's own
@@ -312,27 +356,20 @@ func uploadTurnText(info api.UploadInfo, m Message) string {
 // type — Telegram delivers a picture sent "as a file" as a document).
 func isImage(f *File) bool { return strings.HasPrefix(f.MIME, "image/") }
 
-// helpText is the command list, shown both by /start and by an unrecognized command, so
-// onboarding and the "what did you mean?" hint cannot drift apart.
-const helpText = "Send me a message and I'll work on it; send a file and I'll work on that. Commands:\n" +
-	"/new (or /reset) — start a fresh session, ending the current one\n" +
-	"/end — end (archive) this session\n" +
-	"/purge — delete this session for good (asks first)\n" +
-	"/model <id> — switch model (bare: show it, -: engine default)\n" +
-	"/space <name> — switch data context (-: the global scope)\n" +
-	"/guidance <global|space|session> <show|set|add|clear> [text]\n" +
-	"/reload — re-read prompts and agent types"
-
 // handleCommand handles the chat control commands: /start explains the bot, /new (alias
 // /reset) starts a fresh session (closing any current one first), /end terminates the current
 // session, /purge deletes it for good behind a confirmation button, /reload re-reads the
 // prompt files + agent-type catalog, /model and /space switch the session's model and data
 // context. The vocabulary is shared with the CLI chat REPL so the session-control verbs are
-// the same on every client. Unknown commands get the same help text /start gives.
+// the same on every client. Unknown commands point back to the registry-owned /help list.
 //
 // No command here is destructive by surprise: /start only reports, and the two verbs that end
 // a conversation say so in their name.
 func (b *Bot) handleCommand(ctx context.Context, m Message) {
+	if help, ok := commandhelp.ForLine(commandhelp.Telegram, m.Text); ok {
+		b.notify(ctx, m.ChatID, help)
+		return
+	}
 	switch strings.Fields(m.Text)[0] {
 	case "/start":
 		// Onboarding and status only — never destructive. /start used to share /new's case,
@@ -342,7 +379,23 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		if _, ok := b.sessionOf(m.ChatID); ok {
 			state = "A session is already running here — just keep sending messages."
 		}
-		b.notify(ctx, m.ChatID, helpText+"\n\n"+state)
+		b.notify(ctx, m.ChatID, "Send me a message and I'll work on it; send a file and I'll work on that.\n\n"+
+			commandhelp.List(commandhelp.Telegram)+"\n\n"+state)
+	case "/status":
+		if strings.TrimSpace(strings.TrimPrefix(m.Text, "/status")) != "" {
+			b.notify(ctx, m.ChatID, "usage: /status")
+			return
+		}
+		var sessionID *string
+		if id, ok := b.sessionOf(m.ChatID); ok {
+			sessionID = &id
+		}
+		status, err := b.client.Status(ctx, sessionID)
+		if err != nil {
+			b.notify(ctx, m.ChatID, "status failed: "+err.Error())
+			return
+		}
+		b.notify(ctx, m.ChatID, statusview.Render(status))
 	case "/new", "/reset":
 		// End any current session first, and start a replacement only if that succeeded: a
 		// failed close that still rebound the chat would leave the old session live on the
@@ -395,7 +448,36 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 		// canonical id, or with an error naming the spaces that do exist.
 		arg := strings.TrimSpace(strings.TrimPrefix(m.Text, "/space"))
 		if arg == "" {
-			b.notify(ctx, m.ChatID, "usage: /space <name-or-id> (switch), /space - (back to the global scope)")
+			active := "the global scope"
+			if sessionID, ok := b.sessionOf(m.ChatID); ok {
+				info, err := b.client.UpdateSession(ctx, sessionID, nil, nil, nil)
+				if err != nil {
+					b.notify(ctx, m.ChatID, "read active space failed: "+err.Error())
+					return
+				}
+				if info.Space != "" {
+					active = info.Space
+				}
+			}
+			b.notify(ctx, m.ChatID, "space: "+active+"\nusage: /space [list|<name-or-id>|-]")
+			return
+		}
+		if arg == "list" {
+			spaces, err := b.client.ListSpaces(ctx)
+			if err != nil {
+				b.notify(ctx, m.ChatID, "list spaces failed: "+err.Error())
+				return
+			}
+			active := ""
+			activeWarning := ""
+			if sessionID, ok := b.sessionOf(m.ChatID); ok {
+				if info, err := b.client.UpdateSession(ctx, sessionID, nil, nil, nil); err == nil {
+					active = info.Space
+				} else {
+					activeWarning = "\n(active space unavailable: " + err.Error() + ")"
+				}
+			}
+			b.notify(ctx, m.ChatID, commandhelp.FormatSpaces(spaceItems(spaces), active)+activeWarning)
 			return
 		}
 		sessionID, err := b.sessionFor(ctx, m.ChatID)
@@ -497,8 +579,26 @@ func (b *Bot) handleCommand(ctx context.Context, m Message) {
 			b.notify(ctx, m.ChatID, "model set to "+info.Model+" — effective from your next message")
 		}
 	default:
-		b.notify(ctx, m.ChatID, helpText)
+		name := strings.TrimPrefix(strings.Fields(m.Text)[0], "/")
+		b.notify(ctx, m.ChatID, commandhelp.Help(commandhelp.Telegram, name))
 	}
+}
+
+func telegramMenuCommands() []MenuCommand {
+	items := commandhelp.Menu(commandhelp.Telegram)
+	out := make([]MenuCommand, 0, len(items))
+	for _, item := range items {
+		out = append(out, MenuCommand{Command: item.Command, Description: item.Description})
+	}
+	return out
+}
+
+func spaceItems(spaces []api.SpaceView) []commandhelp.Space {
+	out := make([]commandhelp.Space, 0, len(spaces))
+	for _, sp := range spaces {
+		out = append(out, commandhelp.Space{ID: sp.ID, Name: sp.Name})
+	}
+	return out
 }
 
 // sessionFor returns the chat's engine session, creating one on first use.

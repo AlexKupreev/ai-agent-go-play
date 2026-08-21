@@ -18,6 +18,8 @@ type httpTransport struct {
 	bot *tgbotapi.BotAPI
 }
 
+func (t *httpTransport) Username() string { return t.bot.Self.UserName }
+
 // NewHTTPTransport connects to the Telegram Bot API with token and returns the live
 // transport. It validates the token with a getMe call, so it needs outbound network
 // access to api.telegram.org; a bad token or no egress returns an error (serve then
@@ -28,6 +30,24 @@ func NewHTTPTransport(token string) (Transport, error) {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	return &httpTransport{bot: bot}, nil
+}
+
+// SetCommands installs the registry-derived top-level commands in Telegram's native
+// slash menu. SDK types stay confined to this live adapter.
+func (t *httpTransport) SetCommands(_ context.Context, commands []MenuCommand) error {
+	items := nativeCommands(commands)
+	if _, err := t.bot.Request(tgbotapi.NewSetMyCommands(items...)); err != nil {
+		return fmt.Errorf("setMyCommands: %w", err)
+	}
+	return nil
+}
+
+func nativeCommands(commands []MenuCommand) []tgbotapi.BotCommand {
+	items := make([]tgbotapi.BotCommand, 0, len(commands))
+	for _, command := range commands {
+		items = append(items, tgbotapi.BotCommand{Command: command.Command, Description: command.Description})
+	}
+	return items
 }
 
 // Updates long-polls getUpdates and maps each Telegram update onto our neutral Update

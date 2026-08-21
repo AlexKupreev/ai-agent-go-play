@@ -11,7 +11,9 @@ import (
 
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/commandhelp"
 	"ai-agent-go-play/internal/guidance"
+	"ai-agent-go-play/internal/statusview"
 )
 
 // runRemoteChat is `agent chat --addr`: a REPL that drives a running engine's
@@ -49,7 +51,7 @@ func runRemoteChat(addr string) error {
 		fmt.Fprintf(os.Stderr, "agent chat — engine %s, session %s  (new)\n", addr, sessionID)
 	}
 	fmt.Fprintf(os.Stderr, "model %s, tier %s, space %s\n", modelLabel(curModel), tierLabel(curTier), spaceLabel(curSpace))
-	fmt.Fprintln(os.Stderr, "(/new or /reset new conversation, /model [id] & /tier [t] & /space [name] switch, /guidance manages standing instructions, /end close, /purge delete for good, /exit or Ctrl-D detach)")
+	fmt.Fprintln(os.Stderr, "(use /help for commands; /exit or Ctrl-D detaches)")
 
 	// SIGINT cancels the current turn rather than killing the REPL; drained at each
 	// prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -69,16 +71,24 @@ func runRemoteChat(addr string) error {
 			return nil
 		}
 		line := strings.TrimSpace(scanner.Text())
+		if help, ok := commandhelp.ForLine(commandhelp.Remote, line); ok {
+			fmt.Fprintln(os.Stderr, help)
+			continue
+		}
 		// /model [id] and /tier [t] take an optional argument, so they are matched by prefix
 		// ahead of the exact-match switch. They set the session's sticky override on the engine
 		// (PATCH /sessions/{id}), effective from the next turn; no arg shows the current value.
 		if arg, ok := strings.CutPrefix(line, "/model"); ok {
 			arg = strings.TrimSpace(arg)
 			if arg == "" {
-				fmt.Fprintf(os.Stderr, "(model: %s; usage: /model <id>)\n", modelLabel(curModel))
+				fmt.Fprintf(os.Stderr, "(model: %s; usage: /model [<id>|-])\n", modelLabel(curModel))
 				continue
 			}
-			info, err := c.UpdateSession(ctx, sessionID, &arg, nil, nil)
+			val := arg
+			if arg == "-" {
+				val = ""
+			}
+			info, err := c.UpdateSession(ctx, sessionID, &val, nil, nil)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "set model: %v\n", err)
 				continue
@@ -127,7 +137,20 @@ func runRemoteChat(addr string) error {
 		if arg, ok := strings.CutPrefix(line, "/space"); ok {
 			arg = strings.TrimSpace(arg)
 			if arg == "" {
-				fmt.Fprintf(os.Stderr, "(space: %s; usage: /space <name-or-id>, /space - for global)\n", spaceLabel(curSpace))
+				fmt.Fprintf(os.Stderr, "(space: %s; usage: /space [list|<name-or-id>|-])\n", spaceLabel(curSpace))
+				continue
+			}
+			if arg == "list" {
+				spaces, err := c.ListSpaces(ctx)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "list spaces: %v\n", err)
+					continue
+				}
+				items := make([]commandhelp.Space, 0, len(spaces))
+				for _, sp := range spaces {
+					items = append(items, commandhelp.Space{ID: sp.ID, Name: sp.Name})
+				}
+				fmt.Fprintln(os.Stderr, commandhelp.FormatSpaces(items, curSpace))
 				continue
 			}
 			val := arg
@@ -145,6 +168,14 @@ func runRemoteChat(addr string) error {
 		}
 		switch line {
 		case "":
+			continue
+		case "/status":
+			status, err := c.Status(ctx, &sessionID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+			} else {
+				fmt.Fprintln(os.Stderr, statusview.Render(status))
+			}
 			continue
 		case "/exit", "/quit":
 			fmt.Fprintf(os.Stderr, "(detached — resume with: agent chat --addr %s --session %s)\n", addr, sessionID)
@@ -181,6 +212,14 @@ func runRemoteChat(addr string) error {
 			sessionID = newID
 			curModel, curTier, curSpace = initialOpts.Model, initialOpts.Tier, initialOpts.Space
 			fmt.Fprintf(os.Stderr, "(new conversation — session %s)\n", sessionID)
+			continue
+		case "/reload":
+			diff, err := c.Reload(ctx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "reload failed: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s — effective from the next turn\n", diff.Summary())
+			}
 			continue
 		}
 

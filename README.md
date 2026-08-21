@@ -110,6 +110,13 @@ show <id>`, and `agent space create <name>`. These commands expose body-redacted
 guidance remains on the explicit guidance surface. Space removal is intentionally unavailable until
 its archive/purge and active-session behavior are defined.
 
+Inside local chat, remote chat, or Telegram, `/help` lists the commands available in that frontend;
+`/help <command> [subcommand]`, `/<command> help`, and `/<command> --help` show deterministic detail.
+`/commands` aliases the list. Telegram also installs the same implemented top-level commands in its
+native `/` menu, while normal allowlist checks still gate every command. `/status` gives a compact,
+read-only view of the engine, current session, host resources, and agent state on disk; in Telegram
+it does not create a session merely to inspect one.
+
 The full command list, trust tiers, approvals, authored tools, memory, audit log, running multiple
 agents, and the optional Telegram frontend are documented in **[`docs/usage.md`](docs/usage.md)**.
 

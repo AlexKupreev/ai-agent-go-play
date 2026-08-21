@@ -85,16 +85,14 @@ the untrusted-content rule.
 ### 1.4 Telegram is a thin but incomplete peer client
 
 The current frontend maps an in-memory `chatID -> sessionID`, posts turns, and forwards event text.
-Important gaps:
+Rune-safe rendering, delivery-error propagation, safe `/start`/`/purge`, scoped guidance, shared
+help, the native command menu, `/space list`, and `@botname` normalization have since shipped.
+Important gaps remain:
 
 - the binding is lost on restart even though engine sessions persist;
-- outbound messages are not split to Telegram's 4,096-character limit and send errors are mostly
-  discarded;
-- `/start` silently acts like `/new` and archives the current conversation;
-- close/purge failures are logged while the user is still told they succeeded;
-- `/purge` has no confirmation, `/tier` is missing, and `/space` cannot list/validate spaces;
-- group topics, replies, command suffixes (`/help@bot`), queue state, cancellation, and progress
-  rendering are not represented in the transport-neutral message shape;
+- `/tier`, session browse/resume, cancellation, status, usage, and workflow controls are missing;
+- group topics, replies, queue state, cancellation, and progress rendering are not represented in
+  the transport-neutral message shape;
 - downloads and command handling run on the update-dispatch path, so slow frontend work can delay
   approval callbacks.
 
@@ -738,6 +736,14 @@ Create a frontend-neutral command registry/service; Telegram and the two chat RE
 /reload
 ```
 
+**Discovery slice shipped 2026-08-21.** `internal/commandhelp` is now the shared, validated metadata
+registry and deterministic renderer. All three interactive frontends support `/help`, `/commands`,
+`/help <command> [subcommand]`, and explicit `<command> help` / `<command> --help` forms. Telegram's
+native top-level menu is derived from the same registry; menu-registration failure is non-fatal.
+Telegram also normalizes `/command@this_bot`, ignores commands addressed to another bot, and shares
+`/space list` with both REPLs. Handler execution is still frontend-owned; moving it behind the shared
+command service—and adding the unshipped commands in the target vocabulary above—remains Phase F.
+
 `/start` performs onboarding/help and reports whether a session is active. It must never archive or
 replace one. `/stop` should either alias `/cancel` or be removed; it must not ambiguously mean
 "archive conversation."
@@ -954,16 +960,19 @@ reports; parent reports conflicts instead of hiding them.
 **Goal:** make Telegram an operationally complete frontend.
 
 - [ ] Persistent bot/chat/thread/user binding store and migration from ephemeral bindings.
+- [x] Shared command metadata/help renderer, Telegram native menu, command suffix normalization, and
+      `/space list` parity; compact `/status` rendering across Telegram and both REPLs.
 - [ ] Shared command service adopted by Telegram and both chat REPLs.
-- [ ] `/sessions`, `/resume`, `/cancel`, `/tier`, `/space list`, `/status`, `/usage`, `/reload` diff.
-- [ ] Group/topic binding modes and `@botname` command normalization.
+- [ ] `/sessions`, `/resume`, `/cancel`, `/tier`, `/usage`, and remaining shared execution
+      (`/status` is shipped but not yet moved behind the future shared command service).
+- [ ] Group/topic binding modes.
 - [ ] Explicit queue state/limit/cancellation API.
 - [ ] Editable progress message/typing behavior by profile.
 - [ ] Delivery status persisted in run trace.
 
 **Acceptance:** restart resumes the correct Telegram session; group topics do not cross streams;
-commands have the same semantics across frontends; a second turn is visibly queued and cancellable;
-delivery failure is discoverable rather than silent.
+commands have the same semantics across frontends and remain discoverable in-band; a second turn is
+visibly queued and cancellable; delivery failure is discoverable rather than silent.
 
 ### Phase G — budgets, local consistency, and rollout
 
@@ -1062,7 +1071,7 @@ into embedded docs before its corresponding phase ships.
 | sub-agents | `internal/agent/agenttype.go`, `cmd/agents.go` | report schema, delegation manager/budget, batch tool |
 | events/traces | `internal/agent/observer.go`, `internal/api/event.go`, `engine.go`, run store | orchestration events, persisted `DecisionTrace` |
 | Telegram | `internal/frontend/telegram/telegram.go`, `transport_http.go` | renderer, binding store adapter, richer transport types |
-| shared commands | `cmd/chat.go`, `cmd/chat_remote.go`, Telegram command switch | `internal/command` or `internal/control` service + adapters |
+| shared commands | `internal/commandhelp`, `cmd/chat.go`, `cmd/chat_remote.go`, Telegram command switch | `internal/command` or `internal/control` execution service + adapters; keep the shipped registry/renderer |
 | status/control API | `internal/tools/status.go`, `internal/api/http.go`, `cmd/serve.go` | status/config/profile/space service handlers |
 | budgets/audit | `internal/usage`, `internal/tools/scrape.go`, `internal/audit` | shared counters, daily paid-call ledger, corrected events |
 

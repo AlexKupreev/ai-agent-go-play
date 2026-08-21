@@ -15,6 +15,7 @@ import (
 	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/commandhelp"
 	"ai-agent-go-play/internal/guidance"
 	"ai-agent-go-play/internal/logger"
 	"ai-agent-go-play/internal/memory"
@@ -50,7 +51,10 @@ var chatCmd = &cobra.Command{
 		"--session <id> to resume one.\n\n" +
 		"The tool-call trace is off by default (like `run`); turn it on with --verbose or the " +
 		"live /verbose toggle. The full transcript is always written to disk regardless.\n\n" +
-		"Commands (local): /new (alias /reset) clears the conversation, /model [id] and /tier " +
+		"Commands (both modes): /help lists the commands available in that frontend; " +
+		"/help <command> [subcommand], /<command> help, and /<command> --help show details.\n" +
+		"/status shows a compact, read-only engine/session/host/state snapshot.\n" +
+		"Commands (local): /new (alias /reset) clears the conversation, /model [id|-] and /tier " +
 		"[safe|balanced|permissive] show or switch the model/tier for the session, /space " +
 		"[name|list|-] shows or switches the active space (a named memory context with its own " +
 		"always-loaded guidance), /guidance global|space|session show|set|add|clear manages " +
@@ -58,7 +62,8 @@ var chatCmd = &cobra.Command{
 		"summarizes the conversation so far to free context, /verbose [on|off] toggles the " +
 		"trace and the full planner brief (off shows a one-line brief summary), /exit (or " +
 		"Ctrl-D) quits.\n" +
-		"Commands (--addr): /new (alias /reset) starts a fresh session, /end closes the session, " +
+		"Commands (--addr): /new (alias /reset) starts a fresh session, /space list lists engine " +
+		"spaces, /reload reports a configuration reload diff, /end closes the session, " +
 		"/exit (or Ctrl-D) detaches and leaves it resumable. Ctrl-C cancels the current turn.",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,10 +86,12 @@ var chatCmd = &cobra.Command{
 
 		prov := newProvider(cfg)
 		model := resolveModel(modelFlag, cfg)
+		defaultModel := model
 		tier, err := resolveTier(tierFlag, cfg)
 		if err != nil {
 			return err
 		}
+		defaultTier := tier
 
 		runsBase, err := runsDir()
 		if err != nil {
@@ -282,7 +289,7 @@ var chatCmd = &cobra.Command{
 		if activeSpace != "" {
 			fmt.Fprintf(os.Stderr, "active space: %s\n", activeSpace)
 		}
-		fmt.Fprintf(os.Stderr, "session %s  (/new or /reset to clear, /model /tier /space to switch, /reload to re-read prompts+agents, /verbose to toggle the trace, /exit or Ctrl-D to quit)\n", log.RunID)
+		fmt.Fprintf(os.Stderr, "session %s  (use /help for commands; /exit or Ctrl-D to quit)\n", log.RunID)
 
 		// SIGINT cancels the current turn rather than killing the session; drained at
 		// each prompt so a stray Ctrl-C while idle doesn't cancel the next turn.
@@ -304,6 +311,10 @@ var chatCmd = &cobra.Command{
 				break
 			}
 			line := strings.TrimSpace(scanner.Text())
+			if help, ok := commandhelp.ForLine(commandhelp.Local, line); ok {
+				fmt.Fprintln(os.Stderr, help)
+				continue
+			}
 			// /verbose [on|off] toggles the live CLI trace (no arg flips it). Handled
 			// before the exact-match switch because it takes an optional argument.
 			if arg, ok := strings.CutPrefix(line, "/verbose"); ok {
@@ -325,11 +336,15 @@ var chatCmd = &cobra.Command{
 			if arg, ok := strings.CutPrefix(line, "/model"); ok {
 				arg = strings.TrimSpace(arg)
 				if arg == "" {
-					fmt.Fprintf(os.Stderr, "(model: %s; usage: /model <id>)\n", modelLabel(model))
+					fmt.Fprintf(os.Stderr, "(model: %s; usage: /model [<id>|-])\n", modelLabel(model))
 					continue
 				}
-				model = arg
-				applyConfigChange("model set to " + arg)
+				if arg == "-" {
+					model = defaultModel
+				} else {
+					model = arg
+				}
+				applyConfigChange("model set to " + model)
 				continue
 			}
 			// /tier [safe|balanced|permissive] shows or sets the trust tier for the session.
@@ -384,17 +399,11 @@ var chatCmd = &cobra.Command{
 						fmt.Fprintf(os.Stderr, "/space list: %v\n", err)
 						continue
 					}
-					if len(all) == 0 {
-						fmt.Fprintln(os.Stderr, "(no spaces yet — ask the agent to create one, e.g. \"create a space for my Polish lessons\")")
-						continue
-					}
+					items := make([]commandhelp.Space, 0, len(all))
 					for _, sp := range all {
-						marker := "  "
-						if sp.ID == activeSpace {
-							marker = "* "
-						}
-						fmt.Fprintf(os.Stderr, "%s%s (%q)\n", marker, sp.ID, sp.Name)
+						items = append(items, commandhelp.Space{ID: sp.ID, Name: sp.Name})
 					}
+					fmt.Fprintln(os.Stderr, commandhelp.FormatSpaces(items, activeSpace))
 				case "-":
 					activeSpace = ""
 					applyConfigChange("space cleared (global scope)")
@@ -441,6 +450,12 @@ var chatCmd = &cobra.Command{
 			}
 			switch line {
 			case "":
+				continue
+			case "/status":
+				fmt.Fprintln(os.Stderr, renderLocalStatus(
+					workDir, log.RunID, defaultModel, string(defaultTier), model, string(tier),
+					activeSpace, sessionGuidance, plan, critique, spaces,
+				))
 				continue
 			case "/exit", "/quit":
 				return nil

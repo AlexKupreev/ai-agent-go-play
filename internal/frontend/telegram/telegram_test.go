@@ -28,19 +28,30 @@ type sentMessage struct {
 type fakeTransport struct {
 	updates chan Update
 
-	mu       sync.Mutex
-	sent     []sentMessage
-	answers  []string
-	files    map[string]string // file id -> content served by Download
-	download error             // when set, Download fails with it
-	sendFail func(text string) error
+	mu         sync.Mutex
+	sent       []sentMessage
+	answers    []string
+	files      map[string]string // file id -> content served by Download
+	download   error             // when set, Download fails with it
+	sendFail   func(text string) error
+	commands   []MenuCommand
+	commandErr error
+	username   string
 }
 
 func newFakeTransport() *fakeTransport {
-	return &fakeTransport{updates: make(chan Update, 8), files: map[string]string{}}
+	return &fakeTransport{updates: make(chan Update, 8), files: map[string]string{}, username: "testbot"}
 }
 
+func (f *fakeTransport) Username() string                               { return f.username }
 func (f *fakeTransport) Updates(context.Context) (<-chan Update, error) { return f.updates, nil }
+
+func (f *fakeTransport) SetCommands(_ context.Context, commands []MenuCommand) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append([]MenuCommand(nil), commands...)
+	return f.commandErr
+}
 
 func (f *fakeTransport) Download(_ context.Context, fileID string) (io.ReadCloser, error) {
 	f.mu.Lock()
@@ -148,6 +159,11 @@ type fakeClient struct {
 	answeredID   string
 	answeredText string
 	answered     chan string
+	spaces       []api.SpaceView
+	status       api.StatusResponse
+	statusErr    error
+	statusCalls  int
+	statusSessID *string
 }
 
 func newFakeClient() *fakeClient {
@@ -202,6 +218,25 @@ func (c *fakeClient) UpdateSession(_ context.Context, sessionID string, model, _
 		c.modelWrites++
 	}
 	return session.Info{ID: sessionID, Space: c.lastSpace, Model: c.lastModel}, nil
+}
+
+func (c *fakeClient) ListSpaces(context.Context) ([]api.SpaceView, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]api.SpaceView(nil), c.spaces...), nil
+}
+
+func (c *fakeClient) Status(_ context.Context, sessionID *string) (api.StatusResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.statusCalls++
+	if sessionID == nil {
+		c.statusSessID = nil
+	} else {
+		id := *sessionID
+		c.statusSessID = &id
+	}
+	return c.status, c.statusErr
 }
 
 func (c *fakeClient) GetGuidance(_ context.Context, scope guidance.Scope, target string) (api.GuidanceDocument, error) {
@@ -605,6 +640,154 @@ func TestBot_StartIsOnboardingOnly(t *testing.T) {
 	}
 	if cl.sessionCalls != 1 {
 		t.Fatalf("StartSession calls = %d, want 1 — /start must not replace the session", cl.sessionCalls)
+	}
+}
+
+func TestBot_HelpDetailAndNativeMenu(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/commands@testbot"}}
+	tr.waitForSend(t, func(m sentMessage) bool {
+		return strings.Contains(m.text, "Available commands:") && strings.Contains(m.text, "/space")
+	})
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/help space list"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.HasPrefix(m.text, "/space list\n") })
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/guidance set --help"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.HasPrefix(m.text, "/guidance <scope> set") })
+
+	tr.mu.Lock()
+	commands := append([]MenuCommand(nil), tr.commands...)
+	tr.mu.Unlock()
+	if len(commands) == 0 || commands[0].Command != "start" {
+		t.Fatalf("native commands = %+v", commands)
+	}
+	for _, command := range commands {
+		if command.Command == "reset" || command.Command == "commands" {
+			t.Fatalf("native menu contains alias: %+v", commands)
+		}
+	}
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.sessionCalls != 0 || cl.turnCalls != 0 {
+		t.Fatalf("help mutated session: sessions=%d turns=%d", cl.sessionCalls, cl.turnCalls)
+	}
+}
+
+func TestNormalizeTelegramCommand(t *testing.T) {
+	for _, tc := range []struct {
+		in, user, want string
+		ok             bool
+	}{
+		{"/help", "testbot", "/help", true},
+		{"/help@TestBot space list", "testbot", "/help space list", true},
+		{"/help@otherbot", "testbot", "", false},
+		{"/help@testbot", "", "", false},
+	} {
+		got, ok := normalizeTelegramCommand(tc.in, tc.user)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("normalizeTelegramCommand(%q, %q) = %q, %v; want %q, %v", tc.in, tc.user, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestBot_IgnoresCommandAddressedToAnotherBot(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+
+	bot.handleMessage(context.Background(), Message{ChatID: 100, UserID: 42, Text: "/help@otherbot"})
+	time.Sleep(20 * time.Millisecond)
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.sent) != 0 {
+		t.Fatalf("command for another bot produced messages: %+v", tr.sent)
+	}
+}
+
+func TestBot_CommandMenuFailureIsNonFatal(t *testing.T) {
+	tr := newFakeTransport()
+	tr.commandErr = errors.New("telegram unavailable")
+	cl := newFakeClient()
+	bot := NewBot(tr, cl, []int64{42})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = bot.Run(ctx) }()
+
+	tr.updates <- Update{Message: &Message{ChatID: 100, UserID: 42, Text: "/help model"}}
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.HasPrefix(m.text, "/model ") })
+}
+
+func TestBot_SpaceListDoesNotCreateSession(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.spaces = []api.SpaceView{{ID: "polish", Name: "Polish lessons"}, {ID: "tax", Name: "Tax"}}
+	bot := NewBot(tr, cl, []int64{42})
+	ctx := context.Background()
+
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/space list"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, `polish ("Polish lessons")`) })
+	cl.mu.Lock()
+	if cl.sessionCalls != 0 || cl.lastSpace != "" {
+		cl.mu.Unlock()
+		t.Fatalf("space list mutated session: sessions=%d space=%q", cl.sessionCalls, cl.lastSpace)
+	}
+	cl.mu.Unlock()
+
+	// Once a session exists, the listing marks its active space without changing it.
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/new"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	cl.mu.Lock()
+	cl.lastSpace = "tax"
+	cl.mu.Unlock()
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/space list"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, `* tax ("Tax")`) })
+}
+
+func TestBot_StatusDoesNotCreateSessionAndUsesActiveSession(t *testing.T) {
+	tr := newFakeTransport()
+	cl := newFakeClient()
+	cl.status = api.StatusResponse{
+		Version: "test-version",
+		Config: api.EffectiveConfig{
+			Model: api.ConfigValue{Value: "default-model"}, TierCeiling: api.ConfigValue{Value: "balanced"},
+			Workspace: "/workspace",
+		},
+		Host: api.StatusHost{CPUCount: 2},
+	}
+	bot := NewBot(tr, cl, []int64{42})
+	ctx := context.Background()
+
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/status"})
+	tr.waitForSend(t, func(m sentMessage) bool {
+		return strings.Contains(m.text, "version: test-version") && strings.Contains(m.text, "Session\n  none selected")
+	})
+	cl.mu.Lock()
+	if cl.sessionCalls != 0 || cl.statusCalls != 1 || cl.statusSessID != nil {
+		cl.mu.Unlock()
+		t.Fatalf("engine-only status mutated or queried a session: starts=%d calls=%d id=%v", cl.sessionCalls, cl.statusCalls, cl.statusSessID)
+	}
+	cl.mu.Unlock()
+
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/new"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "new session") })
+	cl.mu.Lock()
+	cl.status.Session = &api.StatusSession{
+		ID: "sess1", Model: api.StatusValue{Effective: "default-model"},
+		Tier: api.StatusValue{Effective: "balanced"},
+	}
+	cl.mu.Unlock()
+	bot.handleMessage(ctx, Message{ChatID: 100, UserID: 42, Text: "/status"})
+	tr.waitForSend(t, func(m sentMessage) bool { return strings.Contains(m.text, "id: sess1") })
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.statusCalls != 2 || cl.statusSessID == nil || *cl.statusSessID != "sess1" {
+		t.Fatalf("session status calls=%d id=%v", cl.statusCalls, cl.statusSessID)
 	}
 }
 

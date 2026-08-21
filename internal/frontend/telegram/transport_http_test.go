@@ -42,3 +42,10 @@ func TestRetryAfter(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCommands(t *testing.T) {
+	got := nativeCommands([]MenuCommand{{Command: "help", Description: "List commands"}, {Command: "space", Description: "Manage spaces"}})
+	if len(got) != 2 || got[0].Command != "help" || got[0].Description != "List commands" || got[1].Command != "space" {
+		t.Fatalf("nativeCommands = %+v", got)
+	}
+}

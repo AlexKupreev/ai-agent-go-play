@@ -175,8 +175,12 @@ to the **per-run transcript** (`<sessions-dir>/<run-id>/audit.jsonl`), not the p
   critique notes go to stderr, distinct from the final answer on stdout — as a **one-line
   summary** by default (the refined-task line); `/verbose on` shows the full brief block
   (context, success criteria, assumptions). The disk transcript keeps the full brief either way.
-- **Commands:** `/new` (alias `/reset`) clears the conversation and starts fresh; `/model
-  [id]` and `/tier [safe|balanced|permissive]` show or switch the model / trust tier for the
+- **Command discovery:** `/help` (alias `/commands`) lists commands available in local chat;
+  `/help <command> [subcommand]`, `/<command> help`, and `/<command> --help` show usage, details,
+  and examples without executing the command.
+- **Commands:** `/status` shows a compact read-only snapshot of this process, conversation, host
+  resources, and agent state on disk; `/new` (alias `/reset`) clears the conversation and starts fresh; `/model
+  [id|-]` and `/tier [safe|balanced|permissive]` show or switch the model / trust tier for the
   session (no arg prints the current value) — in `--no-plan` the executor is rebuilt in place
   carrying the conversation, in deliberate mode the change takes effect on the next turn;
   `/space [name]` shows or switches the active [space](#spaces--switchable-data-contexts)
@@ -210,14 +214,17 @@ Each line is a turn on the engine; commands run where the engine runs. `--addr` 
 ./agent chat --addr home --session <id>         # resume an existing conversation
 ```
 
-- **Commands (remote):** `/new` (alias `/reset`) starts a fresh session (closing the old
-  one); `/model [id]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
+- **Commands (remote):** the same `/help` and command-specific help forms discover the commands
+  available here. `/status` reads the engine's structured status with this session's explicit
+  overlay; `/new` (alias `/reset`) starts a fresh session (closing the old
+  one); `/model [id|-]` and `/tier [safe|balanced|permissive]` show or switch the session's sticky
   model / trust tier (no arg prints the current value), effective from the next turn; `/space
   [name]` shows or switches the session's sticky [space](#spaces--switchable-data-contexts)
-  (`/space -` returns to the global scope), effective from the next turn; `/guidance
+  (`/space list` lists spaces, `/space -` returns to the global scope), effective from the next
+  turn; `/guidance
   global|space|session show|set|add|clear [text]` manages durable guidance (`space` uses the
-  session's active space); `/end` closes (archives) the current session and `/purge` deletes it for
-  good; `/exit` (or Ctrl-D) **detaches**
+  session's active space); `/reload` re-reads engine configuration and reports its diff; `/end`
+  closes (archives) the current session and `/purge` deletes it for good; `/exit` (or Ctrl-D) **detaches**
   and leaves it resumable (the resume command
   is printed on exit). **Ctrl-C** cancels the current turn (stopping the remote run) and returns you
   to the prompt.
@@ -701,9 +708,10 @@ does **not** change the working directory or trust tier. Design: `docs/adr/space
 - **Tools** (trusted, not sandbox-exposed): `list_spaces`, `create_space(name)`,
   `switch_space(space)` — so *"switch to the Polish project"* in natural language works —
   plus `space_guidance` / `update_space_guidance`. A switch takes effect from the next turn.
-- **Commands:** local chat `/space` (show), `/space list`, `/space <name>`, `/space -`
-  (back to global), and `agent chat --space <name>`; remote chat and Telegram `/space
-  <name>` / `/space -` set the session sticky over `PATCH /sessions/{id}`. For out-of-band
+- **Commands:** local chat, remote chat, and Telegram share `/space` (show), `/space list`, `/space
+  <name>`, and `/space -` (back to global); listing does not create a Telegram session. Local chat
+  also accepts `agent chat --space <name>`. Switching a remote/Telegram space sets the session
+  sticky over `PATCH /sessions/{id}`. For out-of-band
   management against a running engine, `agent space list`, `agent space show <id>`, and
   `agent space create <name>` list body-redacted metadata or create a space; all accept `--addr`.
 - **API:** `POST /sessions` and `PATCH /sessions/{id}` accept `"space"` (an id or a name,
@@ -777,8 +785,12 @@ configured?" or "how much headroom does this machine have?" accurately. It retur
 Host figures are read live (Linux `/proc` + Go runtime; fields it can't read are omitted).
 This isn't a new capability — the agent can already `shell` out to `df`/`free`/`uptime` — but
 a structured, reliable convenience, and it matters most on a small box where knowing the
-headroom before starting heavy work is useful. Like the other introspection tools, `status`
-is a tool the agent invokes during a run (no separate CLI), read-only and not sandbox-exposed.
+headroom before starting heavy work is useful. The detailed model-facing `status` tool remains
+read-only and not sandbox-exposed. Interactive local chat, remote chat, and Telegram also provide
+`/status`: a shorter view of engine identity/defaults, the current session's effective model/tier,
+space and guidance size, host headroom, and aggregate state usage. Remote chat and Telegram read
+`GET /status[?session_id=<id>]`; Telegram uses the engine-only form when the chat has no session,
+so inspection never creates a conversation.
 
 The build version defaults to `dev`; stamp a real one at build time with
 `-ldflags "-X ai-agent-go-play/internal/buildinfo.Version=$(git describe --tags --always)"`.
@@ -958,19 +970,26 @@ retention cap and a restart: `GET /runs/{id}` falls back to it once the live run
 
 A Telegram bot can act as a peer client of the engine. Each chat maps to a **session**
 (a persistent conversation, below): a message runs a turn with retained context, events
-stream back, and a parked approval becomes an Approve/Deny inline keyboard. Chat commands:
+stream back, and a parked approval becomes an Approve/Deny inline keyboard. On startup the bot
+registers its implemented top-level commands with Telegram's native `/` menu. If menu registration
+fails, the bot logs the failure and keeps running because in-band `/help` remains available.
+`/help` (alias `/commands`) lists available commands; `/help <command> [subcommand]`,
+`/<command> help`, and `/<command> --help` show detail without changing session state. Chat commands:
 **`/new`** (alias **`/reset`**) starts a fresh session, **`/end`** terminates (archives) the
 current one, **`/purge`** deletes it for good after you confirm (a session is also created
 automatically on your first message), **`/model <id>`** switches the session's model (bare
 `/model` shows the current one, `/model -` returns to the engine default) and **`/space
-<name>`** its data context (both effective from your next message, over `PATCH
-/sessions/{id}`), **`/reload`** re-reads the engine's prompt files + agent-type catalog
+<name>`** its data context (`/space` shows it, `/space list` lists available spaces without creating
+a session, and `/space -` clears it; switches are effective from your next message, over `PATCH
+/sessions/{id}`), **`/status`** shows the engine/session/host/state snapshot without creating a
+session just to inspect it, **`/reload`** re-reads the engine's prompt files + agent-type catalog
 (effective from your next message — the same management action as `agent reload`, gated by the
 bot's allowlist), and **`/start`** prints this list plus whether a session is running. The
 **`/guidance global|space|session show|set|add|clear`** command manages the same standing guidance
-as the CLI/API. The `/new` + `/reset` + `/end` + `/purge` + `/model` + `/space` + `/guidance` verbs
-match the CLI chat REPL. It
-is **entirely optional**: with no token set, the engine runs exactly as normal.
+as the CLI/API. The `/new` + `/reset` + `/end` + `/purge` + `/model` + `/space` + `/guidance` + `/status` verbs
+match the CLI chat REPL. Telegram `/command@this_bot` forms are normalized, while commands addressed
+to another bot are ignored. It is **entirely optional**: with no token set, the engine runs exactly
+as normal.
 
 A model id is **not** validated when you set it — an unknown one fails the next turn with the
 provider's error, and `/model -` gets you back.
