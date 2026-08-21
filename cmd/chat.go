@@ -240,7 +240,7 @@ var chatCmd = &cobra.Command{
 				return nil, err
 			}
 			// CLI clarifications read from stdin (nil ⇒ StdinGate); runID ties them to this run.
-			return agent.NewPlanner(prov, model, prompts.PlannerOverride, environment, manifestView, tools.StdinGate{}, log.RunID, obs), nil
+			return agent.NewPlannerWithLimits(prov, model, prompts.PlannerOverride, environment, manifestView, tools.StdinGate{}, log.RunID, obs, resolveAgentLimits(cfg)), nil
 		}
 
 		// buildCritic constructs the verdict-emitting critic for the --critique loop (§9),
@@ -252,7 +252,7 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return nil, err
 			}
-			return agent.NewCritic(prov, model, prompts.CriticOverride, obs), nil
+			return agent.NewCriticWithLimits(prov, model, prompts.CriticOverride, obs, resolveAgentLimits(cfg)), nil
 		}
 
 		// One executor for the whole session: its conversation persists across turns.

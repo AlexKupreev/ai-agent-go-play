@@ -38,7 +38,7 @@ func (p *sequenceStepProvider) Step(_ context.Context, req provider.StepRequest)
 
 func responseToolCall(id, name, input string) provider.StepResponse {
 	return provider.StepResponse{Stop: provider.StopToolCalls, Content: []provider.ContentBlock{{
-		Kind: provider.BlockToolCall, ToolCall: &provider.ToolCall{ID: id, Name: name, Input: json.RawMessage(input)},
+		Kind: provider.BlockToolCall, ToolCall: &provider.ToolCall{ID: id, Name: name, Input: input},
 	}}}
 }
 

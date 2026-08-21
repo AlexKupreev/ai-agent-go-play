@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,8 @@ func TestNewCriticEnforcesVerdictSchema(t *testing.T) {
 	}
 	if len(c.tools) != 0 {
 		t.Fatalf("critic should be tools-light, got %d tools", len(c.tools))
+	}
+	if !strings.Contains(c.SystemPrompt(), criticOutputDiscipline) {
+		t.Fatal("critic prompt must retain compact-output guidance")
 	}
 }

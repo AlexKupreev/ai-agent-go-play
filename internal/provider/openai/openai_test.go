@@ -9,6 +9,23 @@ import (
 	oai "github.com/openai/openai-go"
 )
 
+func TestStepUsesMaxCompletionTokens(t *testing.T) {
+	body, err := json.Marshal(toParams(provider.StepRequest{Model: "gpt-5.1", MaxOutputTokens: 2048}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["max_completion_tokens"] != float64(2048) {
+		t.Fatalf("max_completion_tokens = %v, want 2048; request=%v", request["max_completion_tokens"], request)
+	}
+	if _, ok := request["max_tokens"]; ok {
+		t.Fatalf("deprecated max_tokens must be omitted; request=%v", request)
+	}
+}
+
 // marshalUnion renders an OpenAI message param to its wire JSON as a generic map,
 // so tests assert the shape the API actually receives.
 func marshalUnion(t *testing.T, u oai.ChatCompletionMessageParamUnion) map[string]any {
@@ -58,7 +75,7 @@ func TestToMessages_AssistantWithToolCalls(t *testing.T) {
 		Content: []provider.ContentBlock{
 			{Kind: provider.BlockText, Text: "calling a tool"},
 			{Kind: provider.BlockToolCall, ToolCall: &provider.ToolCall{
-				ID: "call_9", Name: "shell", Input: json.RawMessage(`{"command":"ls"}`),
+				ID: "call_9", Name: "shell", Input: `{"command":"ls"}`,
 			}},
 		},
 	}
@@ -93,7 +110,7 @@ func TestToMessages_AssistantNoTextOmitsContent(t *testing.T) {
 		Role: provider.RoleAssistant,
 		Content: []provider.ContentBlock{
 			{Kind: provider.BlockToolCall, ToolCall: &provider.ToolCall{
-				ID: "c1", Name: "t", Input: json.RawMessage(`{}`),
+				ID: "c1", Name: "t", Input: `{}`,
 			}},
 		},
 	}
@@ -162,7 +179,7 @@ func TestFromMessage(t *testing.T) {
 		t.Fatalf("tool-call block wrong: %+v", blocks[1])
 	}
 	tc := blocks[1].ToolCall
-	if tc.ID != "call_7" || tc.Name != "web_search" || string(tc.Input) != `{"q":"golang"}` {
+	if tc.ID != "call_7" || tc.Name != "web_search" || tc.Input != `{"q":"golang"}` {
 		t.Errorf("tool call wrong: %+v", tc)
 	}
 }

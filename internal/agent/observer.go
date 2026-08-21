@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ type Event struct {
 	Result     string              // EvToolResult
 	IsError    bool                // EvToolResult
 	Usage      provider.Usage      // EvResponse
+	Stop       provider.StopReason // EvResponse
 	DurationMs int64               // EvResponse
 	SubAgent   string              // non-empty ⇒ emitted by a foreground sub-run of this type
 	// Internal ⇒ background deliberation (the chat planner's planner/critic steps): kept in
@@ -123,10 +125,34 @@ func (l *LoggerObserver) Emit(e Event) {
 	case EvRequest:
 		l.log.LogRequest(e.Iteration, e.Messages)
 	case EvResponse:
-		l.log.LogResponse(e.Iteration, e.Text, e.Calls, e.Usage, e.DurationMs)
+		calls := any(e.Calls)
+		if e.Stop == provider.StopMaxTokens {
+			// Do not retain a potentially huge/truncated argument string. Preserve enough
+			// metadata to diagnose the capped call while keeping the transcript valid.
+			metadata := make([]map[string]any, 0, len(e.Calls))
+			for _, call := range e.Calls {
+				metadata = append(metadata, map[string]any{
+					"id": boundedMetadata(call.ID), "name": boundedMetadata(call.Name), "argument_bytes": len(call.Input),
+					"valid_json": json.Valid([]byte(call.Input)),
+				})
+			}
+			calls = metadata
+		}
+		l.log.LogResponse(e.Iteration, e.Text, calls, e.Stop, e.Usage, e.DurationMs)
+		if e.Stop == provider.StopMaxTokens {
+			l.log.LogError(e.Iteration, "model output limit reached")
+		}
 	case EvToolResult:
-		l.log.LogToolResult(e.Call.Name, e.Call.ID, string(e.Call.Input), e.Result)
+		l.log.LogToolResult(e.Call.Name, e.Call.ID, e.Call.Input, e.Result)
 	}
+}
+
+func boundedMetadata(value string) string {
+	runes := []rune(value)
+	if len(runes) <= 256 {
+		return value
+	}
+	return string(runes[:256]) + "…"
 }
 
 // UsageObserver accumulates token usage across a run's model responses so a caller
@@ -239,7 +265,7 @@ func (c *CLIObserver) Emit(e Event) {
 			c.thinking(e)
 		}
 	case EvToolStart:
-		c.line(fmt.Sprintf("%s[tool: %s] %s", subAgentPrefix(e), e.Call.Name, string(e.Call.Input)))
+		c.line(fmt.Sprintf("%s[tool: %s] %s", subAgentPrefix(e), e.Call.Name, e.Call.Input))
 	case EvToolResult:
 		c.line(fmt.Sprintf("%s[result] %s", subAgentPrefix(e), e.Result))
 	}

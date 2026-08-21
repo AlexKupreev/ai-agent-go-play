@@ -87,14 +87,20 @@ func (l *Logger) LogRequest(iteration int, messages any) {
 }
 
 // LogResponse records what the LLM returned, including token usage and latency.
-func (l *Logger) LogResponse(iteration int, content string, toolCalls any, usage any, durationMs int64) {
+func (l *Logger) LogResponse(iteration int, content string, toolCalls any, stop any, usage any, durationMs int64) {
 	l.write("response", map[string]any{
 		"iteration":   iteration,
 		"content":     content,
 		"tool_calls":  toolCalls,
+		"stop":        stop,
 		"usage":       usage,
 		"duration_ms": durationMs,
 	})
+}
+
+// LogError records a terminal model-loop failure in the transcript.
+func (l *Logger) LogError(iteration int, message string) {
+	l.write("error", map[string]any{"iteration": iteration, "error": message})
 }
 
 // LogToolResult records a tool call and its result.

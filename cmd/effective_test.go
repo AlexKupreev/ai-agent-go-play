@@ -49,12 +49,13 @@ func TestEffectiveConfigSnapshotIsResolvedAndSecretSafe(t *testing.T) {
 	if len(got.SecretNames) != 1 || got.SecretNames[0] != "weather" {
 		t.Fatalf("secret names = %v", got.SecretNames)
 	}
-	if got.Limits.MaxIterations != 20 || got.Limits.MaxFinishedRuns != 100 || got.Limits.MaxHTTPBytes != 1<<20 {
+	if got.Limits.MaxIterations != 20 || got.Limits.MaxFinishedRuns != 100 || got.Limits.MaxHTTPBytes != 1<<20 ||
+		got.Limits.PlannerMaxOutputTokens != 6144 || got.Limits.CriticMaxOutputTokens != 3072 || got.Limits.ExecutorMaxOutputTokens != 12288 {
 		t.Fatalf("limits = %+v", got.Limits)
 	}
 	status := toolStatusConfiguration(got)
 	if status.Workspace != workspace || status.PromptComposition != got.Prompts.Composition ||
-		status.Limits.MaxFinishedRuns != 100 || status.Limits.MaxRevisions != 1 || !status.Plan || !status.Critique {
+		status.Limits.MaxFinishedRuns != 100 || status.Limits.MaxRevisions != 1 || status.Limits.ExecutorMaxOutputTokens != 12288 || !status.Plan || !status.Critique {
 		t.Fatalf("tool status config = %+v", status)
 	}
 }

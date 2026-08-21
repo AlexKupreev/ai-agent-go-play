@@ -34,21 +34,7 @@ func New(apiKey, baseURL string) *Client {
 
 // Step runs one model turn against the Chat Completions API.
 func (c *Client) Step(ctx context.Context, req provider.StepRequest) (provider.StepResponse, error) {
-	params := oai.ChatCompletionNewParams{
-		Model:    oai.ChatModel(req.Model),
-		Messages: toMessages(req.Messages),
-	}
-	if len(req.Tools) > 0 {
-		params.Tools = toTools(req.Tools)
-		// parallel_tool_calls is only valid alongside tools.
-		params.ParallelToolCalls = oai.Bool(req.ParallelToolCalls)
-	}
-	if req.MaxTokens > 0 {
-		params.MaxTokens = oai.Int(req.MaxTokens)
-	}
-	if req.ResponseFormat != nil {
-		params.ResponseFormat = toResponseFormat(*req.ResponseFormat)
-	}
+	params := toParams(req)
 
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -71,6 +57,25 @@ func (c *Client) Step(ctx context.Context, req provider.StepRequest) (provider.S
 			CachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
 		},
 	}, nil
+}
+
+func toParams(req provider.StepRequest) oai.ChatCompletionNewParams {
+	params := oai.ChatCompletionNewParams{
+		Model:    oai.ChatModel(req.Model),
+		Messages: toMessages(req.Messages),
+	}
+	if len(req.Tools) > 0 {
+		params.Tools = toTools(req.Tools)
+		// parallel_tool_calls is only valid alongside tools.
+		params.ParallelToolCalls = oai.Bool(req.ParallelToolCalls)
+	}
+	if req.MaxOutputTokens > 0 {
+		params.MaxCompletionTokens = oai.Int(req.MaxOutputTokens)
+	}
+	if req.ResponseFormat != nil {
+		params.ResponseFormat = toResponseFormat(*req.ResponseFormat)
+	}
+	return params
 }
 
 func isUnknownModel(err error) bool {
@@ -109,7 +114,7 @@ func toMessages(msgs []provider.Message) []oai.ChatCompletionMessageParamUnion {
 						ID: b.ToolCall.ID,
 						Function: oai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      b.ToolCall.Name,
-							Arguments: string(b.ToolCall.Input),
+							Arguments: b.ToolCall.Input,
 						},
 					})
 				}
@@ -138,7 +143,7 @@ func fromMessage(m oai.ChatCompletionMessage) []provider.ContentBlock {
 			ToolCall: &provider.ToolCall{
 				ID:    tc.ID,
 				Name:  tc.Function.Name,
-				Input: []byte(tc.Function.Arguments),
+				Input: tc.Function.Arguments,
 			},
 		})
 	}

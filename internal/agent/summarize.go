@@ -25,7 +25,8 @@ func Summarize(ctx context.Context, prov provider.Provider, model, transcript st
 		model = DefaultModel
 	}
 	resp, err := prov.Step(ctx, provider.StepRequest{
-		Model: model,
+		Model:           model,
+		MaxOutputTokens: DefaultExecutorMaxOutputTokens,
 		Messages: []provider.Message{
 			provider.SystemText(summarizeSystemPrompt),
 			provider.UserText("Conversation to compress:\n\n" + transcript),
@@ -33,6 +34,9 @@ func Summarize(ctx context.Context, prov provider.Provider, model, transcript st
 	})
 	if err != nil {
 		return "", err
+	}
+	if resp.Stop == provider.StopMaxTokens {
+		return "", &ModelOutputLimitError{Usage: resp.Usage}
 	}
 	out := strings.TrimSpace(resp.Text())
 	if out == "" {

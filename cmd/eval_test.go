@@ -83,8 +83,8 @@ func TestLoadEvalVariants_NewFields(t *testing.T) {
 // TestConfigLimitsMerge: a variant's non-zero fields override the ambient config; zero fields
 // inherit.
 func TestConfigLimitsMerge(t *testing.T) {
-	base := ConfigLimits{MaxIterations: 20, ScriptTimeoutS: 5, SpawnDepth: 1}
-	got := base.merge(ConfigLimits{MaxIterations: 40, MaxHTTPBytes: 2 << 20})
+	base := ConfigLimits{MaxIterations: 20, ScriptTimeoutS: 5, SpawnDepth: 1, PlannerMaxOutputTokens: 2048}
+	got := base.merge(ConfigLimits{MaxIterations: 40, MaxHTTPBytes: 2 << 20, PlannerMaxOutputTokens: 1800})
 	if got.MaxIterations != 40 { // overridden
 		t.Errorf("MaxIterations = %d, want 40", got.MaxIterations)
 	}
@@ -93,6 +93,9 @@ func TestConfigLimitsMerge(t *testing.T) {
 	}
 	if got.MaxHTTPBytes != 2<<20 { // added
 		t.Errorf("MaxHTTPBytes = %d, want %d", got.MaxHTTPBytes, 2<<20)
+	}
+	if got.PlannerMaxOutputTokens != 1800 {
+		t.Errorf("PlannerMaxOutputTokens = %d, want 1800", got.PlannerMaxOutputTokens)
 	}
 }
 

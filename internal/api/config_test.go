@@ -15,7 +15,7 @@ func TestEffectiveConfigEndpoint(t *testing.T) {
 	e := NewEngine(RunnerFunc(fakeRunner))
 	e.SetEffectiveConfigService(fakeEffectiveConfig{snapshot: EffectiveConfig{
 		Model: ConfigValue{Value: "gpt-5.1", Source: "built-in"}, Workspace: "/work",
-		SecretNames: []string{"weather"},
+		SecretNames: []string{"weather"}, Limits: EffectiveLimits{ExecutorMaxOutputTokens: 8192},
 	}})
 	r := httptest.NewRequest(http.MethodGet, "/config/effective", nil)
 	w := httptest.NewRecorder()
@@ -27,7 +27,7 @@ func TestEffectiveConfigEndpoint(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Model.Value != "gpt-5.1" || got.Workspace != "/work" || len(got.SecretNames) != 1 {
+	if got.Model.Value != "gpt-5.1" || got.Workspace != "/work" || len(got.SecretNames) != 1 || got.Limits.ExecutorMaxOutputTokens != 8192 {
 		t.Fatalf("snapshot = %+v", got)
 	}
 }

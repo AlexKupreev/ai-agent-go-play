@@ -16,11 +16,33 @@ func TestStepResponseText(t *testing.T) {
 	}
 }
 
+func TestToolCallUnmarshalAcceptsLegacyRawArguments(t *testing.T) {
+	var call ToolCall
+	if err := json.Unmarshal([]byte(`{"id":"c1","name":"web_search","input":{"query":"go"}}`), &call); err != nil {
+		t.Fatal(err)
+	}
+	if call.ID != "c1" || call.Name != "web_search" || call.Input != `{"query":"go"}` {
+		t.Fatalf("legacy tool call = %+v", call)
+	}
+
+	encoded, err := json.Marshal(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["input"] != `{"query":"go"}` {
+		t.Fatalf("new wire input = %#v, want an argument string", wire["input"])
+	}
+}
+
 func TestStepResponseToolCalls(t *testing.T) {
 	r := StepResponse{Content: []ContentBlock{
 		{Kind: BlockText, Text: "thinking"},
-		{Kind: BlockToolCall, ToolCall: &ToolCall{ID: "a", Name: "one", Input: json.RawMessage(`{}`)}},
-		{Kind: BlockToolCall, ToolCall: &ToolCall{ID: "b", Name: "two", Input: json.RawMessage(`{"k":1}`)}},
+		{Kind: BlockToolCall, ToolCall: &ToolCall{ID: "a", Name: "one", Input: `{}`}},
+		{Kind: BlockToolCall, ToolCall: &ToolCall{ID: "b", Name: "two", Input: `{"k":1}`}},
 	}}
 	calls := r.ToolCalls()
 	if len(calls) != 2 {

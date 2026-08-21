@@ -66,6 +66,9 @@ func (s *effectiveConfigService) EffectiveConfig() api.EffectiveConfig {
 			MaxInlineTools:  limits.MaxInlineTools,
 			MaxHTTPBytes:    capability.EffectiveMaxHTTPBytes(limits.MaxHTTPBytes),
 			MaxFinishedRuns: maxFinished, SpawnDepth: s.spawnDepth, MaxRevisions: s.maxRevisions,
+			PlannerMaxOutputTokens:  limits.PlannerMaxOutputTokens,
+			CriticMaxOutputTokens:   limits.CriticMaxOutputTokens,
+			ExecutorMaxOutputTokens: limits.ExecutorMaxOutputTokens,
 		},
 		SecretNames: secretNames,
 		Frontends:   api.FrontendConfig{TelegramConfigured: s.telegram, Plan: s.plan, Critique: s.critique},
@@ -95,7 +98,10 @@ func toolStatusConfiguration(config api.EffectiveConfig) tools.StatusConfigurati
 			MaxIterations: config.Limits.MaxIterations, ScriptTimeoutS: config.Limits.ScriptTimeoutS,
 			MaxInlineTools: config.Limits.MaxInlineTools, MaxHTTPBytes: config.Limits.MaxHTTPBytes,
 			MaxFinishedRuns: config.Limits.MaxFinishedRuns, SpawnDepth: config.Limits.SpawnDepth,
-			MaxRevisions: config.Limits.MaxRevisions,
+			MaxRevisions:            config.Limits.MaxRevisions,
+			PlannerMaxOutputTokens:  config.Limits.PlannerMaxOutputTokens,
+			CriticMaxOutputTokens:   config.Limits.CriticMaxOutputTokens,
+			ExecutorMaxOutputTokens: config.Limits.ExecutorMaxOutputTokens,
 		},
 	}
 }

@@ -143,7 +143,7 @@ var runCmd = &cobra.Command{
 
 		// run has no artifact manifest (no scratch cache today, chat-planner.md Q9c) ⇒ "".
 		// CLI clarifications read from stdin (nil ⇒ StdinGate).
-		planner := agent.NewPlanner(prov, model, prompts.PlannerOverride, executor.EnvironmentSummary(), "", tools.StdinGate{}, log.RunID, obs)
+		planner := agent.NewPlannerWithLimits(prov, model, prompts.PlannerOverride, executor.EnvironmentSummary(), "", tools.StdinGate{}, log.RunID, obs, resolveAgentLimits(cfg))
 		fmt.Fprintln(os.Stderr, "[planner] clarifying task...")
 		planJSON, err := planner.Run(ctx, task)
 		if err != nil {

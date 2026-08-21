@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/audit"
@@ -58,5 +59,41 @@ func TestRunUsage_AggregatedIntoInfoAndAudit(t *testing.T) {
 	}
 	if ev.Fields["steps"] != 2 {
 		t.Errorf("run_usage steps = %v, want 2", ev.Fields["steps"])
+	}
+}
+
+func TestRunUsageRecordedWhenModelOutputLimitFails(t *testing.T) {
+	runner := RunnerFunc(func(_ context.Context, _ string, _ string, _ RunOptions, obs agent.Observer) (string, error) {
+		usage := provider.Usage{InputTokens: 42, OutputTokens: 128000}
+		obs.Emit(agent.Event{Kind: agent.EvResponse, Stop: provider.StopMaxTokens, Usage: usage})
+		return "", &agent.ModelOutputLimitError{Usage: usage}
+	})
+	rec := &audit.MemoryRecorder{}
+	e := NewEngine(runner)
+	e.SetAuditRecorder(rec)
+	id := e.StartRun("trigger cap", RunOptions{})
+	waitRunState(t, e, id, StateError)
+
+	info, err := e.RunStatus(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Usage.OutputTokens != 128000 || info.Steps != 1 || info.Error != "model output limit reached" {
+		t.Fatalf("failed run info = %+v", info)
+	}
+	var events []audit.Event
+	deadline := time.Now().Add(time.Second)
+	for len(events) == 0 && time.Now().Before(deadline) {
+		events, err = rec.Tail(0, audit.Filter{Type: audit.EventRunUsage})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(events) != 1 {
+		t.Fatalf("run_usage events=%v", events)
+	}
+	if events[0].Fields["output_tokens"] != int64(128000) || events[0].Fields["steps"] != 1 {
+		t.Fatalf("run_usage = %+v", events[0])
 	}
 }

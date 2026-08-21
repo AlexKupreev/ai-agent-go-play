@@ -52,13 +52,16 @@ type AgentTypeConfig struct {
 }
 
 type EffectiveLimits struct {
-	MaxIterations   int   `json:"max_iterations"`
-	ScriptTimeoutS  int   `json:"script_timeout_seconds"`
-	MaxInlineTools  int   `json:"max_inline_tools"`
-	MaxHTTPBytes    int64 `json:"max_http_bytes"`
-	MaxFinishedRuns int   `json:"max_finished_runs"`
-	SpawnDepth      int   `json:"spawn_depth"`
-	MaxRevisions    int   `json:"max_revisions"`
+	MaxIterations           int   `json:"max_iterations"`
+	ScriptTimeoutS          int   `json:"script_timeout_seconds"`
+	MaxInlineTools          int   `json:"max_inline_tools"`
+	MaxHTTPBytes            int64 `json:"max_http_bytes"`
+	MaxFinishedRuns         int   `json:"max_finished_runs"`
+	SpawnDepth              int   `json:"spawn_depth"`
+	MaxRevisions            int   `json:"max_revisions"`
+	PlannerMaxOutputTokens  int64 `json:"planner_max_output_tokens"`
+	CriticMaxOutputTokens   int64 `json:"critic_max_output_tokens"`
+	ExecutorMaxOutputTokens int64 `json:"executor_max_output_tokens"`
 }
 
 type FrontendConfig struct {

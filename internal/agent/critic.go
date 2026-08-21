@@ -26,6 +26,8 @@ When not satisfied, list the concrete gaps — specific, actionable shortfalls t
 
 For current or external factual claims, check whether relevant answer citations correspond to sources in successful evidence. Failed evidence cannot support a claim, though an honest limitation may still satisfy the task. General knowledge and conversation do not require ceremonial web evidence. Be a fair judge, not a perfectionist: minor stylistic preferences are not gaps. Only fail an answer for a real shortfall against the task or its success criteria. Your only output is the structured verdict.`
 
+const criticOutputDiscipline = `Output discipline: return only the compact structured verdict. When unsatisfied, list each material gap once in one short, actionable sentence; do not restate the brief, answer, or evidence.`
+
 // verdictResponseFormat is the strict schema enforced on the critic's output. Like the
 // planner's Plan, the shape is guaranteed in code, not prose — the critic cannot answer the
 // user's question, only judge.
@@ -57,11 +59,19 @@ var verdictResponseFormat = provider.ResponseFormat{
 // (empty ⇒ criticPrompt) lets the judgment be tuned without a rebuild, like PLANNER.md; the
 // structured Verdict is enforced regardless, so an override cannot break the contract.
 func NewCritic(p provider.Provider, model, promptOverride string, obs Observer) *Agent {
+	return NewCriticWithLimits(p, model, promptOverride, obs, Limits{})
+}
+
+// NewCriticWithLimits is NewCritic with operator-configured role limits.
+func NewCriticWithLimits(p provider.Provider, model, promptOverride string, obs Observer, configured Limits) *Agent {
 	base := criticPrompt
 	if promptOverride != "" {
 		base = promptOverride
 	}
+	base += "\n\n" + criticOutputDiscipline
 	a := newAgent(p, model, base, nil, obs)
+	a.limits = configured.withDefaults()
+	a.maxOutputTokens = a.limits.CriticMaxOutputTokens
 	a.responseFormat = &verdictResponseFormat
 	return a
 }

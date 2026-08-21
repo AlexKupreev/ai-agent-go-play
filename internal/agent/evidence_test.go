@@ -10,7 +10,7 @@ import (
 
 func evidenceCall(id, name string, args map[string]any) provider.ToolCall {
 	raw, _ := json.Marshal(args)
-	return provider.ToolCall{ID: id, Name: name, Input: raw}
+	return provider.ToolCall{ID: id, Name: name, Input: string(raw)}
 }
 
 func recordEvidence(r *EvidenceRecorder, call provider.ToolCall, result string, failed bool) {

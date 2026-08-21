@@ -205,8 +205,10 @@ func TestResolveOpenAIBaseURL(t *testing.T) {
 func TestResolveAgentLimits(t *testing.T) {
 	got := resolveAgentLimits(Config{Limits: ConfigLimits{
 		MaxIterations: 40, ScriptTimeoutS: 8, MaxInlineTools: 20, MaxHTTPBytes: 5 << 20,
+		PlannerMaxOutputTokens: 1800, CriticMaxOutputTokens: 900, ExecutorMaxOutputTokens: 7000,
 	}})
-	if got.MaxIterations != 40 || got.ScriptTimeout != 8*time.Second || got.MaxInlineTools != 20 || got.MaxHTTPBytes != 5<<20 {
+	if got.MaxIterations != 40 || got.ScriptTimeout != 8*time.Second || got.MaxInlineTools != 20 || got.MaxHTTPBytes != 5<<20 ||
+		got.PlannerMaxOutputTokens != 1800 || got.CriticMaxOutputTokens != 900 || got.ExecutorMaxOutputTokens != 7000 {
 		t.Fatalf("resolveAgentLimits mapped wrong: %+v", got)
 	}
 	// An empty ConfigLimits maps to a zero agent.Limits (the agent then applies its defaults).
@@ -242,6 +244,24 @@ func TestConfigLimitsOmitzero(t *testing.T) {
 	}
 	if strings.Contains(string(data), "limits") {
 		t.Fatalf("empty limits should be omitted from config.json; got:\n%s", data)
+	}
+}
+
+func TestConfigPersistsRoleOutputLimits(t *testing.T) {
+	orig := configDirFlag
+	t.Cleanup(func() { configDirFlag = orig })
+	configDirFlag = t.TempDir()
+	t.Setenv(envConfigDir, "")
+	want := ConfigLimits{PlannerMaxOutputTokens: 1800, CriticMaxOutputTokens: 900, ExecutorMaxOutputTokens: 7000}
+	if err := saveConfig(Config{OpenAIKey: "sk-x", Limits: want}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Limits != want {
+		t.Fatalf("persisted limits = %+v, want %+v", got.Limits, want)
 	}
 }
 

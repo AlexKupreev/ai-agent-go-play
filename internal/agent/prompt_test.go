@@ -105,7 +105,7 @@ func TestNewExecutor_PromptOverrideAndAppends(t *testing.T) {
 func TestPlannerPromptRequiresObservableSuccessCriteria(t *testing.T) {
 	planner := NewPlanner(&systemCapture{}, "", "", "", "", nil, "", nil)
 	prompt := planner.SystemPrompt()
-	for _, want := range []string{"user-visible done-condition", "never require proof that a named internal tool was called"} {
+	for _, want := range []string{"user-visible done-condition", "never require proof that a named internal tool was called", plannerOutputDiscipline} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("planner prompt missing %q", want)
 		}
@@ -117,7 +117,7 @@ func TestPlannerPromptRequiresObservableSuccessCriteria(t *testing.T) {
 func TestKernelPromptBlocks(t *testing.T) {
 	t.Run("attached to an override", func(t *testing.T) {
 		got := kernelPromptBlocks("You are Ada. Always answer in Polish.", true)
-		if !strings.Contains(got, runtimeBlockMarker) || !strings.Contains(got, securityBlockMarker) {
+		if !strings.Contains(got, runtimeBlockMarker) || !strings.Contains(got, securityBlockMarker) || !strings.Contains(got, outputBlockMarker) {
 			t.Errorf("kernel blocks missing from %q", got)
 		}
 	})
@@ -133,6 +133,9 @@ func TestKernelPromptBlocks(t *testing.T) {
 		}
 		if !strings.Contains(got, securityBlockMarker) {
 			t.Errorf("security block missing: %q", got)
+		}
+		if !strings.Contains(got, outputBlockMarker) {
+			t.Errorf("output block missing: %q", got)
 		}
 	})
 	t.Run("built-in base is unchanged by the split", func(t *testing.T) {
@@ -151,7 +154,7 @@ func TestBaseSystemPromptPlaceholderWrapsBuiltInBase(t *testing.T) {
 		!strings.HasSuffix(got, "Always answer in Polish.") {
 		t.Fatalf("placeholder did not wrap the built-in base: %q", got)
 	}
-	if strings.Count(got, runtimeBlockMarker) != 1 || strings.Count(got, securityBlockMarker) != 1 {
+	if strings.Count(got, runtimeBlockMarker) != 1 || strings.Count(got, securityBlockMarker) != 1 || strings.Count(got, outputBlockMarker) != 1 {
 		t.Fatalf("placeholder duplicated kernel blocks: %q", got)
 	}
 }
@@ -170,7 +173,7 @@ func TestNewExecutor_OverrideKeepsKernelBlocks(t *testing.T) {
 	if _, err := exec.Run(context.Background(), "hi"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	for _, want := range []string{runtimeBlockMarker, securityBlockMarker} {
+	for _, want := range []string{runtimeBlockMarker, securityBlockMarker, outputBlockMarker} {
 		if !strings.Contains(prov.system, want) {
 			t.Errorf("override dropped kernel block %q; system = %q", want, prov.system)
 		}

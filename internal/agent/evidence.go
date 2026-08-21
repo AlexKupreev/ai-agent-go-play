@@ -154,9 +154,9 @@ func boundedToolName(name string) string {
 	return name
 }
 
-func summarizeEvidenceInput(tool string, raw json.RawMessage) (string, bool) {
+func summarizeEvidenceInput(tool string, raw string) (string, bool) {
 	var args map[string]any
-	if len(raw) > 0 && json.Unmarshal(raw, &args) != nil {
+	if len(raw) > 0 && json.Unmarshal([]byte(raw), &args) != nil {
 		return "invalid JSON arguments", false
 	}
 	redacted := redactEvidenceValue(args).(map[string]any)
@@ -187,7 +187,7 @@ func summarizeEvidenceInput(tool string, raw json.RawMessage) (string, bool) {
 	return boundRunes(summary, maxEvidenceInputRunes)
 }
 
-func summarizeEvidenceResult(tool, result string, input json.RawMessage) (string, []EvidenceSource, bool) {
+func summarizeEvidenceResult(tool, result, input string) (string, []EvidenceSource, bool) {
 	bytesSummary := fmt.Sprintf("returned %d bytes", len(result))
 	switch tool {
 	case "web_search":
@@ -201,9 +201,9 @@ func summarizeEvidenceResult(tool, result string, input json.RawMessage) (string
 	return bytesSummary, nil, false
 }
 
-func evidenceFetchURL(raw json.RawMessage) (string, bool) {
+func evidenceFetchURL(raw string) (string, bool) {
 	var args map[string]any
-	if json.Unmarshal(raw, &args) != nil {
+	if json.Unmarshal([]byte(raw), &args) != nil {
 		return "", false
 	}
 	args = redactEvidenceValue(args).(map[string]any)

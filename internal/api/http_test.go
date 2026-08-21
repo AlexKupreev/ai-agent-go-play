@@ -20,7 +20,7 @@ import (
 func fakeRunner(_ context.Context, _, task string, _ RunOptions, obs agent.Observer) (string, error) {
 	obs.Emit(agent.Event{Kind: agent.EvStart, Task: task})
 	obs.Emit(agent.Event{Kind: agent.EvResponse, Iteration: 0, Text: "thinking"})
-	call := provider.ToolCall{Name: "shell", ID: "c1", Input: []byte(`{"cmd":"ls"}`)}
+	call := provider.ToolCall{Name: "shell", ID: "c1", Input: `{"cmd":"ls"}`}
 	obs.Emit(agent.Event{Kind: agent.EvToolStart, Call: &call})
 	obs.Emit(agent.Event{Kind: agent.EvToolResult, Call: &call, Result: "file.txt"})
 	return "all done", nil

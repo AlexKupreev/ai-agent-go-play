@@ -45,7 +45,7 @@ func fromAgentEvent(e agent.Event) Event {
 	}
 	if e.Call != nil {
 		out.Tool = e.Call.Name
-		out.Input = string(e.Call.Input)
+		out.Input = e.Call.Input
 	}
 	return out
 }

@@ -673,11 +673,11 @@ func (d serveDeps) deliberateTurnRunner(critique bool, maxRevisions int, publish
 				// The planner's ask_user shares the engine gate + runID, so a clarification
 				// routes to the session's frontend (not server stdin). It runs on the resolved
 				// model like the executor (tier is executor-only — the planner has no broker).
-				return agent.NewPlanner(d.prov, model, prompts.PlannerOverride, environment, manifestView, d.gate, runID, internal), nil
+				return agent.NewPlannerWithLimits(d.prov, model, prompts.PlannerOverride, environment, manifestView, d.gate, runID, internal, d.limits), nil
 			},
 			buildCritic: func() (*agent.Agent, error) {
 				prompts, _ := d.prompts.snapshot()
-				return agent.NewCritic(d.prov, model, prompts.CriticOverride, internal), nil
+				return agent.NewCriticWithLimits(d.prov, model, prompts.CriticOverride, internal, d.limits), nil
 			},
 			manifest:     manifest,
 			critique:     critique,

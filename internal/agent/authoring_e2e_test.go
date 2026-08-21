@@ -38,7 +38,7 @@ func toolCallStep(id, name string, input map[string]any) provider.StepResponse {
 		Stop: provider.StopToolCalls,
 		Content: []provider.ContentBlock{{
 			Kind:     provider.BlockToolCall,
-			ToolCall: &provider.ToolCall{ID: id, Name: name, Input: raw},
+			ToolCall: &provider.ToolCall{ID: id, Name: name, Input: string(raw)},
 		}},
 	}
 }

@@ -6,6 +6,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -31,9 +32,33 @@ const (
 
 // ToolCall is a request from the model to invoke a tool.
 type ToolCall struct {
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"` // raw JSON arguments, as emitted by the model
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input string `json:"input"` // JSON argument string exactly as emitted by the model
+}
+
+// UnmarshalJSON accepts both the new provider-accurate argument string and the legacy
+// json.RawMessage representation used by persisted sessions before Phase 1.
+func (c *ToolCall) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	c.ID, c.Name = wire.ID, wire.Name
+	raw := bytes.TrimSpace(wire.Input)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		c.Input = ""
+		return nil
+	}
+	if raw[0] == '"' {
+		return json.Unmarshal(raw, &c.Input)
+	}
+	c.Input = string(raw)
+	return nil
 }
 
 // ToolResult is the outcome of executing a ToolCall, fed back to the model.
@@ -120,7 +145,7 @@ type StepRequest struct {
 	Messages          []Message
 	Tools             []ToolDef
 	ResponseFormat    *ResponseFormat // nil unless structured output is wanted
-	MaxTokens         int64           // 0 = let the provider default
+	MaxOutputTokens   int64           // 0 = let the provider default
 	ParallelToolCalls bool            // false = one tool call per step
 }
 

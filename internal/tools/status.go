@@ -49,13 +49,16 @@ type StatusSource struct {
 }
 
 type StatusLimits struct {
-	MaxIterations   int
-	ScriptTimeoutS  int
-	MaxInlineTools  int
-	MaxHTTPBytes    int64
-	MaxFinishedRuns int
-	SpawnDepth      int
-	MaxRevisions    int
+	MaxIterations           int
+	ScriptTimeoutS          int
+	MaxInlineTools          int
+	MaxHTTPBytes            int64
+	MaxFinishedRuns         int
+	SpawnDepth              int
+	MaxRevisions            int
+	PlannerMaxOutputTokens  int64
+	CriticMaxOutputTokens   int64
+	ExecutorMaxOutputTokens int64
 }
 
 // StatusConfiguration describes the resolved configuration of this executor.
@@ -239,6 +242,8 @@ func renderStatusConfiguration(b *strings.Builder, cfg StatusConfiguration) {
 		fmt.Fprintf(b, "  limits: iterations %d, script %ds, inline tools %d, HTTP bytes %d, finished runs %d, spawn depth %d\n",
 			cfg.Limits.MaxIterations, cfg.Limits.ScriptTimeoutS, cfg.Limits.MaxInlineTools,
 			cfg.Limits.MaxHTTPBytes, cfg.Limits.MaxFinishedRuns, cfg.Limits.SpawnDepth)
+		fmt.Fprintf(b, "    output tokens/call: planner %d, critic %d, executor/sub-agent %d\n",
+			cfg.Limits.PlannerMaxOutputTokens, cfg.Limits.CriticMaxOutputTokens, cfg.Limits.ExecutorMaxOutputTokens)
 	}
 }
 

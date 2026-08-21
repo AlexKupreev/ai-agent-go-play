@@ -208,6 +208,8 @@ func newSubAgent(parent *Agent, t AgentType, obs Observer) *Agent {
 	}
 	childTools := parent.selectSubAgentTools(t.Tools)
 	child := newAgent(parent.provider, model, subAgentPrompt(parent, t, childTools), childTools, obs)
+	child.limits = parent.limits
+	child.maxOutputTokens = parent.limits.ExecutorMaxOutputTokens
 	// Decrement the delegation budget as we descend. In v1 the child carries no spawn
 	// tool, so this only matters if nesting is enabled later (subagents.md §3), but the
 	// budget is threaded down now so that path needs no reshape.

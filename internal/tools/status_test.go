@@ -141,7 +141,8 @@ func TestStatusTool_ResolvedConfiguration(t *testing.T) {
 			PromptSources:     []StatusSource{{Name: "SYSTEM.md", Path: "/workspace/SYSTEM.md", Layer: "workspace", Mode: "replace", Active: true}},
 			AgentTypeCount:    1, AgentTypeSources: []StatusSource{{Name: "worker", Path: "/workspace/agents/worker.md", Layer: "workspace"}},
 			Plan: true, Critique: true,
-			Limits: StatusLimits{MaxIterations: 20, ScriptTimeoutS: 30, MaxInlineTools: 5, MaxHTTPBytes: 4194304, MaxFinishedRuns: 100, SpawnDepth: 1, MaxRevisions: 1},
+			Limits: StatusLimits{MaxIterations: 20, ScriptTimeoutS: 30, MaxInlineTools: 5, MaxHTTPBytes: 4194304, MaxFinishedRuns: 100, SpawnDepth: 1, MaxRevisions: 1,
+				PlannerMaxOutputTokens: 6144, CriticMaxOutputTokens: 3072, ExecutorMaxOutputTokens: 12288},
 		},
 	})
 	out, err := tool.Run(context.Background(), map[string]any{})
@@ -157,6 +158,7 @@ func TestStatusTool_ResolvedConfiguration(t *testing.T) {
 		"agent types: 1", "worker: /workspace/agents/worker.md [workspace]",
 		"workflow: plan true, critique true, max revisions 1",
 		"limits: iterations 20, script 30s, inline tools 5, HTTP bytes 4194304, finished runs 100, spawn depth 1",
+		"output tokens/call: planner 6144, critic 3072, executor/sub-agent 12288",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output missing %q; got:\n%s", want, out)

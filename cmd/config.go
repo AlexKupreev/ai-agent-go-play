@@ -65,12 +65,15 @@ type Config struct {
 // runs, a tighter run-retention cap on a small box — that otherwise needed a rebuild.
 // The yaml tags let the same type appear in an `agent eval` variant (see cmd/eval.go).
 type ConfigLimits struct {
-	MaxIterations   int   `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`                 // ReAct model-call iterations (default 20)
-	ScriptTimeoutS  int   `json:"script_timeout_seconds,omitempty" yaml:"script_timeout_seconds,omitempty"` // per sandboxed script (default 5)
-	MaxInlineTools  int   `json:"max_inline_tools,omitempty" yaml:"max_inline_tools,omitempty"`             // catalog size before search-gating (default 12)
-	MaxHTTPBytes    int64 `json:"max_http_bytes,omitempty" yaml:"max_http_bytes,omitempty"`                 // brokered HTTP response cap (default 1 MiB)
-	MaxFinishedRuns int   `json:"max_finished_runs,omitempty" yaml:"max_finished_runs,omitempty"`           // engine in-memory finished-run retention (default 100)
-	SpawnDepth      int   `json:"spawn_depth,omitempty" yaml:"spawn_depth,omitempty"`                       // sub-agent delegation budget (default 1)
+	MaxIterations           int   `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`                         // ReAct model-call iterations (default 20)
+	ScriptTimeoutS          int   `json:"script_timeout_seconds,omitempty" yaml:"script_timeout_seconds,omitempty"`         // per sandboxed script (default 5)
+	MaxInlineTools          int   `json:"max_inline_tools,omitempty" yaml:"max_inline_tools,omitempty"`                     // catalog size before search-gating (default 12)
+	MaxHTTPBytes            int64 `json:"max_http_bytes,omitempty" yaml:"max_http_bytes,omitempty"`                         // brokered HTTP response cap (default 1 MiB)
+	MaxFinishedRuns         int   `json:"max_finished_runs,omitempty" yaml:"max_finished_runs,omitempty"`                   // engine in-memory finished-run retention (default 100)
+	SpawnDepth              int   `json:"spawn_depth,omitempty" yaml:"spawn_depth,omitempty"`                               // sub-agent delegation budget (default 1)
+	PlannerMaxOutputTokens  int64 `json:"planner_max_output_tokens,omitempty" yaml:"planner_max_output_tokens,omitempty"`   // per planner completion (default 6144)
+	CriticMaxOutputTokens   int64 `json:"critic_max_output_tokens,omitempty" yaml:"critic_max_output_tokens,omitempty"`     // per critic completion (default 3072)
+	ExecutorMaxOutputTokens int64 `json:"executor_max_output_tokens,omitempty" yaml:"executor_max_output_tokens,omitempty"` // per executor/sub-agent completion (default 12288)
 }
 
 // merge returns c with any non-zero field of o overriding it. Used to layer an eval variant's
@@ -93,6 +96,15 @@ func (c ConfigLimits) merge(o ConfigLimits) ConfigLimits {
 	}
 	if o.SpawnDepth != 0 {
 		c.SpawnDepth = o.SpawnDepth
+	}
+	if o.PlannerMaxOutputTokens != 0 {
+		c.PlannerMaxOutputTokens = o.PlannerMaxOutputTokens
+	}
+	if o.CriticMaxOutputTokens != 0 {
+		c.CriticMaxOutputTokens = o.CriticMaxOutputTokens
+	}
+	if o.ExecutorMaxOutputTokens != 0 {
+		c.ExecutorMaxOutputTokens = o.ExecutorMaxOutputTokens
 	}
 	return c
 }
@@ -619,10 +631,13 @@ func newProvider(cfg Config) *openaiprovider.Client {
 func resolveAgentLimits(cfg Config) agent.Limits {
 	l := cfg.Limits
 	return agent.Limits{
-		MaxIterations:  l.MaxIterations,
-		ScriptTimeout:  time.Duration(l.ScriptTimeoutS) * time.Second,
-		MaxInlineTools: l.MaxInlineTools,
-		MaxHTTPBytes:   l.MaxHTTPBytes,
+		MaxIterations:           l.MaxIterations,
+		ScriptTimeout:           time.Duration(l.ScriptTimeoutS) * time.Second,
+		MaxInlineTools:          l.MaxInlineTools,
+		MaxHTTPBytes:            l.MaxHTTPBytes,
+		PlannerMaxOutputTokens:  l.PlannerMaxOutputTokens,
+		CriticMaxOutputTokens:   l.CriticMaxOutputTokens,
+		ExecutorMaxOutputTokens: l.ExecutorMaxOutputTokens,
 	}
 }
 

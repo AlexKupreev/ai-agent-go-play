@@ -12,7 +12,9 @@ func TestSummarize(t *testing.T) {
 	// A provider that echoes what it was asked to summarize, so we can assert both the return
 	// value and that the transcript + system prompt reached it.
 	var gotSystem, gotUser string
+	var gotMaxOutput int64
 	prov := providerFunc(func(_ context.Context, req provider.StepRequest) (provider.StepResponse, error) {
+		gotMaxOutput = req.MaxOutputTokens
 		for _, m := range req.Messages {
 			switch m.Role {
 			case provider.RoleSystem:
@@ -36,6 +38,9 @@ func TestSummarize(t *testing.T) {
 	}
 	if !strings.Contains(gotUser, "teach me Go") {
 		t.Errorf("transcript not sent to the model; got %q", gotUser)
+	}
+	if gotMaxOutput != DefaultExecutorMaxOutputTokens {
+		t.Errorf("max output tokens = %d, want %d", gotMaxOutput, DefaultExecutorMaxOutputTokens)
 	}
 }
 
