@@ -9,6 +9,7 @@ import (
 	"ai-agent-go-play/internal/agent"
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/capability"
+	"ai-agent-go-play/internal/tools"
 )
 
 type effectiveConfigService struct {
@@ -68,6 +69,34 @@ func (s *effectiveConfigService) EffectiveConfig() api.EffectiveConfig {
 		},
 		SecretNames: secretNames,
 		Frontends:   api.FrontendConfig{TelegramConfigured: s.telegram, Plan: s.plan, Critique: s.critique},
+	}
+}
+
+// toolStatusConfiguration projects the shared secret-safe effective snapshot onto
+// the transport-neutral status-tool DTO. Bodies and secret values are absent from
+// the source representation, so this projection cannot widen the disclosure surface.
+func toolStatusConfiguration(config api.EffectiveConfig) tools.StatusConfiguration {
+	prompts := make([]tools.StatusSource, 0, len(config.Prompts.Sources))
+	for _, source := range config.Prompts.Sources {
+		prompts = append(prompts, tools.StatusSource{
+			Name: source.Name, Path: source.Path, Layer: source.Layer,
+			Mode: source.Mode, Active: source.Active,
+		})
+	}
+	agents := make([]tools.StatusSource, 0, len(config.AgentTypes.Sources))
+	for _, source := range config.AgentTypes.Sources {
+		agents = append(agents, tools.StatusSource{Name: source.Name, Path: source.Path, Layer: source.Layer, Active: true})
+	}
+	return tools.StatusConfiguration{
+		Workspace: config.Workspace, PromptComposition: config.Prompts.Composition,
+		PromptSources: prompts, AgentTypeCount: config.AgentTypes.Count, AgentTypeSources: agents,
+		Plan: config.Frontends.Plan, Critique: config.Frontends.Critique,
+		Limits: tools.StatusLimits{
+			MaxIterations: config.Limits.MaxIterations, ScriptTimeoutS: config.Limits.ScriptTimeoutS,
+			MaxInlineTools: config.Limits.MaxInlineTools, MaxHTTPBytes: config.Limits.MaxHTTPBytes,
+			MaxFinishedRuns: config.Limits.MaxFinishedRuns, SpawnDepth: config.Limits.SpawnDepth,
+			MaxRevisions: config.Limits.MaxRevisions,
+		},
 	}
 }
 

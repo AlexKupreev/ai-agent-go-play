@@ -205,6 +205,11 @@ type Engine struct {
 
 	// effectiveConfig is the read-only, secret-safe engine configuration snapshot.
 	effectiveConfig EffectiveConfigService
+
+	// statusRuntime carries process-local status facts supplied by cmd. Effective
+	// configuration stays in effectiveConfig so GET /status and /config/effective
+	// always project the same resolved snapshot.
+	statusRuntime StatusRuntime
 }
 
 // SetEffectiveConfigService enables GET /config/effective.

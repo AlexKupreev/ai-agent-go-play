@@ -21,6 +21,7 @@ import (
 // audit log for GET /audit; it may be nil, in which case that endpoint is absent.
 func NewServer(e *Engine, approvals *ApprovalQueue, catalog tools.Registry, rec audit.Recorder, auditLog audit.Reader) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", handleStatus(e))
 	mux.HandleFunc("POST /runs", handleStartRun(e))
 	mux.HandleFunc("GET /runs", handleListRuns(e))
 	mux.HandleFunc("GET /runs/{id}", handleRunStatus(e))

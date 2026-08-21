@@ -566,6 +566,11 @@ type ExecutorConfig struct {
 	// layer resolves them (internal/agent/tools resolve no paths); empty ⇒ section omitted.
 	StatusDirs []tools.StateDir
 
+	// Status is the body-redacted resolved configuration rendered by the in-run status
+	// tool. NewExecutor fills executor-owned defaults (workspace, limits, active space);
+	// cmd supplies provenance and workflow fields it alone resolves.
+	Status tools.StatusConfiguration
+
 	// Limits tunes the per-run bounds (ReAct iterations, sandbox-script timeout, inline-tool
 	// count, HTTP response cap). Any zero field falls back to its built-in default, so the
 	// zero Limits is the current behavior. See Limits.
@@ -617,6 +622,25 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 	// (built below, before the agent exists), the broker's response cap, and stored on the
 	// agent for the loop/sandbox/tool-selection bounds.
 	limits := cfg.Limits.withDefaults()
+	statusConfig := cfg.Status
+	if statusConfig.Workspace == "" {
+		statusConfig.Workspace = workDir
+	}
+	if statusConfig.ActiveSpace == nil && cfg.Space.Store != nil && cfg.Space.ActiveID != "" {
+		if sp, err := cfg.Space.Store.Get(cfg.Space.ActiveID); err == nil {
+			statusConfig.ActiveSpace = &tools.StatusSpace{ID: sp.ID, Name: sp.Name}
+		}
+	}
+	statusConfig.Limits.MaxIterations = limits.MaxIterations
+	statusConfig.Limits.ScriptTimeoutS = int(limits.ScriptTimeout.Seconds())
+	statusConfig.Limits.MaxInlineTools = limits.MaxInlineTools
+	statusConfig.Limits.MaxHTTPBytes = capability.EffectiveMaxHTTPBytes(cfg.Limits.MaxHTTPBytes)
+	if statusConfig.Limits.SpawnDepth == 0 {
+		statusConfig.Limits.SpawnDepth = cfg.SpawnDepth
+	}
+	if statusConfig.AgentTypeCount == 0 && cfg.AgentCatalog != nil {
+		statusConfig.AgentTypeCount = len(cfg.AgentCatalog.List())
+	}
 	// Broker → glue → built-ins (run_code shares the glue) → tool caller. The
 	// caller is assigned after the agent exists, breaking the broker⇄dispatch
 	// cycle; the broker only invokes it at run time.
@@ -665,6 +689,7 @@ func NewExecutor(cfg ExecutorConfig) *Agent {
 			WorkDir:   workDir,
 			Registry:  registry,
 			Memory:    mem,
+			Config:    statusConfig,
 			StateDirs: cfg.StatusDirs,
 			Context: func() (used int64, limit int) {
 				if self == nil {

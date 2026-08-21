@@ -52,4 +52,9 @@ func TestEffectiveConfigSnapshotIsResolvedAndSecretSafe(t *testing.T) {
 	if got.Limits.MaxIterations != 20 || got.Limits.MaxFinishedRuns != 100 || got.Limits.MaxHTTPBytes != 1<<20 {
 		t.Fatalf("limits = %+v", got.Limits)
 	}
+	status := toolStatusConfiguration(got)
+	if status.Workspace != workspace || status.PromptComposition != got.Prompts.Composition ||
+		status.Limits.MaxFinishedRuns != 100 || status.Limits.MaxRevisions != 1 || !status.Plan || !status.Critique {
+		t.Fatalf("tool status config = %+v", status)
+	}
 }

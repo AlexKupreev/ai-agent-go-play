@@ -15,6 +15,7 @@ import (
 	"ai-agent-go-play/internal/api"
 	"ai-agent-go-play/internal/artifact"
 	"ai-agent-go-play/internal/audit"
+	"ai-agent-go-play/internal/buildinfo"
 	"ai-agent-go-play/internal/capability"
 	"ai-agent-go-play/internal/frontend/telegram"
 	"ai-agent-go-play/internal/guidance"
@@ -165,9 +166,24 @@ var serveCmd = &cobra.Command{
 			telegram: resolveTelegramToken(cfg) != "", plan: plan, critique: critique,
 			maxRevisions: serveMaxRevisionsFlag,
 		}
+		deps.statusConfig = func() tools.StatusConfiguration {
+			return toolStatusConfiguration(effective.EffectiveConfig())
+		}
 
 		engine := api.NewEngine(deps.runner())
 		engine.SetEffectiveConfigService(effective)
+		engine.SetStatusRuntime(api.StatusRuntime{
+			Version:   buildinfo.Version,
+			WorkDir:   workDir,
+			StateDirs: agentStateDirs(workDir),
+			ResolveSpace: func(id string) (api.StatusSpace, error) {
+				sp, err := spaces.Get(id)
+				if err != nil {
+					return api.StatusSpace{}, err
+				}
+				return api.StatusSpace{ID: sp.ID, Name: sp.Name}, nil
+			},
+		})
 		// Session turns run the deliberate planner→executor pipeline (chat-planner.md) unless
 		// --no-plan drops back to the bare executor; one-shot /runs are unaffected either way.
 		turns := deps.turnRunner()
@@ -372,6 +388,9 @@ type serveDeps struct {
 	// workspaceGuidance is the workspace-local, user-managed global prompt layer.
 	// It is read for each new executor so a management update applies next turn.
 	workspaceGuidance guidance.Store
+	// statusConfig snapshots the same effective, body-redacted configuration served by
+	// GET /config/effective. It is called once per executor so reloads affect later runs.
+	statusConfig func() tools.StatusConfiguration
 }
 
 // turnIO is the per-run transcript + audit wiring opened once for a run/turn. It is kept
@@ -498,6 +517,26 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		}
 	}
 	spaceCtx := tools.SpaceContext{Store: d.spaces, ActiveID: spaceID}
+	statusConfig := tools.StatusConfiguration{Workspace: d.workDir}
+	if d.statusConfig != nil {
+		statusConfig = d.statusConfig()
+	}
+	statusConfig.SessionID = sessionID
+	statusConfig.GuidanceChars = guidance.CharCount(sessionGuidance)
+	if sessionID == "" {
+		// Deliberation flags describe session turns; one-shot runs use the bare executor.
+		statusConfig.Plan, statusConfig.Critique = false, false
+	} else if sess, getErr := d.sessions.Get(sessionID); getErr == nil {
+		statusConfig.RequestedModel = sess.Model
+		statusConfig.RequestedTier = sess.Tier
+	}
+	if spaceID != "" {
+		sp, getErr := d.spaces.Get(spaceID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		statusConfig.ActiveSpace = &tools.StatusSpace{ID: sp.ID, Name: sp.Name}
+	}
 	if sessionID != "" {
 		// switch_space persists the session's sticky space through the store; the engine
 		// re-reads the session before saving the turn's history, so the change survives
@@ -520,6 +559,7 @@ func (d serveDeps) newExecutor(runID, sessionID, model string, tier capability.T
 		AgentCatalog: catalog, SpawnDepth: d.spawnDepth,
 		Space:      spaceCtx,
 		StatusDirs: agentStateDirs(d.workDir), Limits: d.limits,
+		Status:       statusConfig,
 		ContextLimit: contextLimitFor(model, d.contextLimits),
 		Sessions:     d.sessions,
 		Manifest:     manifest, ScratchDir: scratchDir,

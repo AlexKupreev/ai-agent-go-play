@@ -19,9 +19,9 @@ roadmap. Reference docs: `usage.md` §Spaces, `environment.md` files table, `mem
 
 ## Governing decision (2026-07-08) — workspace-local, for simplicity
 
-**This supersedes the config-dir / global-scope / committable-file discussion below** (§2's
-"Config-dir, not workspace", §3's config-dir paths, §4's global layer). Those were explored and
-rejected *for now* as too complex. The v1 decision:
+**This supersedes the earlier config-dir / cross-workspace-global / committable-file design.** That
+alternative is retained only as a short historical note in §2; the storage and scoping sections now
+describe the governing workspace-local design directly. The v1 decision:
 
 - **Memory, guidance, and spaces live in the workspace**, under `<workspace>/.agent/` — `memory.json`,
   `guidance.md`, and `spaces/<id>/`. There is **no config-dir memory, no global/identity layer, and no separate
@@ -39,11 +39,6 @@ Two operational notes: (1) for `serve`/Telegram, point `--workspace` at a **pers
 memory survives restarts (it no longer rides the config-dir volume); (2) memory is now keyed by
 workspace, so two `--config-dir` agents in the *same* workspace share it.
 
-The sections below record the fuller design space that was considered; read them as background, with
-the box above as the actual v1 choice.
-
----
-
 ## 0. The model in one paragraph
 
 A **space** is a named data scope: short **guidance** (always loaded when the space is
@@ -51,9 +46,9 @@ active), its own **memory** entries, and its own **artifact references**. Exactl
 **active per session** (sticky, reusing the per-session model/tier machinery from
 [`../api-transport.md`](../api-transport.md)); a session inherits its space and can switch **explicitly**
 mid-conversation with `/space <name>` (or the `switch_space` tool when asked in natural language).
-Memory and artifacts written while a space is active belong to it; a top-level **global** scope
-holds everything unscoped and is visible in every space. A space is **not** a workspace/cwd — the
-shell's directory is unchanged.
+Memory and artifacts written while a space is active belong to it; a **workspace-global** default
+scope holds everything unscoped and is visible in every space in that workspace. A space is **not**
+a workspace/cwd — the shell's directory is unchanged.
 
 ---
 
@@ -84,31 +79,24 @@ that:
 - **No cwd change.** The shell's working directory is set by `--workspace` as today, independent of
   the active space. (A per-space cwd can attach later as a field if a real need appears — but it is
   out of v1, deliberately.)
-- **No filesystem-containment trust model.** A space is the agent's own data under the config dir;
-  it introduces no new trust surface. The tier gate is unchanged.
+- **No filesystem-containment trust model.** A space is the agent's own data under
+  `<workspace>/.agent/`; it introduces no new trust surface. The tier gate is unchanged.
 
 So a space is purely: *which memory namespace + which artifact set + which guidance is active.* This is
 the whole feature, and why it's a fraction of Projects' cost.
 
-### Config-dir (agent-global), not workspace-scoped
+### Workspace-local scope (v1)
 
-Spaces live under the **config dir** and are shared across **all** workspaces of that agent — because
-**space and workspace are orthogonal axes**: workspace = *which files* the agent acts on (shell cwd,
-workspace-tier prompts); space = *which memory/artifact/guidance bucket* is active. The motivating cases
-("English lessons", "the tax stuff") have **no filesystem workspace at all** — the family-box
-deployment (design §1) runs one `serve` / one config-dir where cwd is barely relevant — so tying a
-space to a workspace would be wrong for exactly the case spaces exist for.
+Spaces live under `<workspace>/.agent/spaces/`, beside that workspace's default memory and guidance.
+The workspace still determines the shell cwd and workspace-tier prompt files; the active space only
+selects a memory/guidance bucket *within* it. A long-running `serve` therefore fixes the available
+space registry when its workspace is selected at startup.
 
-This is also consistent with the two-anchor model: a space is a **partition of the agent's memory**,
-and memory lives in the config dir (the agent's identity), so spaces do too. Per-`--config-dir`
-share-nothing then falls out for free — two agents get separate spaces. Being global across
-workspaces leaks nothing: switching is explicit and only the **active** space's memory is loaded
-(+ global), so you are never in two at once and inactive spaces are never in context. Being in
-workspace `~/repos/foo` with space `english` active is allowed and harmless — independent dials.
-
-**Not covered (deliberately):** a space whose *data physically lives inside a repo* (travels with the
-checkout, git-ignored, per-repo) is the reverted workspace-sub-scope direction — revisit only on a
-concrete need. Auto-switching a space when you `cd` into a repo is the deferred auto-switch (§9).
+**Superseded alternative (historical):** the original draft put memory and spaces in the config dir
+as an agent identity shared across workspaces. It was rejected on 2026-07-08: per-workspace isolation,
+portable/gitignorable state, and one simple storage anchor were more valuable than a cross-workspace
+identity layer. If that layer is ever needed, it must be added explicitly; old config-dir paths in
+this ADR are not an implementation option.
 
 ---
 
@@ -124,8 +112,9 @@ Spaces give a natural fix — **shard by space** — so we adopt it rather than 
 entries into the one growing file:
 
 ```
-<config-dir>/
-  memory.json                     # GLOBAL scope (unscoped/default; the existing file — no migration)
+<workspace>/.agent/
+  memory.json                     # WORKSPACE-GLOBAL scope (unscoped/default; no migration)
+  guidance.md                     # workspace guidance
   spaces/
     <space-id>/
       space.json                  # metadata: name, guidance (the per-space profile), timestamps
@@ -170,11 +159,13 @@ single space's size bites. Not one growing file, and not SQLite pre-emptively.)*
 ## 4. Memory scoping
 
 - **`remember`** writes to the **active space** (its `spaces/<id>/memory.json`); with no active space,
-  to **global** (`memory.json`) — today's behavior, unchanged.
-- **`recall` / `search`** return **active-space ∪ global**, so a space sees its own entries plus shared
-  facts, but not another space's. Global-only when no space is active.
-- **Existing entries need no migration** — they live in the global `memory.json` and stay globally
-  visible (decision #2). A user/agent can promote a global fact into a space by re-saving it there.
+  to the **workspace-global** `.agent/memory.json` — today's behavior, unchanged.
+- **`recall` / `search`** return **active-space ∪ workspace-global**, so a space sees its own entries
+  plus shared facts from the same workspace, but not another space's. Workspace-global-only when no
+  space is active.
+- **Existing entries need no migration** — they live in the workspace-global `memory.json` and stay
+  visible to every space in that workspace. A user/agent can promote a global fact into a space by
+  re-saving it there.
 - Implementation: a small `ScopedStore` composing the active-space store over the global store
   (`Put` → active; `Get/Search/List` → merge, active shadowing global on key collisions). The
   `remember`/`recall` tools keep taking a `memory.Store`; the cmd/engine layer hands them the scoped
@@ -207,6 +198,9 @@ the way it injects the run store and the session-close hook.
 **Mid-session semantics:** facts/artifacts saved before a switch keep the old space; after, the new
 one — which is correct, they *were* about the old space. The conversation transcript itself is not
 re-scoped (a session can span spaces); only new memory/artifact writes follow the active space.
+Because there is no engine-wide active space, the remote status surface uses
+`GET /status?session_id=<id>` for this overlay; bare `GET /status` is engine-only and omits it
+([`../planning/flexible-orchestration.md`](../planning/flexible-orchestration.md#72-api-additions)).
 
 ---
 
@@ -226,6 +220,56 @@ All trusted, not sandbox-exposed (like `remember`/`status`). Wired when a space 
 space's **guidance** is injected into the system prompt at session start (like `AGENTS.md`, but
 agent-writable and per-space — this is the "profile" the earlier discussion converged on, resolved
 here as a space field rather than a standalone file).
+
+### 6.1 Human management contract (next space-management slice)
+
+The HTTP management surface uses a body-redacted metadata view; guidance text remains exclusive to
+the explicit target-specific guidance endpoint:
+
+```json
+{
+  "id": "polish-lessons",
+  "name": "Polish lessons",
+  "guidance_chars": 318,
+  "created_at": "2026-08-21T10:00:00Z",
+  "updated_at": "2026-08-21T11:30:00Z"
+}
+```
+
+- `GET /spaces` returns a JSON array of these views, newest-updated first; an empty registry is `[]`.
+- `GET /spaces/{id}` returns one view by canonical id, or 404. It does not return guidance or memory.
+- `POST /spaces` accepts `{"name":"Polish lessons"}`, creates the same slug/id the existing
+  `create_space` tool does, and returns the view with 201 plus `Location: /spaces/{id}`. An empty or
+  unusable name is 400; an existing id is 409.
+- `GET`/`PUT /spaces/{id}/guidance` remain the only endpoints that return or replace the full
+  guidance body.
+- There is deliberately **no `DELETE /spaces/{id}`** in this slice (§8). Absence is part of the
+  contract, not an implementation omission.
+
+The matching remote management CLI is `agent space list|show|create`, with the engine selected by
+`--addr` (host:port or alias), consistent with `agent guidance` and `agent session`. Its human output
+is deterministic:
+
+```text
+$ agent space list
+SPACE             NAME                  GUIDANCE  UPDATED
+polish-lessons    Polish lessons        318       2026-08-21T11:30:00Z
+
+$ agent space show polish-lessons
+id: polish-lessons
+name: Polish lessons
+guidance: 318 chars
+created: 2026-08-21T10:00:00Z
+updated: 2026-08-21T11:30:00Z
+
+$ agent space create "Polish lessons"
+created space "Polish lessons" (id polish-lessons)
+```
+
+`list` prints UTC RFC 3339 timestamps and
+`no spaces (create one with: agent space create <name>)` for `[]`. `show <id>` intentionally does
+not print guidance text; use `agent guidance space <id> show`. There is no `agent space rm` in this
+slice. `guidance_chars` and the CLI's guidance count both mean Unicode characters, not bytes.
 
 ---
 
@@ -261,7 +305,11 @@ here as a space field rather than a standalone file).
   static binary lean (§3 alternatives).
 - **Workspace-local (v1)** — memory, guidance, and spaces live under `<workspace>/.agent/`, per-workspace by
   construction; committing/gitignoring is free. Config-dir global layer deferred. (See the governing
-  decision at the top; it supersedes the earlier "config-dir, agent-global" exploration in §2.)
+  decision at the top and the rejected alternative in §2.)
+- **No space removal surface yet** — `agent space rm` and `DELETE /spaces/{id}` are excluded until a
+  separate lifecycle decision specifies recoverable archive/restore versus irreversible purge,
+  confirmation in each frontend, active-session behavior, and redacted audit events. List/show/create
+  do not depend on that decision and may ship first (§6.1).
 - **Name: "space"** (distinct from the reverted "projects" and from Go's `context`).
 
 ## 9. Open questions
@@ -269,8 +317,9 @@ here as a space field rather than a standalone file).
 - **Auto-switch by intent** — detecting the space from what the user is discussing (implicit switch).
   Real value for the tutoring case, but it's the hard/risky part (wrong guess scopes memory wrongly).
   Deferred; explicit `/space` first, measure whether auto is even wanted.
-- **Deleting/merging spaces** — archive-on-delete (like sessions) vs purge; merging two spaces'
-  memory. Add when a real need appears.
+- **Space lifecycle and merging** — choose archive/restore versus permanent purge, define what
+  happens to sessions currently pointing at the space, require confirmation for irreversible
+  actions, and define audit metadata before adding removal. Merging two spaces' memory is separate.
 - **Cross-space search** — a `recall --all-spaces` escape hatch to search everything. Probably wanted
   eventually; trivial once scoping exists.
 - **Guidance size discipline** — always-loaded guidance must stay short; do we hard-cap, or let the

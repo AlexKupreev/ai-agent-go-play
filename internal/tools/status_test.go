@@ -129,3 +129,37 @@ func TestStatusTool_DefaultModelLabel(t *testing.T) {
 		t.Errorf("empty run id should render as (none); got:\n%s", out)
 	}
 }
+
+func TestStatusTool_ResolvedConfiguration(t *testing.T) {
+	tool := NewStatusTool(StatusDeps{
+		Model: "effective-model", Tier: "balanced", WorkDir: "/workspace", Registry: NewMemoryRegistry(),
+		Config: StatusConfiguration{
+			Workspace: "/workspace", SessionID: "0123abcd9999", RequestedModel: "requested-model",
+			RequestedTier: "permissive", GuidanceChars: 7,
+			ActiveSpace:       &StatusSpace{ID: "polish-lessons", Name: "Polish lessons"},
+			PromptComposition: "SYSTEM.md wraps built-in base via {{base}}",
+			PromptSources:     []StatusSource{{Name: "SYSTEM.md", Path: "/workspace/SYSTEM.md", Layer: "workspace", Mode: "replace", Active: true}},
+			AgentTypeCount:    1, AgentTypeSources: []StatusSource{{Name: "worker", Path: "/workspace/agents/worker.md", Layer: "workspace"}},
+			Plan: true, Critique: true,
+			Limits: StatusLimits{MaxIterations: 20, ScriptTimeoutS: 30, MaxInlineTools: 5, MaxHTTPBytes: 4194304, MaxFinishedRuns: 100, SpawnDepth: 1, MaxRevisions: 1},
+		},
+	})
+	out, err := tool.Run(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Configuration", "workspace: /workspace", "session: 0123abcd   guidance: 7 chars",
+		"active space: Polish lessons (id: polish-lessons)",
+		"requested: model requested-model, tier permissive",
+		"prompts: SYSTEM.md wraps built-in base via {{base}}",
+		"SYSTEM.md: /workspace/SYSTEM.md [workspace, replace, active]",
+		"agent types: 1", "worker: /workspace/agents/worker.md [workspace]",
+		"workflow: plan true, critique true, max revisions 1",
+		"limits: iterations 20, script 30s, inline tools 5, HTTP bytes 4194304, finished runs 100, spawn depth 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output missing %q; got:\n%s", want, out)
+		}
+	}
+}

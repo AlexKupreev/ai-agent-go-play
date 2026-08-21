@@ -201,3 +201,24 @@ func TestClientReloadDecodesStructuredDiff(t *testing.T) {
 		t.Fatalf("diff = %+v", diff)
 	}
 }
+
+func TestClientStatusUsesExplicitSessionQuery(t *testing.T) {
+	c := NewClient("http://engine")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/status" || r.URL.Query().Get("session_id") != "ab cd" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"version":"dev","config":{"model":{"value":"gpt-5.1","source":"built-in"}},"session":{"id":"ab cd","model":{"requested":"","effective":"gpt-5.1"},"tier":{"requested":"","effective":"balanced"},"guidance_chars":0,"active_space":null},"host":{},"state":[]}`)),
+		}, nil
+	})}
+	id := "ab cd"
+	got, err := c.Status(context.Background(), &id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Session == nil || got.Session.ID != id || got.Config.Model.Value != "gpt-5.1" {
+		t.Fatalf("status = %+v", got)
+	}
+}

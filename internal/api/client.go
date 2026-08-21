@@ -291,6 +291,39 @@ func (c *Client) EffectiveConfig(ctx context.Context) (EffectiveConfig, error) {
 	return out, nil
 }
 
+// Status returns live engine resources and effective configuration. A nil sessionID
+// requests engine-only status; a non-nil id adds that live session's explicit overlay.
+func (c *Client) Status(ctx context.Context, sessionID *string) (StatusResponse, error) {
+	path := "/status"
+	if sessionID != nil {
+		q := url.Values{}
+		q.Set("session_id", *sessionID)
+		path += "?" + q.Encode()
+	}
+	req, err := c.newRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return StatusResponse{}, fmt.Errorf("status: %s", message)
+	}
+	var out StatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return StatusResponse{}, err
+	}
+	return out, nil
+}
+
 // StartSession creates a persistent conversation on the engine and returns its id. opts
 // carries an optional initial sticky model/tier (the zero value inherits the engine
 // defaults; a turn may still override per-request).

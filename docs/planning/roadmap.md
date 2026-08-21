@@ -10,8 +10,9 @@ must not be treated as a capability list.
 **Current position (2026-08-21).** R0's code is shipped; its one remaining item is human-only
 credential rotation. R1 is shipped: the Telegram delivery/session repairs, session-space
 validation, truthful capability-failure auditing, durable audit-history access, and the GPT-5.1
-default/context refresh are complete. R2's durable guidance and effective-state slices are shipped;
-status enrichment and space-management parity remain. See
+default/context refresh are complete. R2's durable guidance, effective-state, and status-enrichment
+slices are shipped. Space list/show/create parity is next, while space removal is explicitly
+deferred pending a lifecycle decision. See
 [Hand-off](#hand-off--next-step) at the end of this file for the trace that is already done on it.
 
 ## How the planning set fits together
@@ -136,10 +137,18 @@ Give users a coherent way to steer the existing system before adding a smarter l
 
 - [x] Add durable global/workspace, space, and session guidance with size limits, atomic writes, and
       redacted audit metadata.
-- [ ] Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote
-      chat, and Telegram; add the matching space-management CLI/API surface.
+- [x] Add `/guidance` global/space/session show/set/add/clear consistently to local chat, remote
+      chat, Telegram, CLI, and API.
+- [ ] Add space list/show/create parity to the CLI/API using the metadata schema and output contract
+      in [`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
+      Do not add removal in this slice.
 - [x] Support `{{base}}` composition and report prompt/guidance provenance.
-- [ ] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits.
+- [x] Extend status with active space, workspace, model/tier, prompt sources, and relevant limits;
+      expose structured `GET /status[?session_id=<id>]` using the context rule in
+      [`flexible-orchestration.md`](flexible-orchestration.md#72-api-additions). **Done 2026-08-21**
+      — engine-only status omits session state; an explicit live session adds its canonical space,
+      sticky/effective model and tier, and Unicode guidance size. Host and bounded state-disk
+      snapshots are shared with the enriched in-run status tool.
 - [x] Add a read-only effective-config endpoint and make reload return a meaningful diff.
 - [x] Make unknown model/space and dead-engine errors say how to recover.
 
@@ -253,12 +262,25 @@ Keep these out of the active queue until their trigger appears:
 - automatic compaction and per-hub replay caps: when observed context/memory pressure justifies
   policy beyond the current manual and process-level controls;
 - email schedule delivery: after Telegram delivery is complete and a real recipient/configuration
-  requirement exists.
+  requirement exists;
+- space removal: after a focused lifecycle decision chooses archive/restore versus purge and defines
+  active-session behavior, recovery, confirmations, and body-redacted audit metadata.
 
 ## Hand-off — next step
 
-*Updated 2026-08-21 after the guidance management surface shipped. Replace this section when the
-next slice is selected; it is a pointer, not a log.*
+*Updated 2026-08-21 after status enrichment shipped; this is a pointer, not a log.*
+
+**Next non-destructive slice: space metadata parity.** Implement only `GET /spaces`,
+`GET /spaces/{id}`, `POST /spaces`, and `agent space list|show|create` against the schema/output in
+[`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
+Do not implement `agent space rm` or a delete endpoint. Removal is a separate lifecycle slice after
+archive versus purge, recovery, active-session, confirmation, and audit semantics are decided.
+
+**Completed slice: status enrichment.** `GET /status` now returns the complete secret-safe effective
+configuration plus live host and bounded state-disk measurements. `?session_id=<id>` explicitly
+adds the live session's sticky/effective model and tier, Unicode guidance size, and canonical active
+space; bare status never guesses a session. The in-run status tool renders the same configuration
+metadata alongside its run id and context-window gauge.
 
 **Completed slice: guidance services and deterministic command/API surface.** The durable layers
 and their management surface are now in place: `<workspace>/.agent/guidance.md`, active-space

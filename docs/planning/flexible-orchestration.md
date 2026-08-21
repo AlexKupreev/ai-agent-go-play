@@ -515,12 +515,13 @@ request/response types. This follows the existing `FileStore`, `RunStore`, and s
 ### 7.2 API additions
 
 ```
-GET   /status
+GET   /status[?session_id=<id>]
 GET   /config/effective
 GET   /profiles
 GET   /profiles/{name}
 GET   /spaces
 GET   /spaces/{id}
+POST  /spaces
 GET   /spaces/{id}/guidance
 PUT   /spaces/{id}/guidance
 GET   /guidance/global
@@ -531,6 +532,80 @@ GET   /sessions/{id}/runs
 POST  /sessions/{id}/cancel
 GET   /runs/{id}/orchestration
 ```
+
+`GET /status` is engine-scoped unless the caller explicitly supplies `session_id`. The engine has
+no implicit "current session": without the query parameter, the response omits `session` and does
+not guess an active space. `GET /status?session_id=<id>` adds a live-session overlay (404 if it does
+not exist); a present but empty id is 400. This choice preserves one status endpoint while making
+session context explicit; do not add a competing `/sessions/{id}/status` route.
+
+The response is structured, secret-safe state rather than the status tool's formatted text:
+
+```json
+{
+  "version": "dev",
+  "config": {
+    "model": {"value": "gpt-5.1", "source": "built-in"},
+    "tier_ceiling": {"value": "balanced", "source": "config"},
+    "workspace": "/srv/agent",
+    "prompts": {"composition": "base", "sources": [], "warnings": []},
+    "guidance": [],
+    "agent_types": {"count": 3, "sources": []},
+    "limits": {
+      "max_iterations": 20,
+      "script_timeout_seconds": 30,
+      "max_inline_tools": 5,
+      "max_http_bytes": 4194304,
+      "max_finished_runs": 100,
+      "spawn_depth": 1,
+      "max_revisions": 1
+    },
+    "secret_names": [],
+    "frontends": {"telegram_configured": true, "plan": true, "critique": true}
+  },
+  "session": {
+    "id": "0123abcd",
+    "model": {"requested": "", "effective": "gpt-5.1"},
+    "tier": {"requested": "", "effective": "balanced"},
+    "guidance_chars": 0,
+    "active_space": {"id": "polish-lessons", "name": "Polish lessons"}
+  },
+  "host": {
+    "cpu_count": 4,
+    "load_1": 0.12,
+    "load_5": 0.18,
+    "load_15": 0.20,
+    "memory_total_mb": 2048,
+    "memory_available_mb": 1024,
+    "disk_total_mb": 16384,
+    "disk_free_mb": 8192,
+    "process_rss_mb": 96,
+    "goroutines": 24,
+    "go_heap_mb": 18,
+    "host_uptime_seconds": 86400
+  },
+  "state": [{"label": "sessions", "entries": 3, "bytes": 4096, "truncated": false}]
+}
+```
+
+`config` uses the complete resolved, body-redacted `EffectiveConfig` contract from
+`GET /config/effective`. The optional `session` object
+contains exactly `id`, `model`, `tier`, `guidance_chars`, and `active_space`; each model/tier object
+contains `requested` and `effective`, and `active_space` is either `null` (workspace-global scope) or
+exactly `{id,name}`. Character counts are Unicode characters. `host` uses the fields and units shown;
+a zero means unavailable, matching `hoststat.Stats`. Each `state` entry contains `label`, immediate
+`entries`, recursive `bytes`, and `truncated`; the array is empty when no configured state path
+exists. The existing 200,000-file walk bound applies and sets `truncated: true`.
+
+`session` is omitted for engine-only status. HTTP status does not invent a current run, so run id and
+context-window fill stay on `GET /runs/{id}`; the in-run `status` tool adds those fields and the
+current session overlay before rendering its human-readable report.
+
+The space metadata/create schema and exact `agent space list|show|create` output are settled in
+[`../adr/spaces.md`](../adr/spaces.md#61-human-management-contract-next-space-management-slice).
+There is no space delete endpoint or `agent space rm` until the separate lifecycle decision chooses
+archive/restore versus purge and specifies active-session, confirmation, recovery, and audit
+semantics.
 
 Extend `POST/PATCH /sessions` and `POST /sessions/{id}/turns` with sparse workflow options. Prefer a
 nested `workflow` object for growth rather than adding a dozen top-level fields. Existing top-level

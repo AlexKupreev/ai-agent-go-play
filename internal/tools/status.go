@@ -22,6 +22,60 @@ type StateDir struct {
 	Path  string // absolute path to a file or directory
 }
 
+// StateUsage is the structured disk-usage view shared by the in-run status tool and
+// the HTTP management status endpoint. Entries counts only immediate children while
+// Bytes is recursive. Truncated marks the bounded walk's byte count as a lower bound.
+type StateUsage struct {
+	Label     string `json:"label"`
+	Entries   int    `json:"entries"`
+	Bytes     int64  `json:"bytes"`
+	Truncated bool   `json:"truncated"`
+}
+
+// StatusSpace is the body-redacted identity of the active memory/guidance scope.
+type StatusSpace struct {
+	ID   string
+	Name string
+}
+
+// StatusSource is one prompt or agent-type provenance entry. Status deliberately
+// carries metadata only: prompt and guidance bodies never enter this structure.
+type StatusSource struct {
+	Name   string
+	Path   string
+	Layer  string
+	Mode   string
+	Active bool
+}
+
+type StatusLimits struct {
+	MaxIterations   int
+	ScriptTimeoutS  int
+	MaxInlineTools  int
+	MaxHTTPBytes    int64
+	MaxFinishedRuns int
+	SpawnDepth      int
+	MaxRevisions    int
+}
+
+// StatusConfiguration describes the resolved configuration of this executor.
+// It is separate from the API DTO to keep tools transport-neutral.
+type StatusConfiguration struct {
+	Workspace         string
+	SessionID         string
+	RequestedModel    string
+	RequestedTier     string
+	GuidanceChars     int
+	ActiveSpace       *StatusSpace
+	PromptComposition string
+	PromptSources     []StatusSource
+	AgentTypeCount    int
+	AgentTypeSources  []StatusSource
+	Plan              bool
+	Critique          bool
+	Limits            StatusLimits
+}
+
 // StatusDeps is what the status tool reports about the running agent. The host figures
 // are read live at call time (see hoststat).
 type StatusDeps struct {
@@ -32,6 +86,7 @@ type StatusDeps struct {
 	WorkDir  string // filesystem to report disk free for
 	Registry Registry
 	Memory   memory.Store // may be nil
+	Config   StatusConfiguration
 
 	// StateDirs are the agent's own on-disk state locations (sessions, transcripts,
 	// scratch, catalog, memory, audit). Empty ⇒ the "State on disk" section is omitted.
@@ -56,7 +111,8 @@ const maxStateWalkFiles = 200000
 func NewStatusTool(deps StatusDeps) Tool {
 	return Tool{
 		Name: "status",
-		Description: "Report your own status: your model, trust tier, run id, and build version; how many " +
+		Description: "Report your own status: your model, trust tier, run id, build version, resolved " +
+			"configuration (workspace, active space, prompt and agent-type provenance, workflow, and limits); how many " +
 			"authored tools and memory entries you have; how full your context window is (tokens used vs the " +
 			"model's limit); the host machine's live resources (CPU count and load, memory, disk free, your " +
 			"process RSS, and uptime); and how much disk your own state (sessions, run transcripts, scratch " +
@@ -84,6 +140,8 @@ func NewStatusTool(deps StatusDeps) Tool {
 			fmt.Fprintf(&b, "  model: %s   tier: %s   run: %s\n", model, deps.Tier, shortID(deps.RunID))
 			fmt.Fprintf(&b, "  build: %s\n", deps.Version)
 			fmt.Fprintf(&b, "  authored tools: %d   memory entries: %d\n", nTools, nMem)
+
+			renderStatusConfiguration(&b, deps.Config)
 
 			// Context-window fill: how full the conversation is, so the agent can decide to
 			// summarize/wrap up before it runs out of room.
@@ -132,6 +190,65 @@ func NewStatusTool(deps StatusDeps) Tool {
 	}
 }
 
+func renderStatusConfiguration(b *strings.Builder, cfg StatusConfiguration) {
+	if cfg.Workspace == "" && cfg.SessionID == "" && cfg.ActiveSpace == nil &&
+		cfg.PromptComposition == "" && cfg.AgentTypeCount == 0 && cfg.Limits == (StatusLimits{}) {
+		return
+	}
+	fmt.Fprintln(b, "Configuration")
+	if cfg.Workspace != "" {
+		fmt.Fprintf(b, "  workspace: %s\n", cfg.Workspace)
+	}
+	if cfg.SessionID != "" {
+		fmt.Fprintf(b, "  session: %s", shortID(cfg.SessionID))
+		if cfg.GuidanceChars > 0 {
+			fmt.Fprintf(b, "   guidance: %d chars", cfg.GuidanceChars)
+		}
+		b.WriteByte('\n')
+	}
+	if cfg.ActiveSpace == nil {
+		fmt.Fprintln(b, "  active space: (workspace-global)")
+	} else {
+		fmt.Fprintf(b, "  active space: %s (id: %s)\n", cfg.ActiveSpace.Name, cfg.ActiveSpace.ID)
+	}
+	if cfg.RequestedModel != "" || cfg.RequestedTier != "" {
+		fmt.Fprintf(b, "  requested: model %s, tier %s\n", emptyDefault(cfg.RequestedModel), emptyDefault(cfg.RequestedTier))
+	}
+	if cfg.PromptComposition != "" {
+		fmt.Fprintf(b, "  prompts: %s\n", cfg.PromptComposition)
+	}
+	for _, source := range cfg.PromptSources {
+		state := "active"
+		if !source.Active {
+			state = "inactive"
+		}
+		fmt.Fprintf(b, "    %s: %s [%s, %s, %s]\n", source.Name, source.Path, source.Layer, source.Mode, state)
+	}
+	if cfg.AgentTypeCount > 0 || cfg.AgentTypeSources != nil {
+		fmt.Fprintf(b, "  agent types: %d\n", cfg.AgentTypeCount)
+		for _, source := range cfg.AgentTypeSources {
+			if source.Path == "" {
+				fmt.Fprintf(b, "    %s [%s]\n", source.Name, source.Layer)
+			} else {
+				fmt.Fprintf(b, "    %s: %s [%s]\n", source.Name, source.Path, source.Layer)
+			}
+		}
+	}
+	fmt.Fprintf(b, "  workflow: plan %t, critique %t, max revisions %d\n", cfg.Plan, cfg.Critique, cfg.Limits.MaxRevisions)
+	if cfg.Limits != (StatusLimits{}) {
+		fmt.Fprintf(b, "  limits: iterations %d, script %ds, inline tools %d, HTTP bytes %d, finished runs %d, spawn depth %d\n",
+			cfg.Limits.MaxIterations, cfg.Limits.ScriptTimeoutS, cfg.Limits.MaxInlineTools,
+			cfg.Limits.MaxHTTPBytes, cfg.Limits.MaxFinishedRuns, cfg.Limits.SpawnDepth)
+	}
+}
+
+func emptyDefault(value string) string {
+	if value == "" {
+		return "(default)"
+	}
+	return value
+}
+
 // shortID trims a run id to its first 8 chars for a compact report; "(none)" if empty.
 func shortID(id string) string {
 	if id == "" {
@@ -149,27 +266,38 @@ func shortID(id string) string {
 func stateOnDisk(dirs []StateDir) string {
 	var b strings.Builder
 	b.WriteString("State on disk\n")
-	any := false
+	usage := SnapshotState(dirs)
+	for _, item := range usage {
+		size := humanBytes(item.Bytes)
+		if item.Truncated {
+			size = "≥" + size
+		}
+		if item.Entries > 0 {
+			fmt.Fprintf(&b, "  %s: %d %s, %s\n", item.Label, item.Entries, itemWord(item.Entries), size)
+		} else {
+			fmt.Fprintf(&b, "  %s: %s\n", item.Label, size)
+		}
+	}
+	if len(usage) == 0 {
+		return ""
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// SnapshotState measures each configured state path in order. Missing paths are
+// omitted and an all-missing input returns a non-nil empty slice for stable JSON.
+func SnapshotState(dirs []StateDir) []StateUsage {
+	usage := make([]StateUsage, 0, len(dirs))
 	for _, sd := range dirs {
 		entries, bytes, exists, truncated := diskUsage(sd.Path)
 		if !exists {
 			continue
 		}
-		any = true
-		size := humanBytes(bytes)
-		if truncated {
-			size = "≥" + size
-		}
-		if entries > 0 {
-			fmt.Fprintf(&b, "  %s: %d %s, %s\n", sd.Label, entries, itemWord(entries), size)
-		} else {
-			fmt.Fprintf(&b, "  %s: %s\n", sd.Label, size)
-		}
+		usage = append(usage, StateUsage{
+			Label: sd.Label, Entries: entries, Bytes: bytes, Truncated: truncated,
+		})
 	}
-	if !any {
-		return ""
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return usage
 }
 
 // diskUsage returns the immediate entry count and total (recursive) bytes at path. exists is
